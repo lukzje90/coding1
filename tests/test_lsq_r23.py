@@ -47,6 +47,63 @@ def write_excel(path, cv, y, weights):
 
 
 class RefinementTests(unittest.TestCase):
+    def test_jacobian_reuses_current_residual_without_skipping_perturbations(self):
+        evaluated = []
+
+        def residual(vector):
+            evaluated.append(tuple(vector))
+            return np.array([vector[0] + 2 * vector[1], vector[0] - vector[1]])
+
+        cached = ls._cache_last_evaluation(residual)
+        x = np.array([1.0, 2.0])
+        np.testing.assert_allclose(cached(x), [5.0, -1.0])
+        jac = ls._bounded_jacobian(cached, np.zeros(2), np.full(2, 10.0))(x)
+        np.testing.assert_allclose(jac, [[1.0, 2.0], [1.0, -1.0]], atol=1e-10)
+        self.assertEqual(len(evaluated), 3)  # base + one column solve per parameter
+
+    def test_conductivity_detector_delay_is_not_a_uv_fit_parameter(self):
+        cfg = config_for()
+        paths = {spec.path for spec in ls.fit_parameter_lock_catalog(cfg)}
+        self.assertIn("system.uv_dead_volume_mL", paths)
+        self.assertNotIn("system.conductivity_dead_volume_mL", paths)
+        trace = simulate(cfg)["trace"]
+        changed = copy.deepcopy(cfg)
+        changed["system"]["conductivity_dead_volume_mL"] *= 2
+        shifted = simulate(changed)["trace"]
+        np.testing.assert_allclose(trace["uv_mAU"], shifted["uv_mAU"])
+
+    def test_all_unlocked_edm_fit_reduces_uv_objective(self):
+        true = config_for()
+        true["numerics"] = {"time_steps": 50, "axial_positions": 6}
+        true["least_squares"]["objective"] = "RAW_SSE"
+        trace = simulate(true)["trace"]
+        initial = copy.deepcopy(true)
+        initial["conversion"]["uv_to_protein_mAU_L_g"] *= 0.75
+        paths = [spec.path for spec in ls.fit_parameter_lock_catalog(initial)]
+        self.assertEqual(len(paths), 10)
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            source = tmp / "known_uv.csv"
+            with source.open("w", newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["CV", "UV_mAU"])
+                writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
+            names = ["FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
+                     "FIT_REPORT_HTML", "FIT_CONFIG_JSON", "FIT_APPLY_JSL",
+                     "FIT_SETTINGS_JSON", "FIT_HISTORY_CSV", "FIT_IMPROVED_CSV",
+                     "FIT_IMPROVED_TXT", "CONFIG_PATH"]
+            with patch.multiple(ls, **{name: tmp / getattr(ls, name).name for name in names}):
+                result = ls.run_global_least_squares_refinement(
+                    [{"config": initial, "chromatogram_csv": source}],
+                    unlocked_paths=paths, max_nfev=4,
+                )
+        self.assertTrue(result["accepted"])
+        self.assertLess(result["final_objective"], result["initial_objective"] * 1e-4)
+        self.assertAlmostEqual(result["fitted_config"]["conversion"]["uv_to_protein_mAU_L_g"],
+                               true["conversion"]["uv_to_protein_mAU_L_g"], delta=5)
+        self.assertEqual(result["parameters"], paths)
+        self.assertGreater(result["residual_evaluations"], result["nfev"])
+
     def test_jmp_capacity_reaches_both_langmuir_solvers(self):
         jsl = build_jsl()
         self.assertIn('Python Name("tdm_ui_c1_qmax_g_L")', jsl)
@@ -121,6 +178,9 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(LSQPathText(slot)))', jsl)
         self.assertIn('Column(dtLSQRuns, "LSQ_X_Origin")[r] = LSQOriginSelected(slot)', jsl)
         self.assertIn('Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot]', jsl)
+        self.assertIn('Safety cap: optimizer evaluations', jsl)
+        self.assertIn('Refinement running. The JMP window will respond', jsl)
+        self.assertNotIn('condDeadVolumeFitLock', jsl)
         self.assertNotIn('LoadLSQReference(1);', jsl)
         self.assertNotIn('lsqRunBoxes[', jsl)
         self.assertNotIn('lsqPathBoxes[', jsl)
@@ -233,6 +293,11 @@ class RefinementTests(unittest.TestCase):
             self.assertTrue((tmp/"least_squares_fit_report.html").is_file())
             self.assertTrue((tmp/"least_squares_settings.json").is_file())
             self.assertIn("weighted_rmse_formula",json.loads((tmp/"least_squares_settings.json").read_text()))
+            with (tmp/"least_squares_objective_history.csv").open(newline="") as fh:
+                history = list(csv.DictReader(fh))
+            self.assertEqual(len(history), result["residual_evaluations"] + 1)
+            best = [float(row["best_objective"]) for row in history]
+            self.assertTrue(all(next_value <= value for value, next_value in zip(best, best[1:])))
 
     def test_xlsx_column_override_and_independent_metadata(self):
         from tdm_bridge import _lsq_reference_column_options

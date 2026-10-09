@@ -363,7 +363,10 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         ("uv_dead_volume_mL", "uvDeadVolume", "System dead volume to UV [mL]"),
         ("conductivity_dead_volume_mL", "condDeadVolume", "System dead volume to conductivity [mL]"),
     ):
-        system_rows.append(_nrow(label, var, sys[field], 360, fit_path="system."+field,
+        # Conductivity detector delay changes only the exported conductivity
+        # trace; the LSQ observations here are UV and optional species mass%.
+        fit_path = None if field == "conductivity_dead_volume_mL" else "system." + field
+        system_rows.append(_nrow(label, var, sys[field], 360, fit_path=fit_path,
                                 fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths))
         sends.append(f'Python Send({var} << Get, Python Name("tdm_ui_system_{field}"));')
     for field, var in (("buffer_dispersion_enabled", "bufferDispersionToggle"),
@@ -1047,6 +1050,10 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     Python Send(projectDir, Python Name("tdm_project_dir"));
     Python Send(projectDir, Python Name("tdm_project_dir_posix"));
     {''.join(ref_sends)}
+    If(actionText == "FIT_LSQ",
+        lsqStatusText << Set Text("Refinement running. The JMP window will respond when Python finishes. Progress is appended to least_squares_objective_history.csv in this folder; each numerical Jacobian needs additional column solves for unlocked parameters.");
+        Wait(0.01)
+    );
     If(actionText == "CHECK_RESULT_CURRENT", Save Text File(statusFile, "CHECK_RESULT_CURRENT pending"));
     rc = Python Submit File(bridgeFile);
     If(File Exists(statusFile), statusValue = Load Text File(statusFile), statusValue = "No status file was produced. Check View > Log.");
@@ -1249,12 +1256,12 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     H List Box(Text Box("Refinement mode", << Set Width(200)), lsqModeBox = Combo Box({{"Normal least-squares: chromatogram only", "Least-squares: chromatogram + species mass% at CV"}}, << Set Width(340), << Set Function(Function({{this}}, UpdateUI())))),
                     lsqTargetRunRow = H List Box(Text Box("Species reference run", << Set Width(200)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(140))),
                     H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
-                    Text Box("Leave objective and weights alone for ordinary pointwise least-squares. The optimizer keeps the best improvement and stops when the objective, gradient, or parameter step converges; the evaluation limit is a safety cap. Set individual parameter locks on Model Parameters.", << Set Wrap(740)),
+                    Text Box("Leave objective and weights alone for ordinary pointwise least-squares. The optimizer keeps the best improvement and stops when the objective, gradient, or parameter step converges. Each unlocked parameter adds another column solve per numerical Jacobian for every selected run. Progress is saved to least_squares_objective_history.csv. Set individual parameter locks on Model Parameters.", << Set Wrap(740)),
                     Outline Box("Optional objective and stopping settings", << Close(1), V List Box(
                         H List Box(Text Box("Objective", << Set Width(240)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
                         H List Box(Text Box("Baseline policy", << Set Width(240)), lsqBaselineMode = Combo Box({{"NONE", "INITIAL_MEDIAN"}}, << Set({1 if cfg['least_squares']['baseline_mode']=='NONE' else 2}), << Set Width(220))),
                         {_nrow("Fixed detector baseline [mAU]", "lsqBaseline", cfg['least_squares']['detector_baseline'], 240)},
-                        {_nrow("Safety cap: solver evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 240)}
+                        {_nrow("Safety cap: optimizer evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 240)}
                     ))
                 )),
                 Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ")),

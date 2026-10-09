@@ -526,6 +526,15 @@ def main() -> int:
             if mode == "CHROMATOGRAM_AND_COMPOSITION" and refs and run_number not in {p["run_context"]["run_number"] for p in profiles}:
                 raise ValueError("Select an attached chromatogram profile before adding species-composition reference points.")
             unlocked_paths = _lsq_unlocked_paths_from_jmp()
+            from tdm_least_squares import FIT_HISTORY_CSV, fit_parameter_specs
+            fitted_paths = fit_parameter_specs(profiles[0]["config"], unlocked_paths=unlocked_paths)
+            _write_status(
+                f"Least-squares refinement running: {len(profiles)} profile(s), "
+                f"{len(fitted_paths)} unlocked parameters, "
+                f"{shared_raw['least_squares']['max_nfev']} optimizer-evaluation safety cap.\n"
+                f"Each numerical Jacobian needs about {len(profiles) * (len(fitted_paths) + 1)} column solves. "
+                f"Progress: {FIT_HISTORY_CSV}"
+            )
             fit = run_global_least_squares_refinement(
                 profiles,
                 mode=mode,
@@ -549,6 +558,7 @@ def main() -> int:
                 f"Mode: {mode}\nInitial objective: {fit['initial_objective']:.7g}\nFinal objective: {fit['final_objective']:.7g}\n"
                 f"{weighted_line}"
                 f"Objective improvement: {fit['improvement_percent']:.4g}%\n"
+                f"Optimizer function evaluations: {fit['nfev']}; actual residual evaluations: {fit['residual_evaluations']}\n"
                 f"Optimizer converged: {fit['success']}; {fit['message']}\n"
                 f"Accepted/applied to shared batch parameters: {fit['accepted']}\n"
                 f"Improved parameters:\n{improved_list}\n"

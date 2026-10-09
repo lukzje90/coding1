@@ -697,6 +697,12 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
     for path in paths:
         if path in {"column.volume_mL", "column.length_mm"} or path.endswith(".mass_percent"):
             continue
+        # The residual currently uses UV absorbance (and optionally species
+        # composition). Conductivity detector dead volume only shifts the
+        # separately exported conductivity trace, so it is not identifiable
+        # from any least-squares observation in this interface.
+        if path == "system.conductivity_dead_volume_mL":
+            continue
         if not fit_uv_response and (path.endswith("uv_response_factor_mAU_L_g") or path == "conversion.uv_to_protein_mAU_L_g"):
             continue
         try:
@@ -712,7 +718,7 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
         elif field == "salt_sensitivity_per_M":
             specs.append(FitParameter(path, labels[field], "LINEAR", 0.0 if is_hic(config) else -25.0, 25.0,
                                       float(np.clip(value, 0.0 if is_hic(config) else -25.0, 25.0))))
-        elif field in {"buffer_dispersion_mL", "salt_dispersion_mm2_s", "uv_dead_volume_mL", "conductivity_dead_volume_mL", "D_ax_mm2_s", "D_app_mm2_s", "salt_axial_dispersion_mm2_s"}:
+        elif field in {"buffer_dispersion_mL", "salt_dispersion_mm2_s", "uv_dead_volume_mL", "D_ax_mm2_s", "D_app_mm2_s", "salt_axial_dispersion_mm2_s"}:
             upper = max(10.0, value * 20.0, float(config["column"]["volume_mL"]) * 5.0)
             specs.append(FitParameter(path, labels.get(field, field), "LINEAR", 0.0, upper,
                                       value))
@@ -1056,6 +1062,24 @@ def _bounded_jacobian(fun, lower, upper):
     return jacobian
 
 
+def _cache_last_evaluation(fun):
+    """Reuse the residual SciPy just evaluated at the Jacobian base point."""
+    last_vector = None
+    last_result = None
+
+    def cached(vector):
+        nonlocal last_vector, last_result
+        vector = np.asarray(vector, dtype=float)
+        if last_vector is not None and np.array_equal(vector, last_vector):
+            return last_result.copy()
+        result = np.asarray(fun(vector), dtype=float)
+        last_vector = vector.copy()
+        last_result = result.copy()
+        return result
+
+    return cached
+
+
 def _optimizer_method(initial: np.ndarray, lower: np.ndarray, upper: np.ndarray) -> str:
     """A zero-valued dispersion parameter must be able to leave its bound.
 
@@ -1154,19 +1178,20 @@ def run_least_squares_refinement(
             return penalty
 
     if specs:
+        cached_residual = _cache_last_evaluation(residual)
         opt = least_squares(
-            residual,
+            cached_residual,
             x0,
             bounds=(lo, hi),
-            jac=_bounded_jacobian(residual, lo, hi),
+            jac=_bounded_jacobian(cached_residual, lo, hi),
             method=_optimizer_method(x0, lo, hi),
             loss="linear",
             x_scale="jac",
             # The model is integrated numerically at finite tolerance.  SciPy's
             # default machine-epsilon step can be smaller than the ODE noise and
             # produce a zero/unstable Jacobian, causing premature `xtol` stops.
-            ftol=1e-7,
-            xtol=1e-7,
+            ftol=1e-4,
+            xtol=1e-4,
             gtol=1e-7,
             max_nfev=max(2, int(max_nfev)),
         )
@@ -1524,7 +1549,7 @@ def run_global_least_squares_refinement(
     def record(objective: float, phase: str, status: str) -> None:
         nonlocal best_objective
         best_objective = min(best_objective, objective)
-        history.append({
+        row = {
             "evaluation": eval_count,
             "elapsed_seconds": time.perf_counter() - fit_started,
             "objective": objective,
@@ -1532,8 +1557,13 @@ def run_global_least_squares_refinement(
             "improvement_percent": _objective_improvement_percent(initial_obj, best_objective),
             "phase": phase,
             "status": status,
-        })
-        write_history()
+        }
+        history.append(row)
+        # Append one small progress row. Rewriting the entire growing history
+        # on every solver call is quadratic work, especially in OneDrive.
+        with FIT_HISTORY_CSV.open("a", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(row))
+            writer.writerow(row)
 
     write_history()
 
@@ -1556,16 +1586,17 @@ def run_global_least_squares_refinement(
             return penalty
 
     if specs:
+        cached_residual = _cache_last_evaluation(residual)
         opt = least_squares(
-            residual,
+            cached_residual,
             x0,
             bounds=(lo, hi),
-            jac=_bounded_jacobian(residual, lo, hi),
+            jac=_bounded_jacobian(cached_residual, lo, hi),
             method=_optimizer_method(x0, lo, hi),
             loss="linear",
             x_scale="jac",
-            ftol=1e-7,
-            xtol=1e-7,
+            ftol=1e-4,
+            xtol=1e-4,
             gtol=1e-7,
             max_nfev=max(2, int(max_nfev)),
         )
@@ -1725,7 +1756,7 @@ def run_global_least_squares_refinement(
         "objective": first["least_squares"]["objective"],
         "equation_9": "min_theta sum_runs sum_points (predicted_signal(theta_fixed, theta_unlocked) - measured_signal)^2",
         "weighted_rmse_formula": "sqrt(sum_runs (run_weight/sum_run_weights) * sum_points(point_weight*residual^2)/sum_point_weights)",
-        "optimizer": "scipy.optimize.least_squares(method=trf, loss=linear), bounded residual-vector least squares as in MATLAB lsqnonlin; distinct numerical implementation",
+        "optimizer": f"scipy.optimize.least_squares(method={_optimizer_method(x0, lo, hi)}, loss=linear, ftol=1e-4, xtol=1e-4, gtol=1e-7); bounded residual-vector least squares",
         "baseline_mode": first["least_squares"]["baseline_mode"],
         "profile_weighting": "User run weights times within-run weighted MSE; sqrt gives weighted RMSE" if weighted_objective else "Equal normalized profile MSE" if normalized_objective else "Unweighted raw point SSE (equation 9); all selected measured points contribute",
         "profiles": [

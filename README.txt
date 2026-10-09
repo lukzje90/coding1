@@ -1,3 +1,15 @@
+LEAST-SQUARES PERFORMANCE UPDATE
+The LSQ tab now labels the safety cap as optimizer evaluations. Each numerical
+Jacobian reruns the column once per unlocked parameter and selected chromatogram,
+plus a base solve.
+While JMP is busy, least_squares_objective_history.csv gains progress rows with
+elapsed seconds and the best objective so far. A repeated base solve and repeated
+full-file history rewrites have been removed. The conductivity-detector delay
+is excluded from UV fitting because it cannot affect the fitted signal.
+The supplied 1400-step/100-cell LSQ recipe can still take considerable time with
+all parameters unlocked. For a diagnostic fit, edit the separate LSQ recipe to
+use fewer time steps/cells; check the final result at full resolution.
+
 LSQ CHROMATOGRAM IMPORT UPDATE
 JMP startup fix: the five LSQ run controls are now read by their own named
 display boxes. The run-loader always receives both a slot and a run number.
