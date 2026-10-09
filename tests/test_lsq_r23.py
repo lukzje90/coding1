@@ -114,8 +114,20 @@ class RefinementTests(unittest.TestCase):
         for expected in ["dtLSQRuns", "SwitchProcessScope", "lsqWeight",
                          "WEIGHTED_RMSE", "lsqRunsFile", "activeRunsFile",
                          "lsqSheet", "lsqXColumn", "lsqSignalColumn", "lsqXUnit", "lsqXOrigin",
-                         "1. Measured chromatogram", "3. Fit settings"]:
+                         "Number of runs to fit [1–5]", "Fit settings", "SaveAllLSQReferences"]:
             self.assertIn(expected, jsl)
+        self.assertLess(jsl.index("Number of runs to fit [1–5]"), jsl.index("Run section 1"))
+        self.assertLess(jsl.index("Run section 5"), jsl.index('Outline Box("Fit settings"'))
+        self.assertIn('Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(lsqPathBoxes[slot] << Get Text))', jsl)
+        self.assertIn('Column(dtLSQRuns, "LSQ_X_Origin")[r] = lsqOriginBoxes[slot] << Get Selected', jsl)
+        self.assertIn('Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot]', jsl)
+        for slot in range(1, 6):
+            with self.subTest(slot=slot):
+                self.assertIn(f'lsqRunSlot{slot}Row << Visibility(If(Num(lsqRunCount << Get Selected) >= {slot}', jsl)
+                self.assertIn(f'Button Box("Attach Excel / CSV", AttachLSQCSV({slot}))', jsl)
+                self.assertIn(f'lsqCsvPath{slot} = Text Edit Box', jsl)
+                self.assertIn(f'lsqXUnit{slot} = Combo Box', jsl)
+                self.assertIn(f'lsqXOrigin{slot} = Combo Box', jsl)
 
     def test_conference_cv_and_ml_mau_axes_align_with_solver(self):
         cfg = config_for()

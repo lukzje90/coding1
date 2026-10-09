@@ -378,17 +378,49 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'Python Send(lsqBaseline << Get, Python Name("tdm_ui_lsq_detector_baseline"));',
         'Python Send(lsqMaxEvaluations << Get, Python Name("tdm_ui_lsq_max_nfev"));',
     ]
-    lsq_selection_rows = []
+    lsq_run_sections = []
     lsq_selection_visibility = []
     lsq_selection_sends = []
     run_choices = "{" + ", ".join(_q(f"Run {r}") for r in range(1, MAX_LSQ_PROFILES + 1)) + "}"
     saved_selection = cfg["least_squares"].get("selected_run_numbers")
     saved_selection = saved_selection if isinstance(saved_selection, list) and 1 <= len(saved_selection) <= 5 else [1]
+    initial_runs = []
+    for value in saved_selection:
+        try:
+            run = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= run <= MAX_LSQ_PROFILES and run not in initial_runs:
+            initial_runs.append(run)
+    initial_runs.extend(run for run in range(1, MAX_LSQ_PROFILES + 1) if run not in initial_runs)
     for slot in range(1, 6):
-        selected_run = min(MAX_LSQ_PROFILES, max(1, int(saved_selection[slot-1]))) if slot <= len(saved_selection) else slot
-        lsq_selection_rows.append(f'lsqRunSlot{slot}Row = H List Box(Text Box("Fit run {slot}", << Set Width(240)), lsqRunSlot{slot} = Combo Box({run_choices}, << Set({selected_run}), << Set Width(150)))')
+        selected_run = initial_runs[slot - 1]
+        lsq_run_sections.append(f'''lsqRunSlot{slot}Row = Outline Box("Run section {slot}", V List Box(
+            H List Box(Text Box("Process recipe", << Set Width(180)), lsqRunSlot{slot} = Combo Box({run_choices}, << Set({selected_run}), << Set Width(140), << Set Function(Function({{this}}, If(!isLoading, ChangeLSQSlot({slot}, RunNumberFromLabel(this << Get Selected))))))),
+            lsqRunSummary{slot} = Text Box("", << Set Wrap(720)),
+            H List Box(Text Box("Excel / CSV file", << Set Width(180)), lsqCsvPath{slot} = Text Edit Box("", << Set Width(440))),
+            H List Box(Text Box("X units", << Set Width(180)), lsqXUnit{slot} = Combo Box({{"AUTO", "CV", "ML", "MIN", "S", "H", "INDEX"}}, << Set(1), << Set Width(150))),
+            H List Box(Text Box("X = 0 at", << Set Width(180)), lsqXOrigin{slot} = Combo Box({{"RUN_START", "ELUTION_START"}}, << Set(1), << Set Width(170))),
+            H List Box(Button Box("Attach Excel / CSV", AttachLSQCSV({slot})), Button Box("Edit process recipe", SwitchProcessScope(1, RunNumberFromLabel(lsqRunSlot{slot} << Get Selected)); mainTabs << Set(1))),
+            Outline Box("Optional columns and weight", << Close(1), V List Box(
+                H List Box(Text Box("Excel worksheet", << Set Width(180)), lsqSheet{slot} = Text Edit Box("", << Set Width(380))),
+                H List Box(Text Box("X column", << Set Width(180)), lsqXColumn{slot} = Text Edit Box("", << Set Width(380))),
+                H List Box(Text Box("UV mAU column", << Set Width(180)), lsqSignalColumn{slot} = Text Edit Box("", << Set Width(380))),
+                H List Box(Text Box("Run weight (default 1)", << Set Width(180)), lsqWeight{slot} = Number Edit Box(1, 9, << Set Width(100)))
+            ))
+        ))''')
         lsq_selection_visibility.append(f'lsqRunSlot{slot}Row << Visibility(If(Num(lsqRunCount << Get Selected) >= {slot}, "Visible", "Collapse"));')
         lsq_selection_sends.append(f'Python Send(RunNumberFromLabel(lsqRunSlot{slot} << Get Selected), Python Name("tdm_ui_lsq_selected_run_{slot}"));')
+    lsq_control_arrays = "\n".join(
+        f'{name} = {{{", ".join(f"{prefix}{slot}" for slot in range(1, 6))}}};'
+        for name, prefix in (
+            ("lsqRunBoxes", "lsqRunSlot"), ("lsqPathBoxes", "lsqCsvPath"),
+            ("lsqWeightBoxes", "lsqWeight"), ("lsqSheetBoxes", "lsqSheet"),
+            ("lsqXColumnBoxes", "lsqXColumn"), ("lsqSignalColumnBoxes", "lsqSignalColumn"),
+            ("lsqUnitBoxes", "lsqXUnit"), ("lsqOriginBoxes", "lsqXOrigin"),
+            ("lsqRunSummaryBoxes", "lsqRunSummary"),
+        )
+    )
     lock_state_parts = []
     for lock_var, parameter_path in fit_lock_vars:
         lock_state_parts.extend([_q(parameter_path + "="), f'{lock_var} << Get Selected', _q(";")])
@@ -705,47 +737,69 @@ LoadRun = Function({{n}}, {{}},
     isLoading = 1; currentRun = n;
     {''.join(load_run_lines)}
     runSelector << Set(currentRun);
-    If(isLSQSetup, lsqTargetRunSelector << Set(currentRun); LoadLSQReference(currentRun));
+    If(isLSQSetup, lsqTargetRunSelector << Set(currentRun));
     isLoading = 0; SyncLoadAmount(); UpdateUI(); UpdateLSQRunSummary();
 );
 
-SaveLSQReference = Function({{}}, {{r}},
+SaveLSQReference = Function({{slot}}, {{r, w}},
     If(isLoading, Return());
-    r = lsqCurrentReferenceRun;
-    If(r > {MAX_LSQ_PROFILES}, Return());
-    Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(lsqCsvPath << Get Text));
-    Column(dtLSQRuns, "LSQ_Weight")[r] = lsqWeight << Get;
-    Column(dtLSQRuns, "LSQ_Sheet")[r] = Trim(Char(lsqSheet << Get Text));
-    Column(dtLSQRuns, "LSQ_X_Column")[r] = Trim(Char(lsqXColumn << Get Text));
-    Column(dtLSQRuns, "LSQ_Signal_Column")[r] = Trim(Char(lsqSignalColumn << Get Text));
-    Column(dtLSQRuns, "LSQ_X_Unit")[r] = lsqXUnit << Get Selected;
-    Column(dtLSQRuns, "LSQ_X_Origin")[r] = lsqXOrigin << Get Selected;
+    r = lsqLoadedRuns[slot];
+    If(r < 1 | r > {MAX_LSQ_PROFILES}, Return());
+    w = lsqWeightBoxes[slot] << Get;
+    Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(lsqPathBoxes[slot] << Get Text));
+    Column(dtLSQRuns, "LSQ_Weight")[r] = If(Is Missing(w), 1, w);
+    Column(dtLSQRuns, "LSQ_Sheet")[r] = Trim(Char(lsqSheetBoxes[slot] << Get Text));
+    Column(dtLSQRuns, "LSQ_X_Column")[r] = Trim(Char(lsqXColumnBoxes[slot] << Get Text));
+    Column(dtLSQRuns, "LSQ_Signal_Column")[r] = Trim(Char(lsqSignalColumnBoxes[slot] << Get Text));
+    Column(dtLSQRuns, "LSQ_X_Unit")[r] = lsqUnitBoxes[slot] << Get Selected;
+    Column(dtLSQRuns, "LSQ_X_Origin")[r] = lsqOriginBoxes[slot] << Get Selected;
     dtLSQRuns << Save(lsqRunsFile);
 );
-LoadLSQReference = Function({{r}}, {{w, path, unit, origin}},
+LoadLSQReference = Function({{slot, r}}, {{w, path, unit, origin}},
     r = Max(1, Min({MAX_LSQ_PROFILES}, r));
     path = Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r];
     w = Num(Column(dtLSQRuns, "LSQ_Weight")[r]);
-    lsqCurrentReferenceRun = r;
-    lsqCsvPath << Set Text(If(Is Missing(path), "", Char(path)));
-    lsqWeight << Set(If(Is Missing(w), 1, w));
-    lsqSheet << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_Sheet")[r]), "", Char(Column(dtLSQRuns, "LSQ_Sheet")[r])));
-    lsqXColumn << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_X_Column")[r]), "", Char(Column(dtLSQRuns, "LSQ_X_Column")[r])));
-    lsqSignalColumn << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_Signal_Column")[r]), "", Char(Column(dtLSQRuns, "LSQ_Signal_Column")[r])));
+    lsqLoadedRuns[slot] = r;
+    lsqPathBoxes[slot] << Set Text(If(Is Missing(path), "", Char(path)));
+    lsqWeightBoxes[slot] << Set(If(Is Missing(w), 1, w));
+    lsqSheetBoxes[slot] << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_Sheet")[r]), "", Char(Column(dtLSQRuns, "LSQ_Sheet")[r])));
+    lsqXColumnBoxes[slot] << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_X_Column")[r]), "", Char(Column(dtLSQRuns, "LSQ_X_Column")[r])));
+    lsqSignalColumnBoxes[slot] << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_Signal_Column")[r]), "", Char(Column(dtLSQRuns, "LSQ_Signal_Column")[r])));
     unit = Uppercase(Char(Column(dtLSQRuns, "LSQ_X_Unit")[r]));
-    lsqXUnit << Set(If(unit == "CV", 2, unit == "ML", 3, unit == "MIN", 4, unit == "S", 5, unit == "H", 6, unit == "INDEX", 7, 1));
+    lsqUnitBoxes[slot] << Set(If(unit == "CV", 2, unit == "ML", 3, unit == "MIN", 4, unit == "S", 5, unit == "H", 6, unit == "INDEX", 7, 1));
     origin = Uppercase(Char(Column(dtLSQRuns, "LSQ_X_Origin")[r]));
-    lsqXOrigin << Set(If(origin == "ELUTION_START", 2, 1));
+    lsqOriginBoxes[slot] << Set(If(origin == "ELUTION_START", 2, 1));
 );
-ChangeLSQTarget = Function({{r}}, {{}},
-    If(!isLoading, SaveLSQReference());
-    isLoading = 1;
-    lsqTargetRunSelector << Set(r); LoadLSQReference(r);
-    isLoading = 0;
-    If(isLSQSetup, SaveCurrentRun(); LoadRun(r));
+SaveAllLSQReferences = Function({{}}, {{i, j, n, ri}},
+    n = Num(lsqRunCount << Get Selected);
+    For(i = 1, i <= n, i++,
+        ri = RunNumberFromLabel(lsqRunBoxes[i] << Get Selected);
+        For(j = i + 1, j <= n, j++,
+            If(ri == RunNumberFromLabel(lsqRunBoxes[j] << Get Selected),
+                lsqStatusText << Set Text("Choose a different LSQ process run in each visible run section.");
+                Return(0)
+            )
+        )
+    );
+    For(i = 1, i <= n, i++, SaveLSQReference(i));
+    UpdateLSQRunSummary();
+    Return(1);
+);
+ChangeLSQSlot = Function({{slot, r}}, {{i, n}},
+    n = Num(lsqRunCount << Get Selected);
+    For(i = 1, i <= n, i++,
+        If(i != slot & r == lsqLoadedRuns[i],
+            lsqRunBoxes[slot] << Set(lsqLoadedRuns[slot]);
+            lsqStatusText << Set Text("Choose a different LSQ process run in each visible run section.");
+            Return()
+        )
+    );
+    SaveLSQReference(slot);
+    LoadLSQReference(slot, r);
     UpdateLSQRunSummary();
 );
 SwitchProcessScope = Function({{useLSQ, runNum}}, {{}},
+    If(!SaveAllLSQReferences(), Return());
     SaveCurrentRun();
     isLSQSetup = If(useLSQ, 1, 0);
     dtRuns = If(isLSQSetup, dtLSQRuns, dtBatchRuns);
@@ -795,28 +849,23 @@ LSQRunStageSummary = Function({{r, prefix, i}}, {{base, summary, control}},
     Return(summary);
 );
 
-UpdateLSQRunSummary = Function({{}}, {{r, runName, nPLW, nElution, i, j, summary, stageText, requiredVolume, profileCount, profileText, profilePath, profileName}},
-    r = RunNumberFromLabel(lsqTargetRunSelector << Get Selected);
-    r = Max(1, Min({MAX_LSQ_PROFILES}, Floor(r)));
-    runName = LSQRunCellText(r, "Run_Name");
-    nPLW = Num(Column(dtLSQRuns, "PLW_Count")[r]); If(Is Missing(nPLW), nPLW = 0);
-    nElution = Num(Column(dtLSQRuns, "Elution_Count")[r]); If(Is Missing(nElution), nElution = 0);
-    nPLW = Max(0, Min({MAX_PLW_STEPS}, Floor(nPLW)));
-    nElution = Max(0, Min({MAX_ELUTION_STEPS}, Floor(nElution)));
-    requiredVolume = Num(Column(dtLSQRuns, "Load_CV")[r]) * Num(columnVolume << Get);
-    profileCount = 0; profileText = "";
-    For(j = 1, j <= {MAX_LSQ_PROFILES}, j++,
-        profilePath = Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[j];
-        If(Is Missing(profilePath), profilePath = "", profilePath = Trim(Char(profilePath)));
-        If(!Is Empty(profilePath),
-            profileCount++; profileName = LSQRunCellText(j, "Run_Name");
-            profileText = profileText || If(profileText == "", "", "\\!n") || "Run " || Char(j) || " — " || profileName || ": " || profilePath
+UpdateLSQRunSummary = Function({{}}, {{slot, r, n, attached, nPLW, nElution, path, summary}},
+    n = Num(lsqRunCount << Get Selected); attached = 0;
+    For(slot = 1, slot <= {MAX_LSQ_PROFILES}, slot++,
+        r = lsqLoadedRuns[slot];
+        If(r >= 1 & r <= {MAX_LSQ_PROFILES},
+            nPLW = Num(Column(dtLSQRuns, "PLW_Count")[r]); If(Is Missing(nPLW), nPLW = 0);
+            nElution = Num(Column(dtLSQRuns, "Elution_Count")[r]); If(Is Missing(nElution), nElution = 0);
+            path = Trim(Char(lsqPathBoxes[slot] << Get Text));
+            If(slot <= n & !Is Empty(path), attached++);
+            summary = "LSQ Run " || Char(r) || " — " || LSQRunCellText(r, "Run_Name") ||
+                ": load " || LSQRunCellText(r, "Load_CV") || " CV, " || Char(nPLW) || " wash(es), " ||
+                Char(nElution) || " elution step(s); column " || Char(columnVolume << Get) || " mL." ||
+                If(Is Empty(path), " No chromatogram attached.", " Chromatogram entered.");
+            lsqRunSummaryBoxes[slot] << Set Text(summary)
         )
     );
-    lsqProfilesStatus << Set Text(Char(profileCount) || " chromatogram(s) attached. Fit uses only the selected runs above.");
-    summary = "Run " || Char(r) || " — " || runName || ": load " || LSQRunCellText(r, "Load_CV") ||
-        " CV, " || Char(nPLW) || " wash(es), " || Char(nElution) || " elution step(s). Column volume " || Char(columnVolume << Get) || " mL.";
-    lsqRunSummary << Set Text(summary);
+    lsqProfilesStatus << Set Text(Char(n) || " run(s) selected; " || Char(attached) || " chromatogram(s) entered. Each selected run needs its own file.");
 );
 
 ComputeBatchPHSpan = Function({{}}, {{nRuns, r, i, mn, mx, v, c, stepMode, chemControl, loadMaterialMode, loadMode}},
@@ -926,6 +975,7 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     requiredList << Set Text(reqText);
     batchPHStatus << Set Text(If(isCPA, "Selected-batch pH span: " || Char(Round(batchPHSpan, 6)), ""));
     lsqUsesComposition = Contains(Char(lsqModeBox << Get Selected), "mass%") > 0;
+    lsqTargetRunRow << Visibility(If(lsqUsesComposition, "Visible", "Collapse"));
     lsqCompositionPanel << Visibility(If(lsqUsesComposition, "Visible", "Collapse"));
     lsqRefCount = Num(lsqReferenceCountBox << Get Selected); If(Is Missing(lsqRefCount), lsqRefCount = 1);
     {''.join(ref_vis)}
@@ -939,8 +989,8 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     If(isLSQSetup & (actionText == "RUN_SELECTED" | actionText == "RUN_BATCH" | actionText == "CHECK_RESULT_CURRENT"),
         statusText << Set Text("Switch to Normal batch setup before running a production chromatogram."); Return()
     );
+    If(actionText == "FIT_LSQ" | actionText == "ATTACH_LSQ_CSV", If(!SaveAllLSQReferences(), Return()));
     SaveCurrentRun();
-    If(actionText == "FIT_LSQ" | actionText == "ATTACH_LSQ_CSV", SaveLSQReference());
     UpdateLSQRunSummary(); SendSharedModel();
     Python Send(actionText, Python Name("tdm_ui_action"));
     Python Send(If(isLSQSetup, 1, currentRun), Python Name("tdm_ui_run_number"));
@@ -949,8 +999,8 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     Python Send(lsqRunCount << Get Selected, Python Name("tdm_ui_lsq_run_count"));
     {''.join(lsq_selection_sends)}
     Python Send(lsqReferenceCountBox << Get Selected, Python Name("tdm_ui_lsq_reference_count"));
-    Python Send(lsqCsvPath << Get Text, Python Name("tdm_ui_lsq_csv_path"));
-    Python Send(RunNumberFromLabel(lsqTargetRunSelector << Get Selected), Python Name("tdm_ui_lsq_target_run"));
+    Python Send(lsqPathBoxes[lsqAttachSlot] << Get Text, Python Name("tdm_ui_lsq_csv_path"));
+    Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot], RunNumberFromLabel(lsqTargetRunSelector << Get Selected)), Python Name("tdm_ui_lsq_target_run"));
     Python Send(projectDir, Python Name("tdm_project_dir"));
     Python Send(projectDir, Python Name("tdm_project_dir_posix"));
     {''.join(ref_sends)}
@@ -1004,12 +1054,13 @@ OpenCurrentResult = Function({{openData}}, {{statusValue}},
     );
 );
 
-AttachLSQCSV = Function({{}}, {{csvPath}},
-    csvPath = Trim(Char(lsqCsvPath << Get Text));
+AttachLSQCSV = Function({{slot}}, {{csvPath}},
+    lsqAttachSlot = slot;
+    csvPath = Trim(Char(lsqPathBoxes[slot] << Get Text));
     If(Is Empty(csvPath) | !File Exists(csvPath),
         csvPath = Pick File("Select raw chromatogram CSV/Excel", "", {{"Chromatogram files|csv;xlsx;xlsm", "All files|*"}}, 1, 0, "");
         If(Is Empty(csvPath), Return());
-        lsqCsvPath << Set Text(csvPath);
+        lsqPathBoxes[slot] << Set Text(csvPath);
     );
     SendAndRun("ATTACH_LSQ_CSV");
 );
@@ -1045,7 +1096,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
         copyStatus = Text Box("", << Set Wrap(780)),
         H List Box(
             Button Box("Edit normal batch setup", SwitchProcessScope(0, 1); mainTabs << Set(1)),
-            Button Box("Edit LSQ process setup", SwitchProcessScope(1, RunNumberFromLabel(lsqTargetRunSelector << Get Selected)); mainTabs << Set(1)),
+            Button Box("Edit LSQ process setup", SwitchProcessScope(1, lsqLoadedRuns[1]); mainTabs << Set(1)),
             Button Box("Save current process recipe", SaveCurrentRun(); copyStatus << Set Text("Saved recipe in " || If(isLSQSetup, "independent LSQ runs", "normal batch runs")))
         ),
         scopeStatus = Text Box("Editing NORMAL batch process setup. The independent LSQ runs are kept separately.", << Set Wrap(780)),
@@ -1147,38 +1198,20 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
             )),
             "Least-Squares Refinement",
             V Scroll Box(Size(850, 690), V List Box(
-                Text Box("Fit measured UV absorbance (mAU) against column volume (CV) or collected volume (mL). Each LSQ run has its own process recipe; unlocked Model Parameters are fitted across the selected runs.", << Set Wrap(760)),
-                Outline Box("1. Measured chromatogram", V List Box(
-                    H List Box(Text Box("LSQ run", << Set Width(200)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(150), << Set Function(Function({{this}}, If(!isLoading, ChangeLSQTarget(RunNumberFromLabel(this << Get Selected))))))),
-                    lsqRunSummary = Text Box("", << Set Wrap(740)),
-                    H List Box(Text Box("Excel / CSV file", << Set Width(200)), lsqCsvPath = Text Edit Box("", << Set Width(460))),
-                    H List Box(Text Box("X units", << Set Width(200)), lsqXUnit = Combo Box({{"AUTO", "CV", "ML", "MIN", "S", "H", "INDEX"}}, << Set(1), << Set Width(160))),
-                    H List Box(Text Box("X = 0 at", << Set Width(200)), lsqXOrigin = Combo Box({{"RUN_START", "ELUTION_START"}}, << Set(1), << Set Width(160))),
-                    Text Box("Y: UV detector mAU. AUTO detects CV or mL and prefers a UV/mAU column. For an elution-only export, choose ELUTION_START so the measured peak aligns after load and washes. mL is divided by the column volume shown above.", << Set Wrap(740)),
-                    H List Box(Button Box("Attach / validate chromatogram CSV or Excel", AttachLSQCSV()),
-                               Button Box("Edit this run's process recipe", SwitchProcessScope(1, RunNumberFromLabel(lsqTargetRunSelector << Get Selected)); mainTabs << Set(1))),
-                    Outline Box("Advanced column selection", << Close(1), V List Box(
-                        H List Box(Text Box("Excel worksheet (blank = auto)", << Set Width(240)), lsqSheet = Text Edit Box("", << Set Width(380))),
-                        H List Box(Text Box("X column (blank = auto)", << Set Width(240)), lsqXColumn = Text Edit Box("", << Set Width(380))),
-                        H List Box(Text Box("UV mAU column (blank = auto)", << Set Width(240)), lsqSignalColumn = Text Edit Box("", << Set Width(380))),
-                        Text Box("Choose exact headings when an export has several channels. If you override X, set its units above. An optional Weight column supplies per-point weights.", << Set Wrap(700))
-                    ))
-                )),
-                Outline Box("2. Runs to fit", V List Box(
-                    H List Box(Text Box("Number of runs [1–5]", << Set Width(200)), lsqRunCount = Combo Box({{"1", "2", "3", "4", "5"}}, << Set({len(saved_selection)}), << Set Function(Function({{this}}, UpdateUI())))),
-                    {', '.join(lsq_selection_rows)},
-                    lsqProfilesStatus = Text Box("", << Set Wrap(740)),
-                    {_nrow("Weight for this LSQ run (>0)", "lsqWeight", 1.0, 240)}
-                )),
-                Outline Box("3. Fit settings", V List Box(
-                    H List Box(Text Box("Objective", << Set Width(200)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
+                H List Box(Text Box("Number of runs to fit [1–5]", << Set Width(240)), lsqRunCount = Combo Box({{"1", "2", "3", "4", "5"}}, << Set({len(saved_selection)}), << Set Width(100), << Set Function(Function({{this}}, UpdateUI(); UpdateLSQRunSummary())))),
+                lsqProfilesStatus = Text Box("", << Set Wrap(740)),
+                Text Box("Attach one measured CV/mL versus UV mAU chromatogram in each run section. The run count immediately shows or hides sections; each section keeps its own file, X units, X=0 origin and process recipe.", << Set Wrap(760)),
+                {', '.join(lsq_run_sections)},
+                Outline Box("Fit settings", V List Box(
                     H List Box(Text Box("Refinement mode", << Set Width(200)), lsqModeBox = Combo Box({{"Normal least-squares: chromatogram only", "Least-squares: chromatogram + species mass% at CV"}}, << Set Width(340), << Set Function(Function({{this}}, UpdateUI())))),
+                    lsqTargetRunRow = H List Box(Text Box("Species reference run", << Set Width(200)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(140))),
                     H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
-                    Text Box("Set individual Locked/Unlocked controls on Model Parameters. RAW_SSE fits pointwise mAU error; WEIGHTED_RMSE uses run and optional point weights.", << Set Wrap(740)),
-                    Outline Box("Advanced objective settings", << Close(1), V List Box(
+                    Text Box("Leave objective and weights alone for ordinary pointwise least-squares. The optimizer keeps the best improvement and stops when the objective, gradient, or parameter step converges; the evaluation limit is a safety cap. Set individual parameter locks on Model Parameters.", << Set Wrap(740)),
+                    Outline Box("Optional objective and stopping settings", << Close(1), V List Box(
+                        H List Box(Text Box("Objective", << Set Width(240)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
                         H List Box(Text Box("Baseline policy", << Set Width(240)), lsqBaselineMode = Combo Box({{"NONE", "INITIAL_MEDIAN"}}, << Set({1 if cfg['least_squares']['baseline_mode']=='NONE' else 2}), << Set Width(220))),
                         {_nrow("Fixed detector baseline [mAU]", "lsqBaseline", cfg['least_squares']['detector_baseline'], 240)},
-                        {_nrow("Maximum solver evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 240)}
+                        {_nrow("Safety cap: solver evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 240)}
                     ))
                 )),
                 Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ")),
@@ -1211,6 +1244,12 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
 modelWindow << Set Window Size(920, 850);
 impurityCountBox << Set({imp_count + 1});
 lsqReferenceCountBox << Set(1);
+{lsq_control_arrays}
+lsqLoadedRuns = {{0, 0, 0, 0, 0}};
+lsqAttachSlot = 1;
+For(lsqInitSlot = 1, lsqInitSlot <= {MAX_LSQ_PROFILES}, lsqInitSlot++,
+    LoadLSQReference(lsqInitSlot, RunNumberFromLabel(lsqRunBoxes[lsqInitSlot] << Get Selected))
+);
 LoadRun(1);
 lsqTargetRunSelector << Set(1);
 LoadLSQReference(1);
@@ -1243,7 +1282,7 @@ def _validate_jsl(jsl: str) -> None:
         "Buffer A (0% B)", "Buffer B (100% B)",
         "Saturation capacity qmax,i [g/L stationary phase]", "SyncLangmuirDerived",
         "AttachLSQCSV = Function", "Pick File(\"Select raw chromatogram CSV/Excel\"",
-        "lsqCsvPath << Set Text(csvPath)", "!File Exists(csvPath)",
+        "lsqPathBoxes[slot] << Set Text(csvPath)", "!File Exists(csvPath)",
         "LSQ_Chromatogram_CSV", "lsqTargetRunSelector << Set(currentRun)", "RunNumberFromLabel(this << Get Selected)",
         "RunNumberFromLabel = Function", "Column(dtRuns, \"PLW_Count\")[currentRun] = Num(plwCountBox << Get Selected)",
         "Column(dtRuns, \"Elution_Count\")[currentRun] = Num(elutionCountBox << Get Selected)",
@@ -1283,8 +1322,8 @@ def _validate_jsl(jsl: str) -> None:
             raise ValueError(f"Combo Box {control} must be read as selected text.")
         if f"{control} << Get()" in jsl:
             raise ValueError(f"Combo Box {control} is incorrectly read as an item index.")
-    if jsl.count("RunNumberFromLabel(this << Get Selected)") != 2:
-        raise ValueError("Both run selectors must parse their selected Run label.")
+    if jsl.count("RunNumberFromLabel(this << Get Selected)") != 1 + MAX_LSQ_PROFILES:
+        raise ValueError("The batch and all LSQ run selectors must parse their selected Run label.")
     if "dtRuns << Save;" in jsl:
         raise ValueError("Run profiles must be persisted to the explicit batch CSV path.")
     if "Python Send(Floor(batchCountBox << Get), Python Name(\"tdm_ui_batch_count\"))" not in jsl:
@@ -1317,8 +1356,9 @@ def _validate_jsl(jsl: str) -> None:
                     raise ValueError(f"{prefix} {i} source Combo Box must be read as selected text.")
                 if f"{control} << Get()" in jsl:
                     raise ValueError(f"{prefix} {i} source Combo Box is incorrectly read as an item index.")
-    if 'Button Box("Attach / validate chromatogram CSV or Excel", AttachLSQCSV())' not in jsl:
-        raise ValueError("Chromatogram attach button must call the picker/path attach handler")
+    for slot in range(1, MAX_LSQ_PROFILES + 1):
+        if f'Button Box("Attach Excel / CSV", AttachLSQCSV({slot}))' not in jsl:
+            raise ValueError(f"LSQ run section {slot} must call its own attachment handler")
 
 
 def open_in_jmp() -> bool:

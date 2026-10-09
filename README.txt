@@ -1,6 +1,7 @@
 LSQ CHROMATOGRAM IMPORT UPDATE
-The Least-Squares Refinement tab now starts with the measured CV/mL-versus-mAU
-file and axis choices. For an elution-only conference chromatogram, set
+The Least-Squares Refinement tab starts with the number of runs and immediately
+shows that many file/axis sections for measured CV/mL-versus-mAU traces.
+Objective and run weights can be left at their defaults. For an elution-only conference chromatogram, set
 "X = 0 at ELUTION_START"; for a full run set RUN_START. Measured mL is divided
 by the column volume and the resulting CV is aligned with the saved LSQ
 process recipe. See LSQ_R23_IMPLEMENTATION_AND_USAGE.md for the workflow.
