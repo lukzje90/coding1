@@ -9,8 +9,8 @@ Two objective modes are intentionally supported:
    species mass-percent observations at user-specified column volumes (CV).
 
 UV predictions use the target and species response factors; only eligible
-unlocked factors are refined. Concentration-valued columns are compared
-directly and do not refine detector response. RAW_SSE defaults to literal
+unlocked factors are refined. Fit entry points require a UV reference in mAU
+(AU-labelled columns are converted). RAW_SSE defaults to literal
 pointwise equation-9 residuals without inferred baseline or normalization.
 NORMALIZED_MSE and initial-median baseline correction are explicit options.
 Optional composition observations add normalized composition residuals.
@@ -40,6 +40,7 @@ from tdm_minimal_io import (
     MODEL_EDM_LANGMUIR,
     MODEL_TDM_CPA,
     MODEL_TDM_LANGMUIR,
+    MODEL_TDM_WANG,
     active_components,
     canonical_fit_parameter_path,
     normalize_config,
@@ -468,10 +469,13 @@ def _select_columns(fields: list[str], rows: list[dict[str, str]], *,
 
 def inspect_chromatogram_csv(path: Path | str, *, sheet_name: str | None = None,
                              x_column: str | None = None, signal_column: str | None = None,
-                             x_unit: str | None = None, x_origin: str | None = None) -> dict[str, Any]:
+                             x_unit: str | None = None, x_origin: str | None = None,
+                             require_uv: bool = False) -> dict[str, Any]:
     p = _resolve_chromatogram_path(path)
     fields, rows = _read_numeric_rows(p, sheet_name=sheet_name)
     x_field, signal_field, unit = _select_columns(fields, rows, x_column=x_column, signal_column=signal_column, x_unit=x_unit)
+    if require_uv:
+        _uv_reference_scale(signal_field, signal_column)
     origin = _validate_x_origin(x_origin, unit)
     paired = (
         _column_numeric_count(rows, signal_field)
@@ -557,10 +561,11 @@ def _elution_start_cv(config: dict[str, Any]) -> float:
 def load_chromatogram_reference(path: Path | str, config: dict[str, Any], *,
                                 sheet_name: str | None = None, x_column: str | None = None,
                                 signal_column: str | None = None, x_unit: str | None = None,
-                                x_origin: str | None = None) -> ChromatogramReference:
+                                x_origin: str | None = None, require_uv: bool = False) -> ChromatogramReference:
     p = _resolve_chromatogram_path(path)
     fields, rows = _read_numeric_rows(p, sheet_name=sheet_name)
     x_field, signal_field, unit = _select_columns(fields, rows, x_column=x_column, signal_column=signal_column, x_unit=x_unit)
+    signal_scale = _uv_reference_scale(signal_field, signal_column) if require_uv else 1.0
     origin = _validate_x_origin(x_origin, unit)
     weights_field = _weight_column(fields)
     pairs: list[tuple[float, float, float]] = []
@@ -583,6 +588,7 @@ def load_chromatogram_reference(path: Path | str, config: dict[str, Any], *,
     order = np.argsort(arr[:, 0])
     x = arr[order, 0]
     y = arr[order, 1]
+    y = y * signal_scale
     weights = arr[order, 2]
     cv = _x_to_cv(x, unit, config)
     if origin == "ELUTION_START":
@@ -625,6 +631,27 @@ def _is_concentration_signal(signal_column: str) -> bool:
     return any(tag in signal_norm for tag in ("totalproteingl", "totalgl", "proteingl", "concentrationgl"))
 
 
+def _uv_reference_scale(signal_column: str, selected_column: str | None) -> float:
+    """Check that an LSQ reference is UV and return its conversion to mAU."""
+    name = _norm_header(signal_column)
+    non_uv = ("conductivity", "salt", "pressure", "flow", "temperature", "turbidity",
+              "percentb", "masspercent", "masspct", "concentration", "totalprotein", "mgml")
+    if (_is_concentration_signal(signal_column) or any(tag in name for tag in non_uv)
+            or name in {"ph", "weight", "pointweight", "sampleweight"}):
+        raise ValueError(f"Least-squares refinement requires a UV signal, not {signal_column!r}.")
+    if "voltage" in name or re.search(r"(?<![a-z])m?v(?![a-z])", signal_column.casefold()):
+        raise ValueError(f"UV reference {signal_column!r} must use absorbance units (AU or mAU), not voltage.")
+    is_labelled_uv = any(tag in name for tag in ("uv", "a280", "mau", "absorbance"))
+    if not is_labelled_uv and not str(selected_column or "").strip():
+        raise ValueError(
+            f"Cannot identify {signal_column!r} as UV. Choose the UV signal column explicitly "
+            "or label it UV/mAU in the file. Generic selected signals are interpreted as mAU."
+        )
+    # Absorbance exports may use AU while the model reports mAU.
+    au_label = re.search(r"(?<![a-z])au(?![a-z])", signal_column.casefold())
+    return 1000.0 if au_label or (name.endswith("au") and not name.endswith("mau")) else 1.0
+
+
 def _linear_z_spec(path: str, label: str, value: float) -> FitParameter:
     span = max(25.0, abs(value) * 1.5)
     return FitParameter(path, label, "LINEAR", value - span, value + span, value)
@@ -637,7 +664,9 @@ def _default_unlocked_parameter_paths(config: dict[str, Any], *, fit_uv_response
     paths: set[str] = set()
     for i, _row in enumerate(active_components(config)):
         prefix = f"components[{i}]"
-        if model in {MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR}:
+        if model == MODEL_TDM_WANG:
+            paths.update({f"{prefix}.wang_k_eq", f"{prefix}.wang_beta1_per_M"})
+        elif model in {MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR}:
             paths.update({f"{prefix}.qmax_g_L", f"{prefix}.b_L_g", f"{prefix}.salt_sensitivity_per_M"})
         else:
             paths.update({f"{prefix}.delta_ref", f"{prefix}.As_m_inv"})
@@ -693,6 +722,16 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
         "Z3_per_pH3": "CPA Z3,i [-]",
         "delta_pH_slope_m2_C": "CPA Δ1,i [m²/C]",
         "uv_response_factor_mAU_L_g": "UV → protein response factor [mAU·L/g]",
+        "q0_g_L": "Wang q0 [g/L stationary phase]",
+        "eta": "Wang η [-]",
+        "wang_K_kin_s": "Wang K′kin,i [s]",
+        "wang_k_eq": "Wang k_eq,i",
+        "wang_qmax_g_L": "Wang qmax,i [g/L stationary phase]",
+        "wang_n": "Wang n_i [-]",
+        "wang_beta0": "Wang β0,i [-]",
+        "wang_beta1_per_M": "Wang β1,i [M⁻¹]",
+        "wang_beta2_L_g": "Wang β2,i [L/g]",
+        "wang_beta3_per_pH": "Wang β3,i [pH⁻¹]",
     }
     for path in paths:
         if path in {"column.volume_mL", "column.length_mm"} or path.endswith(".mass_percent"):
@@ -718,6 +757,15 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
         elif field == "salt_sensitivity_per_M":
             specs.append(FitParameter(path, labels[field], "LINEAR", 0.0 if is_hic(config) else -25.0, 25.0,
                                       float(np.clip(value, 0.0 if is_hic(config) else -25.0, 25.0))))
+        elif field in {"eta", "wang_n"}:
+            lower, upper = (0.1, 3.0) if field == "eta" else (0.1, 4.0)
+            specs.append(FitParameter(path, labels[field], "LINEAR", lower, upper,
+                                      float(np.clip(value, lower, upper))))
+        elif field in {"wang_beta0", "wang_beta1_per_M", "wang_beta2_L_g", "wang_beta3_per_pH"}:
+            lower, upper = {"wang_beta0": (0.0, 2.0), "wang_beta1_per_M": (-5.0, 5.0),
+                            "wang_beta2_L_g": (-5.0, 5.0), "wang_beta3_per_pH": (-1.0, 1.0)}[field]
+            specs.append(FitParameter(path, labels[field], "LINEAR", lower, upper,
+                                      float(np.clip(value, lower, upper))))
         elif field in {"buffer_dispersion_mL", "salt_dispersion_mm2_s", "uv_dead_volume_mL", "D_ax_mm2_s", "D_app_mm2_s", "salt_axial_dispersion_mm2_s"}:
             upper = max(10.0, value * 20.0, float(config["column"]["volume_mL"]) * 5.0)
             specs.append(FitParameter(path, labels.get(field, field), "LINEAR", 0.0, upper,
@@ -734,7 +782,8 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
         elif field in {"uv_to_protein_mAU_L_g", "uv_response_factor_mAU_L_g", "conductivity_to_salt_M_per_mS_cm",
                        "bead_radius_um", "salt_axial_dispersion_mm2_s", "ligand_surface_density_umol_m2",
                        "system_specific_adsorption_parameter", "D_ax_mm2_s", "k_eff_um_s", "D_app_mm2_s",
-                       "qmax_g_L", "b_L_g", "diameter_nm", "As_m_inv", "delta_ref", "kkin_star_s"}:
+                       "qmax_g_L", "b_L_g", "diameter_nm", "As_m_inv", "delta_ref", "kkin_star_s",
+                       "q0_g_L", "wang_K_kin_s", "wang_k_eq", "wang_qmax_g_L"}:
             try:
                 specs.append(_positive_log_spec(path, labels.get(field, field), value))
             except ValueError:
@@ -829,6 +878,7 @@ def _baseline_correct(signal: np.ndarray) -> tuple[np.ndarray, float, float]:
 
 
 def _chromatogram_residuals(config: dict[str, Any], ref: ChromatogramReference, trace: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
+    _uv_reference_scale(ref.signal_column, ref.signal_column)
     sim_cv = np.asarray(trace["CV"], dtype=float)
     sim_total = np.asarray(trace["total_g_L"], dtype=float)
     tolerance = 1e-9 * max(1.0, float(np.max(sim_cv)))
@@ -846,15 +896,9 @@ def _chromatogram_residuals(config: dict[str, Any], ref: ChromatogramReference, 
     objective = options.get("objective", "RAW_SSE")
     normalized = objective == "NORMALIZED_MSE"
     scale = measured_scale if normalized else 1.0
-    concentration_signal = _is_concentration_signal(ref.signal_column)
-    if concentration_signal:
-        detector_scale = 1.0
-        predicted_zero_baseline = y_sim
-        detector_scale_source = "concentration CSV: no UV conversion applied"
-    else:
-        detector_scale = None
-        predicted_zero_baseline = np.interp(x, sim_cv, np.asarray(trace["uv_mAU"], dtype=float))
-        detector_scale_source = "species-specific UV response factors (target factor plus fitted impurity factors)"
+    detector_scale = None
+    predicted_zero_baseline = np.interp(x, sim_cv, np.asarray(trace["uv_mAU"], dtype=float))
+    detector_scale_source = "species-specific UV response factors (target factor plus fitted impurity factors)"
     predicted_signal = baseline + predicted_zero_baseline
     residual = (predicted_signal - y_meas) / scale
     if normalized:
@@ -878,6 +922,27 @@ def _chromatogram_residuals(config: dict[str, Any], ref: ChromatogramReference, 
         "point_weight_column": ref.weight_column,
     }
     return residual, info
+
+
+def _chromatogram_fit_svg(config: dict[str, Any], info: dict[str, Any]) -> str:
+    """Show the entire programmed run without extending measured UV samples."""
+    chrom = info["chromatogram"]
+    trace = info["result"]["trace"]
+    program = info["result"]["simulation"]["program"]
+    return _svg_plot(
+        trace["CV"],
+        [("Measured UV", chrom["measured"]),
+         ("Predicted UV", np.asarray(trace["uv_mAU"]) + chrom["baseline"])],
+        series_x=[chrom["CV"], trace["CV"]],
+        stages=_stage_receipt(config, program), total_cv=program.total_CV,
+        percent_B=trace["programmed_percent_B"],
+        column_percent_B=trace["column_percent_B"],
+        conductivity=trace["conductivity_mS_cm"],
+        time_min=trace["time_min"], flow_mL_min=trace["flow_mL_min"],
+        show_percent_B=config["system"]["show_percent_B"],
+        show_conductivity=config["system"]["show_conductivity"],
+        show_flow_rate=config["system"].get("show_flow_rate", True),
+    )
 
 
 def _composition_residuals(
@@ -944,6 +1009,10 @@ def _write_apply_jsl(config: dict[str, Any], specs: list[FitParameter]) -> None:
         "D_app_mm2_s": "Dapp", "diameter_nm": "Diameter", "pH_ref": "PHref",
         "Z1_per_pH": "Z1", "Z2_per_pH2": "Z2", "Z3_per_pH3": "Z3",
         "delta_pH_slope_m2_C": "DeltaSlope",
+        "wang_K_kin_s": "WangKkin", "wang_k_eq": "WangKeq",
+        "wang_qmax_g_L": "WangQmax", "wang_n": "WangN",
+        "wang_beta0": "WangBeta0", "wang_beta1_per_M": "WangBeta1",
+        "wang_beta2_L_g": "WangBeta2", "wang_beta3_per_pH": "WangBeta3",
     }
     global_mapping = {
         "conversion.uv_to_protein_mAU_L_g": "uvToProtein",
@@ -955,6 +1024,7 @@ def _write_apply_jsl(config: dict[str, Any], specs: list[FitParameter]) -> None:
         "edm.total_bed_porosity": "edmPorosity",
         "cpa.ligand_surface_density_umol_m2": "ligandSurface",
         "cpa.system_specific_adsorption_parameter": "systemAdsorption",
+        "wang.q0_g_L": "wangQ0", "wang.eta": "wangEta",
         "system.buffer_dispersion_mL": "bufferDispersion",
         "system.salt_dispersion_mm2_s": "systemSaltDax",
         "system.uv_dead_volume_mL": "uvDeadVolume",
@@ -1120,7 +1190,7 @@ def run_least_squares_refinement(
     fit_settings_path = _profile_output_path(FIT_SETTINGS_JSON, run_context)
     fit_history_path = _profile_output_path(FIT_HISTORY_CSV, run_context)
     fit_apply_profile_path = _profile_output_path(FIT_APPLY_JSL, run_context)
-    ref = load_chromatogram_reference(chromatogram_csv, config)
+    ref = load_chromatogram_reference(chromatogram_csv, config, require_uv=True)
     comp_refs: list[dict[str, Any]] = []
     if mode == MODE_CHROMATOGRAM_AND_COMPOSITION:
         comp_refs = validate_composition_references(config, composition_references or [])
@@ -1128,7 +1198,7 @@ def run_least_squares_refinement(
     if unlocked_paths is not None:
         unlocked_paths = list(unlocked_paths)
         config["least_squares"]["unlocked_paths"] = list(unlocked_paths)
-    specs = fit_parameter_specs(config, fit_uv_response=not _is_concentration_signal(ref.signal_column), unlocked_paths=unlocked_paths)
+    specs = fit_parameter_specs(config, unlocked_paths=unlocked_paths)
     x0, lo, hi = _encode_initial(specs)
     fit_started = time.perf_counter()
     initial_r, initial_info = _objective_parts(config, ref, mode, comp_refs)
@@ -1307,14 +1377,15 @@ def run_least_squares_refinement(
     )
     improvement_percent = _objective_improvement_percent(initial_obj, final_obj)
     history_plot = _objective_history_svg(history)
+    chromatogram_plot = _chromatogram_fit_svg(fitted, final_info)
     uv_identifiability_note = (
         "<p>Impurity UV factors are estimated from the composite detector trace. When peaks overlap, their factors can be correlated with each other and with adsorption parameters; species-resolved UV data or composition constraints improve identifiability.</p>"
         if any(spec.path.endswith("uv_response_factor_mAU_L_g") for spec in specs) else
-        "<p>Impurity UV factors were held fixed by the lock selection or because the attached signal column is concentration-valued. Only eligible unlocked response factors are refined.</p>"
+        "<p>Impurity UV factors were held fixed by the lock selection or were ineligible for the selected model. Only eligible unlocked response factors are refined.</p>"
     )
     fit_report_path.write_text(f"""<!doctype html>
 <meta charset="utf-8"><title>Least-squares refinement</title>
-<style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}</style>
+<style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}</style>
 <h1>Least-squares refinement</h1>
 <p><b>Mode:</b> {html.escape(mode)}</p>
 <p><b>Reference chromatogram:</b> {html.escape(str(Path(chromatogram_csv).resolve()))}<br>
@@ -1326,10 +1397,13 @@ Converged flag: {bool(opt.success)}; accepted/applied to active model: {accepted
 <p><b>Initial total objective:</b> {initial_obj:.7g}<br><b>Final total objective:</b> {final_obj:.7g}<br>
 <b>Improvement:</b> {improvement_percent:.4g}%<br><b>Final chromatogram objective ({html.escape(config['least_squares']['objective'])}):</b> {final_info['chromatogram_sse_normalized']:.7g}</p>
 {comp_note}
+<h2>Measured and predicted chromatogram</h2>
+<p>The predicted UV and process overlays span the full programmed run. Measured UV is shown only at the imported sample CVs; only those samples contribute to the chromatogram objective.</p>
+{chromatogram_plot}
 <h2>Refined mechanistic parameters</h2>
 <table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Objective construction</h2>
-<p>The chromatogram residual is point-by-point least squares (Hahn et al., equation 9). RAW_SSE is the default. No baseline is inferred unless INITIAL_MEDIAN is explicitly selected; otherwise the fixed detector baseline is used. For UV data, the predicted detector signal is the sum of each species concentration multiplied by its own response factor; the target uses the shared Model Parameters factor and each impurity uses its component-specific factor. Concentration-valued CSV columns are compared directly. Optional NORMALIZED_MSE divides residuals by the measured signal scale and sqrt(N). RAW_SSE compares detector values directly.</p>
+<p>The chromatogram residual is point-by-point least squares (Hahn et al., equation 9). RAW_SSE is the default. No baseline is inferred unless INITIAL_MEDIAN is explicitly selected; otherwise the fixed detector baseline is used. The predicted UV signal is the sum of each species concentration multiplied by its own response factor; the target uses the shared Model Parameters factor and each impurity uses its component-specific factor. UV references labelled AU are converted to mAU. Optional NORMALIZED_MSE divides residuals by the measured signal scale and sqrt(N). RAW_SSE compares UV values directly.</p>
 {uv_identifiability_note}
 <p>When composition constraints are selected, simulated species mass% is evaluated at each entered CV as 100 × c_i / sum(c_j). Those residuals are divided by 100 and sqrt(Ncomposition), giving the composition block equal group-level footing with the chromatogram block.</p>
 <p>Only unlocked eligible mechanistic and instrument parameters listed above are refined. Locked values, column geometry and each recipe remain fixed. The optimizer result was saved to <code>{html.escape(fit_config_path.name)}</code>. It is copied to the active model <code>{html.escape(CONFIG_PATH.name)}</code> only when the total objective is not worse than the starting objective.</p>
@@ -1424,7 +1498,8 @@ def run_global_least_squares_refinement(
                                          x_column=profile.get("x_column"),
                                          signal_column=profile.get("signal_column"),
                                          x_unit=profile.get("x_unit"),
-                                         x_origin=profile.get("x_origin"))
+                                         x_origin=profile.get("x_origin"),
+                                         require_uv=True)
         profile_weight = float(profile.get("weight", 1.0))
         if not math.isfinite(profile_weight) or profile_weight <= 0:
             raise ValueError(f"Global-fit profile {index}: run weight must be finite and > 0.")
@@ -1492,10 +1567,8 @@ def run_global_least_squares_refinement(
         for profile in normalized_profiles:
             profile["config"]["least_squares"]["unlocked_paths"] = list(unlocked_paths)
         seed["least_squares"]["unlocked_paths"] = list(unlocked_paths)
-    has_uv = any(not _is_concentration_signal(p["reference"].signal_column) for p in normalized_profiles)
     specs = fit_parameter_specs(
         seed,
-        fit_uv_response=has_uv,
         unlocked_paths=unlocked_paths,
         candidate_paths=candidate_paths,
     )
@@ -1505,8 +1578,6 @@ def run_global_least_squares_refinement(
     weighted_objective = first["least_squares"]["objective"] == "WEIGHTED_RMSE"
     run_weights = np.array([p["weight"] for p in normalized_profiles], dtype=float)
     run_weights /= float(np.sum(run_weights))
-    if weighted_objective and len({_is_concentration_signal(p["reference"].signal_column) for p in normalized_profiles}) != 1:
-        raise ValueError("Weighted RMSE cannot combine concentration-valued and UV detector chromatograms: their signal units differ.")
     for profile in normalized_profiles:
         if profile["config"]["least_squares"]["objective"] != first["least_squares"]["objective"] or profile["config"]["chromatography_mode"] != first["chromatography_mode"]:
             raise ValueError("Global profiles must use the same objective and chromatography mode.")
@@ -1801,30 +1872,21 @@ def run_global_least_squares_refinement(
     )
     profile_plots = []
     for profile, cfg, info in zip(normalized_profiles, fitted_configs, final_infos):
-        chrom = info["chromatogram"]
-        trace = info["result"]["trace"]
-        program = info["result"]["simulation"]["program"]
-        x = chrom["CV"]
-        plot = _svg_plot(x, [("Measured signal", chrom["measured"]), ("Predicted signal", chrom["predicted_detector_signal"])],
-                         stages=_stage_receipt(cfg, program), total_cv=program.total_CV,
-                         percent_B=np.interp(x, trace["CV"], trace["programmed_percent_B"]),
-                         conductivity=np.interp(x, trace["CV"], trace["conductivity_mS_cm"]),
-                         time_min=np.interp(x, trace["CV"], trace["time_min"]),
-                         y_axis_label="Protein concentration (g/L)" if _is_concentration_signal(profile["reference"].signal_column) else "UV absorbance (mAU)")
+        plot = _chromatogram_fit_svg(cfg, info)
         profile_plots.append(f'<h3>Run {profile["run_context"]["run_number"]}: {html.escape(profile["run_context"]["run_name"])}</h3>' + plot)
     overlays_html = "".join(profile_plots)
     improvement = _objective_improvement_percent(initial_obj, final_obj)
     history_plot = _objective_history_svg(history)
     FIT_REPORT_HTML.write_text(f"""<!doctype html>
 <meta charset="utf-8"><title>Global least-squares refinement</title>
-<style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
+<style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
 <h1>Global least-squares refinement</h1>
 <p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
 <b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Optimizer evaluations:</b> {eval_count}; <b>Unlocked parameters:</b> {len(specs)}.</p>
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor.</p>
 <table><thead><tr><th>Run</th><th>Profile</th><th>Overlap points</th><th>Normalized NRMSE</th><th>Signal RMSE</th><th>Weighted RMSE</th><th>Run weight</th><th>R²</th></tr></thead><tbody>{profile_rows}</tbody></table>
-<h2>Measured and predicted chromatograms</h2>{overlays_html}
+<h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is shown only at the imported sample CVs; only those samples contribute to the chromatogram objective.</p>{overlays_html}
 <h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Profile recipes used</h2>{recipe_details}
 <h2>Objective construction</h2><p>Equation 9 is the sum of squared predicted-minus-measured detector samples. RAW_SSE preserves it verbatim. NORMALIZED_MSE divides by each run's signal scale and sample count. WEIGHTED_RMSE is the square root of the run-weighted average of each profile's sample-weighted mean squared error, with independently adjustable positive run weights and optional nonnegative Excel/CSV Weight columns. Minimizing the square root is equivalent to minimizing its squared residual vector with bounded SciPy nonlinear least squares. Baseline estimation is opt-in; the default baseline is fixed. Each LSQ profile has its own independent process recipe (flow, feed, buffers, PLWs, elution and resolution). Only unlocked mechanistic parameters are shared and refined. Column geometry remains fixed.</p>

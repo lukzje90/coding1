@@ -13,7 +13,7 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-10-08-R22"
+RESULT_GUARD_BUILD = "2026-10-09-R24C-WANG-ML-LOADING"
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
 BATCH_SUMMARY_CSV = PROJECT_DIR / "tdm_batch_summary.csv"
@@ -24,12 +24,14 @@ MODEL_EDM_LANGMUIR = "EDM_LANGMUIR"
 MODEL_TDM_LANGMUIR = "TDM_LANGMUIR"
 MODEL_EDM_CPA = "EDM_CPA"
 MODEL_TDM_CPA = "TDM_CPA"
-MODELS = {MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_EDM_CPA, MODEL_TDM_CPA}
+MODEL_TDM_WANG = "TDM_WANG"
+MODELS = {MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_EDM_CPA, MODEL_TDM_CPA, MODEL_TDM_WANG}
 MODEL_LABELS = {
     MODEL_EDM_LANGMUIR: "EDM – Competitive Langmuir",
     MODEL_TDM_LANGMUIR: "TDM – Competitive Langmuir",
     MODEL_EDM_CPA: "EDM – CPA",
     MODEL_TDM_CPA: "TDM – CPA",
+    MODEL_TDM_WANG: "TDM – Modified Wang",
 }
 LABEL_TO_MODEL = {v: k for k, v in MODEL_LABELS.items()}
 
@@ -57,7 +59,7 @@ MAX_HIC_LOG_AFFINITY = 80.0
 
 
 def uses_tdm(model: str) -> bool:
-    return model in {MODEL_TDM_LANGMUIR, MODEL_TDM_CPA}
+    return model in {MODEL_TDM_LANGMUIR, MODEL_TDM_CPA, MODEL_TDM_WANG}
 
 
 def uses_edm(model: str) -> bool:
@@ -70,6 +72,10 @@ def uses_cpa(model: str) -> bool:
 
 def uses_langmuir(model: str) -> bool:
     return model in {MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR}
+
+
+def uses_wang(model: str) -> bool:
+    return model == MODEL_TDM_WANG
 
 
 def _blank_component(name: str) -> dict[str, Any]:
@@ -91,6 +97,16 @@ def _blank_component(name: str) -> dict[str, Any]:
         # Initial value for the exponentially modified HIC Langmuir affinity.
         # It must be calibrated for the protein/resin/salt system.
         "salt_sensitivity_per_M": 1.0,
+        # Illustrative, uncalibrated starting values for Eq. (4) of
+        # Beryamysoltan et al., J. Chromatogr. A 1783 (2026) 467108.
+        "wang_K_kin_s": 30.0,
+        "wang_k_eq": 10.0,
+        "wang_qmax_g_L": 20.0,
+        "wang_n": 1.0,
+        "wang_beta0": 0.25,
+        "wang_beta1_per_M": 1.0,
+        "wang_beta2_L_g": 0.0,
+        "wang_beta3_per_pH": 0.0,
         "diameter_nm": None,
         "As_m_inv": None,
         "Z_ref": None,
@@ -152,7 +168,7 @@ def _blank_step() -> dict[str, Any]:
 
 
 def is_hic(config: dict[str, Any]) -> bool:
-    return str(config.get("chromatography_mode") or ("HIC" if uses_langmuir(str(config.get("model"))) else "ION_EXCHANGE")).upper() == "HIC"
+    return str(config.get("chromatography_mode") or ("HIC" if uses_langmuir(str(config.get("model"))) or uses_wang(str(config.get("model"))) else "ION_EXCHANGE")).upper() == "HIC"
 
 
 def system_defaults() -> dict[str, Any]:
@@ -174,6 +190,7 @@ def blank_config() -> dict[str, Any]:
     return {
         "model": MODEL_TDM_CPA,
         "chromatography_mode": "ION_EXCHANGE",
+        "wang": {"q0_g_L": 20.0, "eta": 1.0},
         "system": system_defaults(),
         "least_squares": {"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
                           "unlocked_paths": None, "selected_run_numbers": None},
@@ -203,6 +220,7 @@ def blank_config() -> dict[str, Any]:
             "load_material_chemistry_mode": "BUFFER_RECIPE",
             "load_amount_basis": "LOAD_VOLUME",
             "load_CV": None,
+            "load_volume_mL": None,
             "load_mode": "LINEAR",
             "load_start_percent_B": 0.0,
             "load_end_percent_B": 0.0,
@@ -307,7 +325,7 @@ def normalize_config(config: Any) -> Any:
                                              for p in out["unlocked_paths"]})
         out = synchronize_langmuir_parameters(out)
         if "model" in out and "column" in out:
-            out.setdefault("chromatography_mode", "HIC" if uses_langmuir(str(out["model"])) else "ION_EXCHANGE")
+            out.setdefault("chromatography_mode", "HIC" if uses_langmuir(str(out["model"])) or uses_wang(str(out["model"])) else "ION_EXCHANGE")
             legacy_salt_d = _as_float(out.get("tdm", {}).get("salt_axial_dispersion_mm2_s"))
             defaults = system_defaults()
             if str(out["model"]) == MODEL_TDM_CPA and legacy_salt_d is not None:
@@ -329,6 +347,8 @@ def normalize_config(config: Any) -> Any:
             feed = out["feed"]
             process = out["process"]
             cv = _as_float(process.get("load_CV"))
+            volume_mL = _as_float(process.get("load_volume_mL"))
+            column_volume_mL = _as_float(out.get("column", {}).get("volume_mL"))
             conc = _as_float(feed.get("total_concentration_mg_mL"))
             density = _as_float(feed.get("load_density_mg_mL_resin"))
             basis = normalize_load_amount_basis(process.get("load_amount_basis"))
@@ -339,6 +359,12 @@ def normalize_config(config: Any) -> Any:
                     feed["load_density_mg_mL_resin"] = density
                 if density is not None and density > 0 and conc is not None and conc > 0:
                     process["load_CV"] = density / conc
+            elif basis == "VOLUME_ML":
+                if volume_mL is not None and column_volume_mL is not None and column_volume_mL > 0:
+                    cv = volume_mL / column_volume_mL
+                    process["load_CV"] = cv
+                    if conc is not None:
+                        feed["load_density_mg_mL_resin"] = cv * conc
             else:
                 # Legacy rows use load CV as the authority. Capacity is kept
                 # consistent for mass balance and result receipts.
@@ -347,6 +373,10 @@ def normalize_config(config: Any) -> Any:
                     process["load_CV"] = cv
                 if cv is not None and cv > 0 and conc is not None and conc > 0:
                     feed["load_density_mg_mL_resin"] = cv * conc
+            if basis != "VOLUME_ML":
+                resolved_cv = _as_float(process.get("load_CV"))
+                if resolved_cv is not None and column_volume_mL is not None:
+                    process["load_volume_mL"] = resolved_cv * column_volume_mL
             mode = str(process.get("load_mode") or "LINEAR").strip().upper()
             process["load_mode"] = mode if mode in PROCESS_MODES else "LINEAR"
             control = str(process.get("load_chemistry_control") or "BUFFER_B_PERCENT").strip().upper()
@@ -724,6 +754,8 @@ COMPONENT_EDM_FIELDS = ("D_app_mm2_s",)
 COMPONENT_LANGMUIR_FIELDS = ("qmax_g_L", "b_L_g", "salt_sensitivity_per_M")
 COMPONENT_CPA_FIELDS = ("diameter_nm", "As_m_inv", "Z_ref", "delta_ref")
 COMPONENT_TDM_CPA_FIELDS = ("kkin_star_s",)
+COMPONENT_WANG_FIELDS = ("wang_K_kin_s", "wang_k_eq", "wang_qmax_g_L", "wang_n",
+                         "wang_beta0", "wang_beta1_per_M", "wang_beta2_L_g", "wang_beta3_per_pH")
 COMPONENT_CPA_PH_FIELDS = ("pH_ref", "Z1_per_pH", "Z2_per_pH2", "delta_pH_slope_m2_C")
 COMPONENT_CPA_PH_LARGE_SPAN_FIELDS = ("Z3_per_pH3",)
 
@@ -739,6 +771,8 @@ def required_global_fields(model: str) -> tuple[str, ...]:
     used_buffers: set[str] = set()
     if uses_cpa(model):
         fields.extend(CPA_COMMON_INPUT_FIELDS)
+    elif uses_wang(model):
+        fields.extend(("conversion.conductivity_to_salt_M_per_mS_cm", "wang.q0_g_L", "wang.eta"))
     elif uses_langmuir(model):
         fields.append("conversion.conductivity_to_salt_M_per_mS_cm")
     return tuple(fields)
@@ -747,7 +781,9 @@ def required_global_fields(model: str) -> tuple[str, ...]:
 def required_component_fields(model: str, pH_span: float = 0.0) -> tuple[str, ...]:
     fields = list(COMPONENT_COMMON_FIELDS)
     fields.extend(COMPONENT_TDM_FIELDS if uses_tdm(model) else COMPONENT_EDM_FIELDS)
-    if uses_langmuir(model):
+    if uses_wang(model):
+        fields.extend(COMPONENT_WANG_FIELDS)
+    elif uses_langmuir(model):
         fields.extend(COMPONENT_LANGMUIR_FIELDS)
     else:
         fields.extend(COMPONENT_CPA_FIELDS)
@@ -909,6 +945,9 @@ def requirement_text(model: str, pH_span: float = 0.0, selected_impurities: int 
     if uses_cpa(model):
         lines += ["• Conductivity → salt concentration factor [M per (mS/cm)]",
                   "• Ligand surface density Γ_L [µmol/m²]", "• System-specific adsorption parameter [-]"]
+    elif uses_wang(model):
+        lines += ["• Conductivity → salt concentration factor [M per (mS/cm)]",
+                  "• Shared Wang q0 [g/L stationary phase] and η [-]"]
     elif uses_langmuir(model):
         lines += ["• Conductivity → salt concentration factor [M per (mS/cm)]"]
     lines += ["", f"PROTEIN SPECIES: target + {n_imp} impurit{'y' if n_imp == 1 else 'ies'}",
@@ -920,7 +959,11 @@ def requirement_text(model: str, pH_span: float = 0.0, selected_impurities: int 
         lines += ["• D_ax,i [mm²/s]", "• k_eff,i [µm/s]", "• Accessible particle porosity ε_p,i [-] (F_acc,i is derived)"]
     else:
         lines += ["• D_app,i [mm²/s]"]
-    if uses_langmuir(model):
+    if uses_wang(model):
+        lines += ["• Wang K′kin,i [s], k_eq,i, qmax,i [g/L stationary phase], n_i [-]",
+                  "• Wang β0,i [-], β1,i [M⁻¹], β2,i [L/g], β3,i [pH⁻¹]",
+                  "The modified Wang kinetic law uses local pore protein, salt and pH; starting values are illustrative and need calibration."]
+    elif uses_langmuir(model):
         lines += ["• Saturation capacity qmax,i [g/L stationary phase]",
                   "• Competitive Langmuir b_i [L/g]",
                   "• HIC salt sensitivity k_s,i [M⁻¹]",
@@ -948,7 +991,9 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
     errors: list[str] = []
     model = str(config.get("model") or "")
     if model not in MODELS:
-        return ["Select one of the four supported model combinations."]
+        return ["Select a supported model combination."]
+    if uses_wang(model) and config.get("chromatography_mode") != "HIC":
+        errors.append("TDM – Modified Wang requires HIC mode.")
     try:
         n_imp_raw = float(config.get("impurity_count", 0))
         if n_imp_raw != int(n_imp_raw) or not 0 <= int(n_imp_raw) <= MAX_IMPURITIES:
@@ -973,7 +1018,9 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
     if lsq.get("baseline_mode") not in {"NONE", "INITIAL_MEDIAN"}:
         errors.append("Baseline mode must be NONE or INITIAL_MEDIAN.")
     _number(lsq.get("detector_baseline"), "Detector baseline", errors)
-    _number(lsq.get("max_nfev"), "Least-squares maximum solver evaluations", errors, lower=2, upper=10000)
+    max_nfev = _number(lsq.get("max_nfev"), "Least-squares maximum solver evaluations", errors, lower=2, upper=10000)
+    if max_nfev is not None and not max_nfev.is_integer():
+        errors.append("Least-squares maximum solver evaluations must be a whole number.")
     conv = config.get("conversion", {})
     _number(conv.get("uv_to_protein_mAU_L_g"), "Target UV → protein response factor [mAU·L/g]", errors, positive=True)
     epsp: float | None = None
@@ -991,6 +1038,10 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
         if not is_hic(config):
             _number(cp.get("ligand_surface_density_umol_m2"), "CPA ligand surface density Γ_L", errors, positive=True)
             _number(cp.get("system_specific_adsorption_parameter"), "CPA system-specific adsorption parameter", errors, positive=True)
+    elif uses_wang(model):
+        _number(conv.get("conductivity_to_salt_M_per_mS_cm"), "Conductivity → salt concentration factor [M per (mS/cm)]", errors, positive=True)
+        _number(config.get("wang", {}).get("q0_g_L"), "Wang q0 [g/L stationary phase]", errors, positive=True)
+        _number(config.get("wang", {}).get("eta"), "Wang η [-]", errors, lower=0.1, upper=3.0)
     elif uses_langmuir(model):
         _number(conv.get("conductivity_to_salt_M_per_mS_cm"), "Conductivity → salt concentration factor [M per (mS/cm)]", errors, positive=True)
 
@@ -1011,7 +1062,19 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
                 errors.append(f"{name} ε_p,i must be <= ε_p.")
         else:
             _number(row.get("D_app_mm2_s"), f"{name} D_app,i [mm²/s]", errors, nonnegative=True)
-        if uses_langmuir(model):
+        if uses_wang(model):
+            for field, label, lower, upper in (
+                ("wang_K_kin_s", "K′kin [s]", 1e-6, 1e6),
+                ("wang_k_eq", "k_eq", 1e-9, 1e6),
+                ("wang_qmax_g_L", "qmax [g/L stationary phase]", 1e-9, 1e6),
+                ("wang_n", "n [-]", 0.1, 4.0),
+                ("wang_beta0", "β0 [-]", 0.0, 2.0),
+                ("wang_beta1_per_M", "β1 [M⁻¹]", -5.0, 5.0),
+                ("wang_beta2_L_g", "β2 [L/g]", -5.0, 5.0),
+                ("wang_beta3_per_pH", "β3 [pH⁻¹]", -1.0, 1.0),
+            ):
+                _number(row.get(field), f"{name} Wang {label}", errors, lower=lower, upper=upper)
+        elif uses_langmuir(model):
             _number(row.get("qmax_g_L"), f"{name} qmax,i [g/L stationary phase]", errors, positive=True)
             _number(row.get("b_L_g"), f"{name} b_i [L/g]", errors, positive=True)
             _number(row.get("salt_sensitivity_per_M"), f"{name} HIC salt sensitivity k_s,i [M⁻¹]", errors, lower=(0.0 if is_hic(config) else -25.0), upper=25.0)
@@ -1081,6 +1144,8 @@ def _validate_hic_salt_domain(
             resolved.append((label, salt))
     if not resolved:
         return
+    if uses_wang(str(config.get("model"))):
+        return
     label, maximum = max(resolved, key=lambda entry: entry[1])
     for row in selected_components(config):
         sensitivity = _as_float(row.get("salt_sensitivity_per_M"))
@@ -1122,6 +1187,10 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
     if basis == "CAPACITY":
         density = _number(feed.get("load_density_mg_mL_resin"), "Load capacity [g/L resin]", errors, positive=True)
         load_cv_value = (density / c) if density is not None and c is not None and c > 0 else None
+    elif basis == "VOLUME_ML":
+        volume_mL = _number(p.get("load_volume_mL"), "Load volume [mL]", errors, positive=True)
+        column_volume_mL = _as_float(config.get("column", {}).get("volume_mL"))
+        load_cv_value = volume_mL / column_volume_mL if volume_mL is not None and column_volume_mL is not None and column_volume_mL > 0 else None
     else:
         load_cv_value = p.get("load_CV")
         if _missing(load_cv_value):
@@ -1135,7 +1204,7 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
         errors.append("Number of time steps must be an integer.")
     if nx is not None and abs(nx - round(nx)) > 1e-9:
         errors.append("Number of axial positions must be an integer.")
-    needs_process_salt = uses_cpa(model) or uses_langmuir(model)
+    needs_process_salt = uses_cpa(model) or uses_langmuir(model) or uses_wang(model)
     hic_salt_sources: list[tuple[str, dict[str, Any]]] = []
     if needs_process_salt:
         used_buffers: set[str] = set()
@@ -1147,7 +1216,7 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
         else:
             load_source = _chemistry_source(p.get("load_source"))
             if load_source == "DIRECT":
-                if uses_cpa(model):
+                if uses_cpa(model) or uses_wang(model):
                     _number(p.get("load_pH"), "Load/process pH", errors, lower=0, upper=14)
                 _validate_salt_input(p, "load_", "Load", errors)
                 if is_hic(config):
@@ -1181,7 +1250,7 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
                     for side in ("start", "end"):
                         src = _chemistry_source(step.get(f"{side}_source"))
                         if src == "DIRECT":
-                            if uses_cpa(model):
+                            if uses_cpa(model) or uses_wang(model):
                                 _number(step.get(f"{side}_pH"), f"{label} {i} {side} pH", errors, lower=0, upper=14)
                             _validate_salt_input(step, side + "_", f"{label} {i} {side}", errors)
                             if is_hic(config):
@@ -1192,7 +1261,7 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
         for src in sorted(used_buffers):
             key = "buffer_A" if src == "BUFFER_A" else "buffer_B"
             _validate_buffer_definition(config, key, "Buffer A" if key == "buffer_A" else "Buffer B", errors,
-                                        require_pH=uses_cpa(model))
+                                        require_pH=uses_cpa(model) or uses_wang(model))
             buffer = p.get(key, {})
             if is_hic(config):
                 hic_salt_sources.append(("Buffer A" if key == "buffer_A" else "Buffer B", buffer))
@@ -1211,12 +1280,14 @@ def validate_config(config: dict[str, Any], *, strict: bool = True) -> list[str]
 
 
 def derived_input_summary(config: dict[str, Any]) -> dict[str, Any]:
+    config = normalize_config(config)
     feed = config.get("feed", {})
     process = config.get("process", {})
     load_cv = _as_float(process.get("load_CV"))
     concentration = _as_float(feed.get("total_concentration_mg_mL"))
     capacity = _as_float(feed.get("load_density_mg_mL_resin"))
-    if normalize_load_amount_basis(process.get("load_amount_basis")) == "CAPACITY":
+    basis = normalize_load_amount_basis(process.get("load_amount_basis"))
+    if basis == "CAPACITY":
         try:
             load_cv = capacity / concentration
         except Exception:
@@ -1226,10 +1297,7 @@ def derived_input_summary(config: dict[str, Any]) -> dict[str, Any]:
             load_cv = capacity / concentration
         except Exception:
             pass
-    try:
-        load_volume_mL = float(load_cv) * float(config["column"]["volume_mL"])
-    except Exception:
-        load_volume_mL = None
+    load_volume_mL = _as_float(process.get("load_volume_mL"))
     return {
         "model": MODEL_LABELS.get(str(config.get("model")), str(config.get("model"))),
         "impurity_count": impurity_count(config),
@@ -1274,7 +1342,7 @@ def _migrate_row_salt_inputs(row: dict[str, Any]) -> dict[str, Any]:
 def batch_run_fields() -> list[str]:
     fields = [
         "Run_Number", "Run_Name", "LSQ_Chromatogram_CSV", "LSQ_Weight", "LSQ_Sheet", "LSQ_X_Column", "LSQ_Signal_Column", "LSQ_X_Unit", "LSQ_X_Origin", "Load_Flow_mL_min", "Feed_Concentration_mg_mL",
-        "Load_Amount_Basis", "Load_CV", "Load_Density_mg_mL_resin", "Load_Mode", "Load_Start_Percent_B", "Load_End_Percent_B",
+        "Load_Amount_Basis", "Load_CV", "Load_Volume_mL", "Load_Density_mg_mL_resin", "Load_Mode", "Load_Start_Percent_B", "Load_End_Percent_B",
         "Load_Chemistry_Control", "Load_Material_Chemistry_Mode", "Time_Steps", "Axial_Positions",
         "Load_Source", "Load_pH", "Load_Salt_M", "Load_Conductivity_mS_cm",
         "Load_Salt_Input_Mode",
@@ -1314,6 +1382,7 @@ def default_batch_row(run_number: int) -> dict[str, Any]:
         "Feed_Concentration_mg_mL": 1.0,
         "Load_Amount_Basis": "LOAD_VOLUME",
         "Load_CV": 10.0,
+        "Load_Volume_mL": 10.0,
         "Load_Density_mg_mL_resin": 10.0,
         "Load_Mode": "LINEAR",
         "Load_Start_Percent_B": 0.0,
@@ -1526,6 +1595,8 @@ def normalize_load_amount_basis(value: Any) -> str:
     text = str(value or "").strip().upper().replace("_", " ")
     if text == "CAPACITY" or text.startswith("CAPACITY "):
         return "CAPACITY"
+    if text in {"VOLUME ML", "LOAD VOLUME [ML]", "ML", "MILLILITERS"} or text.startswith("LOAD VOLUME [ML]"):
+        return "VOLUME_ML"
     if text in {"LOAD VOLUME", "LOAD VOLUME [CV]", "VOLUME", "CV"} or text.startswith("LOAD VOLUME "):
         return "LOAD_VOLUME"
     return "LOAD_VOLUME"
@@ -1544,6 +1615,7 @@ def batch_row_to_run_config(row: dict[str, Any]) -> dict[str, Any]:
     cfg["feed"]["total_concentration_mg_mL"] = _as_float(row.get("Feed_Concentration_mg_mL"))
     p = cfg["process"]
     p["load_CV"] = _as_float(row.get("Load_CV"))
+    p["load_volume_mL"] = _as_float(row.get("Load_Volume_mL"))
     cfg["feed"]["load_density_mg_mL_resin"] = _as_float(row.get("Load_Density_mg_mL_resin"))
     # Accept display labels written by previous JMP builds as well as tokens.
     p["load_amount_basis"] = normalize_load_amount_basis(row.get("Load_Amount_Basis"))
@@ -1554,7 +1626,7 @@ def batch_row_to_run_config(row: dict[str, Any]) -> dict[str, Any]:
             p["load_CV"] = density / conc
         elif p["load_CV"] is not None and conc is not None:
             cfg["feed"]["load_density_mg_mL_resin"] = p["load_CV"] * conc
-    else:
+    elif p["load_amount_basis"] == "LOAD_VOLUME":
         if p["load_CV"] is None and conc is not None and conc > 0 and density is not None:
             p["load_CV"] = density / conc
         if p["load_CV"] is not None and conc is not None:

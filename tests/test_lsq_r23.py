@@ -18,7 +18,7 @@ import tdm_least_squares as ls
 from tdm_minimal_io import (
     BATCH_RUNS_CSV, LSQ_RUNS_CSV, apply_batch_shared_parameters,
     batch_row_to_run_config, ensure_lsq_runs_csv, load_batch_rows, load_config,
-    load_lsq_rows, save_lsq_rows, validate_config,
+    load_lsq_rows, save_config, save_lsq_rows, validate_config,
 )
 from tdm_minimal_model import simulate
 from tdm_jmp import build_jsl, _validate_jsl
@@ -47,6 +47,96 @@ def write_excel(path, cv, y, weights):
 
 
 class RefinementTests(unittest.TestCase):
+    def test_refinement_uses_uv_only_and_changes_only_unlocked_parameter(self):
+        true = config_for()
+        true["numerics"] = {"time_steps": 50, "axial_positions": 6}
+        trace = simulate(true)["trace"]
+        base = copy.deepcopy(true)
+        base["conversion"]["uv_to_protein_mAU_L_g"] *= 0.7
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            uv = tmp / "uv_and_conductivity.csv"
+            with uv.open("w", newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["CV", "Conductivity [mS/cm]", "UV 280 [mAU]"])
+                writer.writerows(zip(trace["CV"], np.full(len(trace["CV"]), 999.0), trace["uv_mAU"]))
+            ref = ls.load_chromatogram_reference(uv, true, require_uv=True)
+            self.assertEqual(ref.signal_column, "UV 280 [mAU]")
+            np.testing.assert_allclose(ref.signal, trace["uv_mAU"])
+
+            for header in ("Conductivity [mS/cm]", "Total protein [g/L]", "Protein concentration [mg/mL]"):
+                invalid = tmp / "wrong_channel.csv"
+                invalid.write_text(f"CV,{header}\n0,1\n1,2\n2,3\n", encoding="utf-8")
+                with self.subTest(header=header), self.assertRaisesRegex(ValueError, "requires a UV signal"):
+                    ls.run_global_least_squares_refinement(
+                        [{"config": base, "chromatogram_csv": invalid}], unlocked_paths=[])
+
+            generic = tmp / "generic_signal.csv"
+            generic.write_text("CV,Signal\n0,1\n1,2\n2,3\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Cannot identify.*as UV"):
+                ls.load_chromatogram_reference(generic, true, require_uv=True)
+            self.assertEqual(ls.load_chromatogram_reference(
+                generic, true, signal_column="Signal", require_uv=True).signal_column, "Signal")
+            voltage = tmp / "uv_voltage.csv"
+            voltage.write_text("CV,UV 280 [mV]\n0,1\n1,2\n2,3\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "AU or mAU"):
+                ls.load_chromatogram_reference(voltage, true, require_uv=True)
+
+            for header in ("UV 280 [AU]", "UV_280_AU"):
+                au = tmp / "uv_au.csv"
+                with au.open("w", newline="") as fh:
+                    writer = csv.writer(fh)
+                    writer.writerow(["CV", header])
+                    writer.writerows(zip(trace["CV"], np.asarray(trace["uv_mAU"]) / 1000.0))
+                with self.subTest(header=header):
+                    np.testing.assert_allclose(ls.load_chromatogram_reference(au, true, require_uv=True).signal,
+                                               trace["uv_mAU"], atol=1e-10)
+
+            output_names = ["FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
+                            "FIT_REPORT_HTML", "FIT_CONFIG_JSON", "FIT_APPLY_JSL",
+                            "FIT_SETTINGS_JSON", "FIT_HISTORY_CSV", "FIT_IMPROVED_CSV",
+                            "FIT_IMPROVED_TXT", "CONFIG_PATH"]
+            with patch.multiple(ls, **{name: tmp / getattr(ls, name).name for name in output_names}):
+                result = ls.run_global_least_squares_refinement(
+                    [{"config": base, "chromatogram_csv": uv}],
+                    unlocked_paths=["conversion.uv_to_protein_mAU_L_g"], max_nfev=6)
+            self.assertEqual(result["parameters"], ["conversion.uv_to_protein_mAU_L_g"])
+            self.assertLess(result["final_objective"], result["initial_objective"] * 0.01)
+            self.assertAlmostEqual(result["fitted_config"]["conversion"]["uv_to_protein_mAU_L_g"],
+                                   true["conversion"]["uv_to_protein_mAU_L_g"], delta=1)
+            for path in ("system.uv_dead_volume_mL", "components[0].qmax_g_L", "components[0].b_L_g"):
+                self.assertEqual(ls._get_path(result["fitted_config"], path), ls._get_path(base, path))
+
+            composition_config = copy.deepcopy(true)
+            composition_config["least_squares"]["objective"] = "RAW_SSE"
+            peak = int(np.argmax(trace["uv_mAU"]))
+            reference = {"CV": float(trace["CV"][peak]),
+                         "mass_percent": {true["components"][0]["name"]: 100.0}}
+            with patch.multiple(ls, **{name: tmp / getattr(ls, name).name for name in output_names}):
+                composition_fit = ls.run_global_least_squares_refinement(
+                    [{"config": composition_config, "chromatogram_csv": uv,
+                      "composition_references": [reference]}],
+                    mode="CHROMATOGRAM_AND_COMPOSITION", unlocked_paths=[])
+            self.assertEqual(composition_fit["mode"], "CHROMATOGRAM_AND_COMPOSITION")
+            self.assertLess(composition_fit["final_objective"], 1e-12)
+
+    def test_safety_cap_is_visible_and_passed_from_jmp_as_an_integer(self):
+        jsl = build_jsl()
+        self.assertLess(jsl.index('Safety cap: optimizer evaluations'),
+                        jsl.index('Outline Box("Optional objective and stopping settings"'))
+        self.assertIn('Python Send(lsqMaxEvaluations << Get, Python Name("tdm_ui_lsq_max_nfev"));', jsl)
+        with patch.dict(tdm_bridge.__dict__, {"tdm_ui_lsq_max_nfev": 37}):
+            config = tdm_bridge.build_shared_config_from_jmp()
+        self.assertEqual(config["least_squares"]["max_nfev"], 37)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "inputs.json"
+            save_config(config, path)
+            self.assertEqual(load_config(path)["least_squares"]["max_nfev"], 37)
+        for invalid in (None, 0, 2.5, 10001):
+            with self.subTest(invalid=invalid), patch.dict(tdm_bridge.__dict__, {"tdm_ui_lsq_max_nfev": invalid}):
+                with self.assertRaisesRegex(ValueError, "Safety cap must be a whole number"):
+                    tdm_bridge.build_shared_config_from_jmp()
+
     def test_jacobian_reuses_current_residual_without_skipping_perturbations(self):
         evaluated = []
 
@@ -346,10 +436,10 @@ class RefinementTests(unittest.TestCase):
     def test_invalid_sample_and_run_weights_rejected(self):
         with tempfile.TemporaryDirectory() as d:
             file = Path(d)/"broken.csv"
-            file.write_text("CV,Signal,Weight\n0,1,1\n1,2,-1\n2,3,1\n",encoding="utf-8")
+            file.write_text("CV,UV_mAU,Weight\n0,1,1\n1,2,-1\n2,3,1\n",encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "nonnegative"):
                 ls.load_chromatogram_reference(file, config_for())
-            file.write_text("CV,Signal\n0,1\n1,2\n2,3\n", encoding="utf-8")
+            file.write_text("CV,UV_mAU\n0,1\n1,2\n2,3\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "run weight"):
                 ls.run_global_least_squares_refinement([{
                     "config": config_for(), "chromatogram_csv": file, "weight": 0,

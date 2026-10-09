@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.optimize import brentq
+from scipy.sparse import lil_matrix
 
 from tdm_minimal_io import (
     LATEST_RESULTS_CSV,
@@ -23,6 +24,7 @@ from tdm_minimal_io import (
     MODEL_LABELS,
     MODEL_TDM_CPA,
     MODEL_TDM_LANGMUIR,
+    MODEL_TDM_WANG,
     MAX_HIC_LOG_AFFINITY,
     RESULT_GUARD_BUILD,
     active_components,
@@ -928,6 +930,136 @@ def _simulate_tdm_langmuir(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _wang_kinetic_rate(
+    cp: np.ndarray, q: np.ndarray, salt_M: np.ndarray, pH: np.ndarray,
+    config: dict[str, Any],
+) -> np.ndarray:
+    """Modified Wang Eq. (4), in g/L stationary phase per second.
+
+    The paper's n_i is a species-specific stoichiometric exponent. q0 and eta
+    have no species index and are shared. Salt is local pore salt, not the
+    downstream conductivity detector's delayed reading.
+    """
+    rows = active_components(config)
+    cp = np.maximum(np.asarray(cp, dtype=float), 0.0)
+    q = np.maximum(np.asarray(q, dtype=float), 0.0)
+    salt = np.maximum(np.asarray(salt_M, dtype=float), 0.0)[..., None]
+    local_pH = np.asarray(pH, dtype=float)[..., None]
+    values = lambda key: np.array([float(row[key]) for row in rows])
+    kkin, keq, qmax, n = (values(key) for key in
+                           ("wang_K_kin_s", "wang_k_eq", "wang_qmax_g_L", "wang_n"))
+    beta0, beta1, beta2, beta3 = (values(key) for key in
+                                    ("wang_beta0", "wang_beta1_per_M", "wang_beta2_L_g", "wang_beta3_per_pH"))
+    q0 = float(config["wang"]["q0_g_L"])
+    eta = float(config["wang"]["eta"])
+    free = np.maximum(1.0 - np.sum(q / qmax, axis=-1, keepdims=True), 0.0)
+    adsorption = keq * np.power(free, n) * np.power(cp, eta)
+    environment = beta1 * salt + beta2 * cp + beta3 * local_pH
+    exponent = 1.0 + n * beta0 * np.exp(np.clip(environment, -40.0, 40.0))
+    with np.errstate(divide="ignore"):
+        log_ratio = np.log(q / q0)
+    log_desorption = (1.0 + n * beta0) * math.log(q0) + exponent * log_ratio
+    desorption = np.where(q > 0.0, np.exp(np.clip(log_desorption, -80.0, 80.0)), 0.0)
+    return (adsorption - desorption) / kkin
+
+
+def _simulate_tdm_wang(config: dict[str, Any]) -> dict[str, Any]:
+    rows = active_components(config)
+    n = len(rows)
+    names = [str(row["name"]) for row in rows]
+    mass_frac = np.array([float(row["mass_percent"]) / 100.0 for row in rows])
+    feed_vector = float(config["feed"]["total_concentration_mg_mL"]) * mass_frac
+    program = _build_program(config, feed_vector)
+    mobile_phase = MobilePhaseTransport(config, program, _scalar_transport)
+    L, _V, A = _column_geometry(config)
+    tdm = config["tdm"]
+    epsv = float(tdm["void_fraction"])
+    epsp = float(tdm["particle_porosity"])
+    rp = float(tdm["bead_radius_um"]) * 1e-6
+    Dax = np.array([float(row["D_ax_mm2_s"]) * 1e-6 for row in rows])
+    k_eff = np.array([float(row["k_eff_um_s"]) * 1e-6 for row in rows])
+    epspi = np.array([float(row["accessible_particle_porosity"]) for row in rows])
+    time_steps, nx = _numerical_resolution(config)
+    dx = L / nx
+    size = nx * n
+    y0 = np.zeros(3 * size)
+    # BDF must differentiate the coupled protein states repeatedly during
+    # refinement. Its Jacobian is local: axial transport spans nearby bulk
+    # cells, while pore/adsorbed competition couples species in one cell.
+    sparsity = lil_matrix((3 * size, 3 * size), dtype=int)
+    for cell in range(nx):
+        for species in range(n):
+            index = cell * n + species
+            for neighbor in range(max(0, cell - 2), min(nx, cell + 3)):
+                sparsity[index, neighbor * n + species] = 1
+            sparsity[index, size + index] = 1
+            sparsity[size + index, index] = 1
+            sparsity[size + index, size + index] = 1
+            sparsity[2 * size + index, size + index] = 1
+            for competing in range(n):
+                q_index = 2 * size + cell * n + competing
+                sparsity[size + index, q_index] = 1
+                sparsity[2 * size + index, q_index] = 1
+
+    def unpack(y: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return (y[:size].reshape(nx, n), y[size:2*size].reshape(nx, n),
+                y[2*size:].reshape(nx, n))
+
+    def rhs(t: float, y: np.ndarray) -> np.ndarray:
+        cb, cp, q = unpack(y)
+        chemistry = mobile_phase.local(t, pore=True)
+        inlet, _, _, _ = program.at_time(t)
+        flow_m3_s = program.flow_at_time(t) * 1e-6 / 60.0
+        u = flow_m3_s / max(A * epsv, SMALL)
+        dq = _wang_kinetic_rate(cp, q, chemistry[:, 1], chemistry[:, 0], config)
+        dcb = np.empty_like(cb)
+        dcp = np.empty_like(cp)
+        for i in range(n):
+            transfer = 3.0 / rp * k_eff[i] * (cb[:, i] - cp[:, i])
+            dcb[:, i] = (_scalar_transport(cb[:, i], inlet[i], u, Dax[i], dx)
+                         - (1.0 - epsv) / epsv * transfer)
+            dcp[:, i] = (transfer - (1.0 - epsp) * dq[:, i]) / epspi[i]
+        return np.concatenate((dcb.ravel(), dcp.ravel(), dq.ravel()))
+
+    solution = solve_ivp(
+        rhs, (0.0, program.total_time_s), y0, method="BDF", rtol=2e-6, atol=1e-9,
+        max_step=max(program.total_time_s / max(time_steps, 1), 1e-6), dense_output=True,
+        jac_sparsity=sparsity.tocsr(),
+    )
+    if not solution.success:
+        raise RuntimeError("TDM–Modified Wang integration failed: " + solution.message)
+    sample_t = np.linspace(0.0, program.total_time_s, time_steps + 1)
+    sampled = solution.sol(sample_t)
+    c_out = np.empty((len(sample_t), n))
+    for k in range(len(sample_t)):
+        cb, _, _ = unpack(sampled[:, k])
+        c_out[k] = np.maximum(cb[-1], 0.0)
+    final_cb, final_cp, final_q = unpack(solution.y[:, -1])
+    bed_cell_volume_L = A * dx * 1000.0
+    inventory_g = bed_cell_volume_L * np.sum(
+        epsv * final_cb + (1.0 - epsv) * epspi * final_cp
+        + (1.0 - epsv) * (1.0 - epsp) * final_q, axis=0)
+    return {
+        "program": program, "mobile_phase": mobile_phase,
+        "component_names": names, "component_mw_kDa": None,
+        "column_time_s": sample_t, "column_component_native": c_out,
+        "final_inventory_native": inventory_g, "native_basis": "g/L",
+        "diagnostics": {
+            "transport_model": "TDM", "isotherm": "Modified Wang (kinetic, Eq. 4)",
+            "paper": "Beryamysoltan et al., J. Chromatogr. A 1783 (2026) 467108",
+            "axial_cells": nx, "requested_time_steps": time_steps,
+            "internal_time_steps": max(len(solution.t) - 1, 0),
+            "wang_q0_g_L": config["wang"]["q0_g_L"],
+            "wang_eta": config["wang"]["eta"],
+            "wang_species_parameters": [
+                {key: row[key] for key in (
+                    "wang_K_kin_s", "wang_k_eq", "wang_qmax_g_L", "wang_n",
+                    "wang_beta0", "wang_beta1_per_M", "wang_beta2_L_g", "wang_beta3_per_pH")}
+                for row in rows],
+        },
+    }
+
+
 def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
     comps = _build_cpa_components(config, need_tdm_kinetics=True)
     cpa_model = _cpa_model(config, comps)
@@ -1426,7 +1558,9 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
     if errors:
         raise ValueError("Input validation failed:\n- " + "\n- ".join(errors))
     model = config["model"]
-    if model == MODEL_TDM_CPA:
+    if model == MODEL_TDM_WANG:
+        sim = _simulate_tdm_wang(config)
+    elif model == MODEL_TDM_CPA:
         sim = _simulate_tdm_cpa(config)
     elif model == MODEL_TDM_LANGMUIR:
         sim = _simulate_tdm_langmuir(config)
@@ -1618,18 +1752,41 @@ def _stage_receipt(config: dict[str, Any], program: StageProgram) -> list[dict[s
 
 
 def _svg_plot(
-    x: np.ndarray, series: list[tuple[str, np.ndarray]], *, stages=None,
+    x: np.ndarray, series: list[tuple[str, np.ndarray]], *, stages=None, series_x=None,
     percent_B=None, column_percent_B=None, conductivity=None, time_min=None,
     flow_mL_min=None, total_cv=None, show_percent_B=True, show_conductivity=True,
     show_flow_rate=True,
     width=1100, height=650, y_axis_label="UV absorbance (mAU)",
 ) -> str:
+    """Plot a full program, with optional independent sample CVs for each signal."""
+    if series_x is None:
+        series_x = [x] * len(series)
+    if len(series_x) != len(series) or any(
+        len(sample_cv) != len(values)
+        for sample_cv, (_, values) in zip(series_x, series)
+    ):
+        raise ValueError("Each plotted signal must have one CV coordinate per sample.")
     left, right, top, bottom = 86, 270, 170, 520
     pw, ph = width - left - right, bottom - top
-    xmax = max(float(total_cv if total_cv is not None else np.max(x)), 1e-12)
+    # Neither a caller's display limit nor a sparse signal grid may cut off
+    # any enabled process step. All chart coordinates use cumulative run CV.
+    xmax = max(float(total_cv or 0.0), float(np.max(x)),
+               max((float(stage["end_CV"]) for stage in stages or []), default=0.0), 1e-12)
+    command_cv, command_b, command_flow = [], [], []
+    for stage in stages or []:
+        command_cv.extend([stage["start_CV"], stage["end_CV"]])
+        start_b, end_b = (float(stage[key]) if stage[key] is not None else math.nan
+                          for key in ("start_percent_B", "end_percent_B"))
+        if stage["mode"] == "STEP":
+            start_b = end_b
+        elif stage["mode"] != "LINEAR":
+            end_b = start_b
+        command_b.extend([start_b, end_b])
+        command_flow.extend([stage["flow_mL_min"]] * 2)
     ymax = max([float(np.max(y)) for _, y in series] + [1e-12]) * 1.05
     cmax = max(float(np.nanmax(conductivity)) if conductivity is not None else 1.0, 1e-12) * 1.05
-    fmax = max(float(np.nanmax(flow_mL_min)) if flow_mL_min is not None else 1.0, 1e-12) * 1.05
+    fmax = max(float(np.nanmax(command_flow if command_flow else flow_mL_min))
+               if command_flow or flow_mL_min is not None else 1.0, 1e-12) * 1.05
     def X(v): return left + float(v) / xmax * pw
     def Y(v): return bottom - float(v) / ymax * ph
     def YB(v): return bottom - float(v) / 100.0 * ph
@@ -1637,7 +1794,7 @@ def _svg_plot(
     def YF(v): return bottom - float(v) / fmax * ph
     axis = '#222'
     palette = ['#222222', '#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#ff7f0e', '#8c564b']
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="Predicted UV chromatogram with programmed percent B, lagged conductivity and flow rate">',
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" style="max-width:100%;height:auto" role="img" aria-label="Predicted UV chromatogram with programmed percent B, lagged conductivity and flow rate">',
              f'<rect width="{width}" height="{height}" fill="white"/>']
     for i, (name, _) in enumerate(series):
         lx = left + (i % 2) * (pw / 2)
@@ -1666,17 +1823,17 @@ def _svg_plot(
         yp = Y(v)
         parts += [f'<line x1="{left}" y1="{yp:.2f}" x2="{left+pw}" y2="{yp:.2f}" stroke="#ddd"/>',
                   f'<text x="{left-10}" y="{yp+4:.2f}" text-anchor="end" font-size="11" fill="{axis}">{v:.4g}</text>']
-    def poly(values, ordinate, color, dash='', stroke_width=1.8):
+    def poly(values, ordinate, color, dash='', stroke_width=1.8, sample_cv=None):
         result, points = [], []
-        for xv, v in zip(x, values):
-            if np.isfinite(v):
+        for xv, v in zip(x if sample_cv is None else sample_cv, values):
+            if np.isfinite(xv) and np.isfinite(v):
                 points.append(f'{X(xv):.2f},{ordinate(v):.2f}')
             elif points:
                 result.append(points); points=[]
         if points: result.append(points)
         return ''.join(f'<polyline fill="none" stroke="{color}" stroke-width="{stroke_width}" stroke-dasharray="{dash}" points="{" ".join(segment)}"/>' for segment in result)
     for i, (_, values) in enumerate(series):
-        parts.append(poly(values, Y, palette[i%7], stroke_width=2.2 if i==0 else 1.5))
+        parts.append(poly(values, Y, palette[i%7], stroke_width=2.2 if i==0 else 1.5, sample_cv=series_x[i]))
     for label, attr, visible, xpos, max_value, ordinate, color in [
         ('Buffer B (%)', 'percent-b', show_percent_B, left+pw, 100.0, YB, '#008c95'),
         ('Conductivity (mS/cm)', 'conductivity', show_conductivity, left+pw+82, cmax, YC, '#b36b00'),
@@ -1692,7 +1849,8 @@ def _svg_plot(
         parts.append(f'<text x="{tx}" y="{(top+bottom)/2}" transform="rotate(-90 {tx} {(top+bottom)/2})" text-anchor="middle" font-size="12" fill="{color}">{label}</text>')
         if attr == 'percent-b':
             if percent_B is not None:
-                parts.append(poly(percent_B, YB, color, '2 5', 2.4))
+                parts.append(poly(command_b if command_cv else percent_B, YB, color, '2 5', 2.4,
+                                  sample_cv=command_cv if command_cv else x))
             if column_percent_B is not None:
                 parts.append(poly(column_percent_B, YB, '#50a5aa', '1 4', 1.7))
             parts.append(f'<text x="{left}" y="580" font-size="12" fill="{color}">Dotted: programmed %B; light dotted: column %B</text>')
@@ -1702,7 +1860,8 @@ def _svg_plot(
             parts.append(f'<text x="{left}" y="601" font-size="12" fill="{color}">Dashed: conductivity at detector (column + conductivity dead volume)</text>')
         else:
             if flow_mL_min is not None:
-                parts.append(poly(flow_mL_min, YF, color, '5 3', 2.1))
+                parts.append(poly(command_flow if command_cv else flow_mL_min, YF, color, '5 3', 2.1,
+                                  sample_cv=command_cv if command_cv else x))
             parts.append(f'<text x="{left}" y="622" font-size="12" fill="{color}">Dashed: programmed stage flow rate</text>')
         parts.append('</g>')
     parts += [f'<text x="{left+pw/2}" y="562" text-anchor="middle" font-size="13" fill="{axis}">Column volumes (CV; run ends at {xmax:g} CV)</text>',
@@ -1907,6 +2066,7 @@ def write_outputs(
     ) if affinity_used else ""
     html_path.write_text(f"""<!doctype html>
 <meta charset="utf-8"><title>Chromatography model results</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;max-width:1000px;height:auto;background:#fff}}table{{border-collapse:collapse;max-width:100%;font-size:.9rem}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}pre{{background:#f4f4f4;padding:1rem;overflow:auto}}.scroll{{overflow-x:auto}}code{{overflow-wrap:anywhere}}</style>
 <h1>Chromatography model results</h1>
 <p><b>Run:</b> {run_number} — {html.escape(run_name)} &nbsp; <b>Build:</b> {RESULT_GUARD_BUILD} &nbsp; <b>Generated UTC:</b> {generated_utc}</p>

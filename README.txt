@@ -1,3 +1,44 @@
+TDM – MODIFIED WANG AND mL LOADING (R24c)
+The JMP model selector retains all four original combinations and adds
+TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
+solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
+Journal of Chromatography A 1783 (2026) 467108, inside the existing TDM column
+transport model. The shared q0 and eta values, all eight values per protein,
+local pore salt and pH, and fitted parameter locks are passed to one solver.
+R24a uses a sparse kinetic-solver Jacobian to speed up larger TDM meshes.
+The provided starting values are illustrative, not calibrated to a measured
+protein/resin pair. See WANG_IMPLEMENTATION_AND_USAGE.md for the equation,
+parameter mapping, units, fitting workflow, and model limits. Open the complete
+new folder with 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl, then select the model
+you want and rerun the normal simulation or least-squares fit with the saved
+process recipes. Earlier saved model choices remain selected when the JMP
+window opens.
+
+Each normal or least-squares run can specify its load amount as capacity
+[g/L resin], load volume [CV], or load volume [mL]. Select the basis in that
+run's Process Setup and enter its value. For mL loading, load CV is the entered
+volume divided by the shared column volume; changing the column volume updates
+CV and loaded capacity while keeping the entered mL fixed. The batch and LSQ
+run tables store independent values. Existing CV and capacity recipes keep
+their original meaning. Older saved run tables gain the new mL column when
+opened, without changing their selected load basis.
+
+CHROMATOGRAM CV RANGE UPDATE
+The chart spans the cumulative CV of every enabled process step. For example,
+1 CV load + 2 CV wash + 2 CV wash + 10 CV elution ends at 15 CV. Programmed
+flow and %B overlays now turn at the exact stage boundaries, independently
+of the reporting resolution. Standalone SVG charts resize to the window.
+Least-squares reports show predicted UV over the complete programmed run,
+even when imported UV measurements cover only part of it. The objective
+still uses only the measured UV samples, plus mass% when explicitly selected.
+
+Extract this entire ZIP to a new folder. To retain an existing setup, copy
+tdm_inputs.json, tdm_batch_runs.csv, tdm_lsq_process_runs.csv and
+tdm_batch_count.txt from your old folder into the new one. Close the old JMP
+setup window and launch 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl from the new
+folder. Run the selected model again to regenerate the chromatogram for
+your current recipe. The stage table below the chart records the CV used.
+
 LEAST-SQUARES PERFORMANCE UPDATE
 The LSQ tab now labels the safety cap as optimizer evaluations. Each numerical
 Jacobian reruns the column once per unlocked parameter and selected chromatogram,
@@ -266,11 +307,12 @@ ion-exchange adsorption model, not a hydrophobic-interaction model.
 
 Model choices and HIC
 ---------------------
-All four combinations remain supported:
+The original four combinations remain supported, alongside TDM – Modified Wang:
   EDM + Competitive Langmuir
   TDM + Competitive Langmuir
   EDM + CPA
   TDM + CPA
+  TDM + Modified Wang (HIC)
 
 Choose HIC in Model Parameters for hydrophobic chromatography. HIC affinity
 increases with local salt. The HIC salt sensitivities must be nonnegative.
@@ -327,7 +369,7 @@ Direct endpoint-chemistry stages have no defined programmed %B.
 Buffer mixer dispersion volume [mL]: a stirred upstream volume that smooths
 and delays the buffer program entering the column. It affects adsorption.
 Buffer / salt axial dispersion [mm2/s]: conservative mobile-phase axial
-transport, shared by all four models. TDM salt is fully pore-accessible;
+transport, shared by all five model choices. TDM salt is fully pore-accessible;
 its residence volume includes interstitial and particle pore fluid. Salt
 and ionic strength are tracked separately when ion composition is selected.
 The initial column is equilibrated to the EFFECTIVE load chemistry, including
@@ -368,8 +410,8 @@ RAW_SSE is the default and directly adapts Osberghaus et al., Eq. 9:
 One shared mechanistic/instrument vector is simulated with each selected
 run's own recipe. Predictions are interpolated to measured coordinates;
 there is no automatic peak alignment, time warping or amplitude rescaling.
-For concentration-valued references, concentrations are compared directly
-and UV response factors are excluded. Geometry, recipe, species names and
+Fit references must contain a UV signal; AU-labelled values are converted
+to mAU before comparison. Geometry, recipe, species names and
 feed composition are fixed. Only eligible UNLOCKED values vary.
 
 The solver uses scipy.optimize.least_squares(loss='linear') with bounds and

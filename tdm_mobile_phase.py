@@ -1,4 +1,4 @@
-"""Protein-independent buffer transport, shared by all four column models.
+"""Protein-independent buffer transport, shared by all column models.
 
 The buffer mixer is a stirred volume upstream of the column. Column salt is
 unretained, dispersive, and fully pore-accessible in TDM. Detector dead volumes

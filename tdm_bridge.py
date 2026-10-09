@@ -84,6 +84,7 @@ from tdm_minimal_io import (
     MAX_LSQ_PROFILES,
     MAX_RUNS,
     MODEL_TDM_CPA,
+    MODEL_TDM_WANG,
     STATUS_PATH,
     active_components,
     apply_batch_shared_parameters,
@@ -141,7 +142,10 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
     config["model"] = LABEL_TO_MODEL.get(_text("tdm_ui_model"), MODEL_TDM_CPA)
     n = _num("tdm_ui_impurity_count")
     config["impurity_count"] = int(n) if n is not None else 0
-    config["chromatography_mode"] = _text("tdm_ui_chromatography_mode") or ("HIC" if "LANGMUIR" in config["model"] else "ION_EXCHANGE")
+    config["chromatography_mode"] = _text("tdm_ui_chromatography_mode") or ("HIC" if config["model"] == MODEL_TDM_WANG or "LANGMUIR" in config["model"] else "ION_EXCHANGE")
+    for field, ui in (("q0_g_L", "tdm_ui_wang_q0_g_L"), ("eta", "tdm_ui_wang_eta")):
+        if ui in globals():
+            config["wang"][field] = _num(ui)
     for field in ("buffer_dispersion_mL", "salt_dispersion_mm2_s", "uv_dead_volume_mL", "conductivity_dead_volume_mL"):
         value = _num("tdm_ui_system_" + field)
         if value is not None:
@@ -153,7 +157,13 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
     config["least_squares"]["objective"] = _text("tdm_ui_lsq_objective") or "RAW_SSE"
     config["least_squares"]["baseline_mode"] = _text("tdm_ui_lsq_baseline_mode") or "NONE"
     config["least_squares"]["detector_baseline"] = _num("tdm_ui_lsq_detector_baseline") or 0.0
-    config["least_squares"]["max_nfev"] = int(_num("tdm_ui_lsq_max_nfev") or 120)
+    # Older bridge callers may not send this field. Once the JMP box exists,
+    # reject an empty, fractional or out-of-range cap instead of resetting it.
+    if "tdm_ui_lsq_max_nfev" in globals():
+        cap = _num("tdm_ui_lsq_max_nfev")
+        if cap is None or not cap.is_integer() or not 2 <= cap <= 10000:
+            raise ValueError("Safety cap must be a whole number from 2 to 10000 optimizer evaluations.")
+        config["least_squares"]["max_nfev"] = int(cap)
     locks = _lsq_unlocked_paths_from_jmp()
     if locks is not None:
         config["least_squares"]["unlocked_paths"] = sorted(locks)
@@ -204,6 +214,10 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
             Z3_per_pH3=_num(p + "Z3_per_pH3"),
             delta_pH_slope_m2_C=_num(p + "delta_pH_slope_m2_C"),
         )
+        for field in ("wang_K_kin_s", "wang_k_eq", "wang_qmax_g_L", "wang_n",
+                      "wang_beta0", "wang_beta1_per_M", "wang_beta2_L_g", "wang_beta3_per_pH"):
+            if p + field in globals():
+                row[field] = _num(p + field)
     return normalize_config(config)
 
 
@@ -435,13 +449,13 @@ def main() -> int:
                 raise ValueError(f"Enter or choose a chromatogram CSV for LSQ profile Run {run_number}.")
             rows = load_lsq_rows()
             options = _lsq_reference_column_options(rows[run_number - 1])
-            info = attach_chromatogram_csv(source, **options)
+            info = attach_chromatogram_csv(source, require_uv=True, **options)
             run_cfg = batch_row_to_run_config(rows[run_number - 1])
             profile_config, _ = apply_batch_shared_parameters(shared_raw, run_cfg)
             errors = validate_config(profile_config, strict=True)
             if errors:
                 raise ValueError(f"LSQ Run {run_number} process recipe must be complete before attaching:\n- " + "\n- ".join(errors))
-            reference = load_chromatogram_reference(info["source_path"], profile_config, **options)
+            reference = load_chromatogram_reference(info["source_path"], profile_config, require_uv=True, **options)
             program = _build_program(profile_config, np.zeros(max(1, len(active_components(profile_config)))))
             cv_min, cv_max = float(np.min(reference.cv)), float(np.max(reference.cv))
             if cv_min < -1e-9 or cv_max > program.total_CV + 1e-9:
@@ -464,7 +478,7 @@ def main() -> int:
                 f"Chromatogram attached to LSQ profile Run {run_number} — {run_name}.\n"
                 f"Active model folder: {PROJECT_DIR}\n"
                 f"Selected chromatogram: {info['source_path']}\n"
-                f"X: {info['x_column']} ({info['x_unit']}, zero at {info['x_origin']}); Y: {info['signal_column']} (UV mAU unless labelled g/L); points: {info['rows']}.\n"
+                f"X: {info['x_column']} ({info['x_unit']}, zero at {info['x_origin']}); Y: {info['signal_column']} (UV compared in mAU; AU-labelled values converted); points: {info['rows']}.\n"
                 f"Aligned measured range: {cv_min:.4g}–{cv_max:.4g} CV; saved recipe: 0–{program.total_CV:.4g} CV. {x_receipt}{x_warning}\n"
                 f"Independent process setup: {LSQ_RUNS_CSV}"
             )
@@ -512,7 +526,7 @@ def main() -> int:
                 if errors:
                     raise ValueError(f"Least-squares profile Run {profile_run_number} must be complete:\n- " + "\n- ".join(errors))
                 options = _lsq_reference_column_options(row)
-                info = inspect_chromatogram_csv(source, **options)
+                info = inspect_chromatogram_csv(source, require_uv=True, **options)
                 # inspect_chromatogram_csv() reports the normalized source as
                 # `path`; `source_path` is only returned by the attach helper.
                 source = info["path"]

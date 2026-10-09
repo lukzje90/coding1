@@ -33,6 +33,7 @@ from tdm_minimal_io import (
     MODEL_LABELS,
     MODEL_TDM_CPA,
     MODEL_TDM_LANGMUIR,
+    MODEL_TDM_WANG,
     RESULT_GUARD_BUILD,
     normalize_config,
     is_hic,
@@ -137,6 +138,17 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
                 Text Box("The displayed H_i is the zero-salt reference. At local salt, H_eff,i = qmax,i × b_eff,i; both numerator and shared competitive denominator use their local salt-dependent affinities.", << Set Wrap(680), << Set Font Style("Italic")),
                 Text Box("qmax uses stationary-phase volume. 1 mg/mL = 1 g/L. Packed-bed capacity also includes the stationary-phase volume fraction.", << Set Wrap(520), << Set Font Style("Italic"))
             ),
+            {p}Wang = V List Box(
+                {_nrow("Wang K′kin,i [s]", f"{p}WangKkin", row.get("wang_K_kin_s"), fit_path=f"components[{i-1}].wang_K_kin_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {_nrow("Wang k_eq,i", f"{p}WangKeq", row.get("wang_k_eq"), fit_path=f"components[{i-1}].wang_k_eq", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {_nrow("Wang qmax,i [g/L stationary phase]", f"{p}WangQmax", row.get("wang_qmax_g_L"), fit_path=f"components[{i-1}].wang_qmax_g_L", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {_nrow("Wang n_i [-]", f"{p}WangN", row.get("wang_n"), fit_path=f"components[{i-1}].wang_n", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {_nrow("Wang β0,i [-]", f"{p}WangBeta0", row.get("wang_beta0"), fit_path=f"components[{i-1}].wang_beta0", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {_nrow("Wang β1,i [M⁻¹]", f"{p}WangBeta1", row.get("wang_beta1_per_M"), fit_path=f"components[{i-1}].wang_beta1_per_M", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {_nrow("Wang β2,i [L/g]", f"{p}WangBeta2", row.get("wang_beta2_L_g"), fit_path=f"components[{i-1}].wang_beta2_L_g", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {_nrow("Wang β3,i [pH⁻¹]", f"{p}WangBeta3", row.get("wang_beta3_per_pH"), fit_path=f"components[{i-1}].wang_beta3_per_pH", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                Text Box("Modified Wang kinetic Eq. (4): local pore protein, salt and pH enter β2, β1 and β3. Starting values are illustrative.", << Set Wrap(680))
+            ),
             {p}CPA = V List Box(
                 {_nrow("Protein diameter [nm] (a_i = diameter/2)", f"{p}Diameter", row.get("diameter_nm"), fit_path=f"components[{i-1}].diameter_nm", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {_nrow("Accessible adsorber surface A_s,i [m⁻¹]", f"{p}As", row.get("As_m_inv"), fit_path=f"components[{i-1}].As_m_inv", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
@@ -170,6 +182,14 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
         (f"{p}Zref << Get", f"tdm_ui_c{i}_Z_ref"),
         (f"{p}Delta << Get", f"tdm_ui_c{i}_delta_ref"),
         (f"{p}Kkin << Get", f"tdm_ui_c{i}_kkin_star_s"),
+        (f"{p}WangKkin << Get", f"tdm_ui_c{i}_wang_K_kin_s"),
+        (f"{p}WangKeq << Get", f"tdm_ui_c{i}_wang_k_eq"),
+        (f"{p}WangQmax << Get", f"tdm_ui_c{i}_wang_qmax_g_L"),
+        (f"{p}WangN << Get", f"tdm_ui_c{i}_wang_n"),
+        (f"{p}WangBeta0 << Get", f"tdm_ui_c{i}_wang_beta0"),
+        (f"{p}WangBeta1 << Get", f"tdm_ui_c{i}_wang_beta1_per_M"),
+        (f"{p}WangBeta2 << Get", f"tdm_ui_c{i}_wang_beta2_L_g"),
+        (f"{p}WangBeta3 << Get", f"tdm_ui_c{i}_wang_beta3_per_pH"),
         (f"{p}PHref << Get", f"tdm_ui_c{i}_pH_ref"),
         (f"{p}Z1 << Get", f"tdm_ui_c{i}_Z1_per_pH"),
         (f"{p}Z2 << Get", f"tdm_ui_c{i}_Z2_per_pH2"),
@@ -183,12 +203,13 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
     {p}TdmTransport << Visibility(If(isTDM, "Visible", "Collapse"));
     {p}EdmTransport << Visibility(If(isEDM, "Visible", "Collapse"));
     {p}Langmuir << Visibility(If(isLangmuir, "Visible", "Collapse"));
+    {p}Wang << Visibility(If(isWang, "Visible", "Collapse"));
     {p}CPA << Visibility(If(isCPA, "Visible", "Collapse"));
     {p}KkinRow << Visibility(If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])}, "Visible", "Collapse"));
     {p}SaltRow << Visibility(If(isLangmuir | (isCPA & isHIC), "Visible", "Collapse"));
     {p}ZrefRow << Visibility(If(isCPA & !isHIC, "Visible", "Collapse"));
-    {p}PHPanel << Visibility(If(isCPA & !isHIC & batchPHSpan > 1e-9, "Visible", "Collapse"));
-    {p}Z3Row << Visibility(If(isCPA & !isHIC & batchPHSpan > 1, "Visible", "Collapse"));'''
+    {p}PHPanel << Visibility(If(isCPA & !isHIC & fitPHSpan > 1e-9, "Visible", "Collapse"));
+    {p}Z3Row << Visibility(If(isCPA & !isHIC & fitPHSpan > 1, "Visible", "Collapse"));'''
     return body, sends, visible
 
 
@@ -297,7 +318,9 @@ def _default_lsq_unlocked_paths(config: dict[str, Any]) -> set[str]:
     paths: set[str] = set()
     for i in range(n):
         prefix = f"components[{i}]"
-        if model in {MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR}:
+        if model == MODEL_TDM_WANG:
+            paths.update({f"{prefix}.wang_k_eq", f"{prefix}.wang_beta1_per_M"})
+        elif model in {MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR}:
             paths.update({f"{prefix}.qmax_g_L", f"{prefix}.b_L_g", f"{prefix}.salt_sensitivity_per_M"})
         else:
             paths.update({f"{prefix}.delta_ref", f"{prefix}.As_m_inv"})
@@ -314,7 +337,10 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     ensure_lsq_runs_csv()
     cfg = normalize_config(config or load_config(CONFIG_PATH))
     selected = MODEL_LABELS.get(cfg.get("model"), MODEL_LABELS[MODEL_TDM_CPA])
-    labels = [MODEL_LABELS[MODEL_EDM_LANGMUIR], MODEL_LABELS[MODEL_TDM_LANGMUIR], MODEL_LABELS[MODEL_EDM_CPA], MODEL_LABELS[MODEL_TDM_CPA]]
+    labels = [MODEL_LABELS[model] for model in (
+        MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_EDM_CPA,
+        MODEL_TDM_CPA, MODEL_TDM_WANG,
+    )]
     model_items = "{" + ", ".join(_q(x) for x in ([selected] + [x for x in labels if x != selected])) + "}"
     imp_count = min(max(int(cfg.get("impurity_count", 0) or 0), 0), MAX_IMPURITIES)
     c, t, e, cp, conv = cfg["column"], cfg["tdm"], cfg["edm"], cfg["cpa"], cfg.get("conversion", {})
@@ -326,9 +352,21 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     component_bodies, component_sends, component_vis = [], [], []
     fit_lock_vars: list[tuple[str, str]] = []
     default_unlocked_paths = _default_lsq_unlocked_paths(cfg)
+    if cfg["model"] != MODEL_TDM_WANG:
+        # A saved legacy fit must keep its locks. Seed hidden Wang controls with
+        # Wang defaults so a later switch to the new option can fit immediately.
+        for i in range(imp_count + 1):
+            default_unlocked_paths.update({f"components[{i}].wang_k_eq",
+                                           f"components[{i}].wang_beta1_per_M"})
     for i, row in enumerate(cfg["components"], start=1):
         b, s, v = _component_panel(i, row, fit_lock_vars, default_unlocked_paths)
         component_bodies.append(b); component_sends.extend(s); component_vis.append(v)
+    wang_q0_row = _nrow("Wang shared q0 [g/L stationary phase]", "wangQ0", cfg["wang"]["q0_g_L"], 360,
+                        fit_path="wang.q0_g_L", fit_lock_vars=fit_lock_vars,
+                        default_unlocked_paths=default_unlocked_paths)
+    wang_eta_row = _nrow("Wang shared η [-]", "wangEta", cfg["wang"]["eta"], 360,
+                         fit_path="wang.eta", fit_lock_vars=fit_lock_vars,
+                         default_unlocked_paths=default_unlocked_paths)
 
     buffer_a_panel = _buffer_panel("bufferA", "Buffer A (0% B)")
     buffer_b_panel = _buffer_panel("bufferB", "Buffer B (100% B)")
@@ -354,6 +392,8 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         f'Python Send(condToSalt << Get, Python Name("tdm_ui_cond_to_salt_factor"));',
         f'Python Send(ligandSurface << Get, Python Name("tdm_ui_ligand_surface_density"));',
         f'Python Send(systemAdsorption << Get, Python Name("tdm_ui_system_adsorption_parameter"));',
+        f'Python Send(wangQ0 << Get, Python Name("tdm_ui_wang_q0_g_L"));',
+        f'Python Send(wangEta << Get, Python Name("tdm_ui_wang_eta"));',
     ] + component_sends
     sys = cfg["system"]
     system_rows = []
@@ -475,6 +515,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'Column(dtRuns, "Feed_Concentration_mg_mL")[currentRun] = feedConcentration << Get;',
         'Column(dtRuns, "Load_Amount_Basis")[currentRun] = LoadBasisToken(loadAmountBasis);',
         'Column(dtRuns, "Load_CV")[currentRun] = loadCV << Get;',
+        'Column(dtRuns, "Load_Volume_mL")[currentRun] = loadVolumeML << Get;',
         'Column(dtRuns, "Load_Density_mg_mL_resin")[currentRun] = loadDensity << Get;',
         'Column(dtRuns, "Load_Mode")[currentRun] = loadMode << Get Selected;',
         'Column(dtRuns, "Load_Start_Percent_B")[currentRun] = loadStartB << Get;',
@@ -497,6 +538,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'feedConcentration << Set(Column(dtRuns, "Feed_Concentration_mg_mL")[currentRun]);',
         'SetLoadBasisCombo(loadAmountBasis, Char(Column(dtRuns, "Load_Amount_Basis")[currentRun]));',
         'loadCV << Set(Column(dtRuns, "Load_CV")[currentRun]);',
+        'loadVolumeML << Set(Column(dtRuns, "Load_Volume_mL")[currentRun]);',
         'loadDensity << Set(Column(dtRuns, "Load_Density_mg_mL_resin")[currentRun]);',
         'SetModeCombo(loadMode, Char(Column(dtRuns, "Load_Mode")[currentRun]));',
         'loadStartB << Set(Column(dtRuns, "Load_Start_Percent_B")[currentRun]);',
@@ -513,7 +555,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'plwCountBox << Set(Num(Column(dtRuns, "PLW_Count")[currentRun]) + 1);',
         'elutionCountBox << Set(Num(Column(dtRuns, "Elution_Count")[currentRun]) + 1);',
     ]
-    copy_cols = ["Run_Name", "Load_Flow_mL_min", "Feed_Concentration_mg_mL", "Load_Amount_Basis", "Load_CV", "Load_Density_mg_mL_resin", "Load_Mode", "Load_Start_Percent_B", "Load_End_Percent_B", "Load_Chemistry_Control", "Load_Material_Chemistry_Mode", "Time_Steps", "Axial_Positions", "Load_Source", "Load_pH", "Load_Salt_M", "Load_Conductivity_mS_cm", "PLW_Count", "Elution_Count"]
+    copy_cols = ["Run_Name", "Load_Flow_mL_min", "Feed_Concentration_mg_mL", "Load_Amount_Basis", "Load_CV", "Load_Volume_mL", "Load_Density_mg_mL_resin", "Load_Mode", "Load_Start_Percent_B", "Load_End_Percent_B", "Load_Chemistry_Control", "Load_Material_Chemistry_Mode", "Time_Steps", "Axial_Positions", "Load_Source", "Load_pH", "Load_Salt_M", "Load_Conductivity_mS_cm", "PLW_Count", "Elution_Count"]
 
     copy_cols.append("Load_Salt_Input_Mode")
     for bp, vp in (("BufferA", "bufferA"), ("BufferB", "bufferB")):
@@ -616,6 +658,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
                     If(stepMode == "LINEAR", " → " || Char(TargetLangmuirBEff(activeEnd)), "") || " L/g", "") ||
                 If(stepControl == "BUFFER_B_PERCENT", "   |   Buffer A/B blend at " || Char(If(stepMode == "STEP", endPct, startPct)) || "% B", "   |   explicit endpoint chemistry"));''')
 
+    req_wang = _req_expr(MODEL_TDM_WANG, 0, "HIC")
     req_edm_l = _req_expr(MODEL_EDM_LANGMUIR, 0)
     req_tdm_l = _req_expr(MODEL_TDM_LANGMUIR, 0)
     req_tdm_c0 = _req_expr(MODEL_TDM_CPA, 0)
@@ -682,28 +725,38 @@ SetAllFitLocks = Function({{state}}, {{}},
     {set_all_lock_lines}
 );
 SetLoadBasisCombo = Function({{box, txt}}, {{}},
-    If(Uppercase(txt) == "LOAD_VOLUME" | Uppercase(txt) == "LOAD VOLUME [CV]", box << Set(2), box << Set(1));
+    If(Uppercase(txt) == "VOLUME_ML" | Uppercase(txt) == "LOAD VOLUME [ML]", box << Set(3),
+       Uppercase(txt) == "LOAD_VOLUME" | Uppercase(txt) == "LOAD VOLUME [CV]", box << Set(2), box << Set(1));
 );
 LoadBasisToken = Function({{box}}, {{label}},
     label = Uppercase(Char(box << Get Selected));
-    If(label == "CAPACITY [G/L RESIN]", "CAPACITY", "LOAD_VOLUME");
+    If(label == "CAPACITY [G/L RESIN]", "CAPACITY", label == "LOAD VOLUME [ML]", "VOLUME_ML", "LOAD_VOLUME");
 );
-SyncLoadAmount = Function({{}}, {{basis, concentration, capacity, cv, requiredVolume}},
+SyncLoadAmount = Function({{}}, {{basis, concentration, capacity, cv, volume, columnVol}},
     If(isLoading, Return());
     basis = Uppercase(Char(loadAmountBasis << Get Selected));
     concentration = feedConcentration << Get;
+    columnVol = columnVolume << Get;
     If(basis == "CAPACITY [G/L RESIN]",
         capacity = loadDensity << Get;
         If(!Is Missing(capacity) & !Is Missing(concentration) & concentration > 0,
             isLoading = 1; loadCV << Set(capacity / concentration); isLoading = 0
         ),
-        cv = loadCV << Get;
-        If(!Is Missing(cv) & !Is Missing(concentration) & concentration > 0,
-            isLoading = 1; loadDensity << Set(cv * concentration); isLoading = 0
+        If(basis == "LOAD VOLUME [ML]",
+            volume = loadVolumeML << Get;
+            If(!Is Missing(volume) & !Is Missing(columnVol) & columnVol > 0,
+                isLoading = 1; loadCV << Set(volume / columnVol); isLoading = 0
+            )
         )
     );
-    requiredVolume = (loadCV << Get) * (columnVolume << Get);
-    loadVolumeSummary << Set Text("Capacity: " || Char(loadDensity << Get) || " g/L resin; required feed volume: " || Char(requiredVolume) || " mL (" || Char(loadCV << Get) || " CV)");
+    cv = loadCV << Get;
+    If(basis != "LOAD VOLUME [ML]" & !Is Missing(cv) & !Is Missing(columnVol),
+        isLoading = 1; loadVolumeML << Set(cv * columnVol); isLoading = 0
+    );
+    If(basis != "CAPACITY [G/L RESIN]" & !Is Missing(cv) & !Is Missing(concentration) & concentration > 0,
+        isLoading = 1; loadDensity << Set(cv * concentration); isLoading = 0
+    );
+    loadVolumeSummary << Set Text("Capacity: " || Char(loadDensity << Get) || " g/L resin; required feed volume: " || Char(loadVolumeML << Get) || " mL (" || Char(loadCV << Get) || " CV)");
     SaveCurrentRun(); UpdateUI();
 );
 RunNumberFromLabel = Function({{label}}, {{n}},
@@ -746,14 +799,14 @@ ApplyChemSource = Function({{sourceBox, pHBox, condBox}}, {{src}},
         pHBox << Set(bufferBPH << Get); condBox << Set(bufferBCond << Get)
     );
 );
-ResolvedPHFromRow = Function({{r, sourceCol, pHCol}}, {{src}},
-    src = Uppercase(Char(Column(dtRuns, sourceCol)[r]));
-    If(src == "BUFFER_A", Column(dtRuns, "BufferA_pH")[r],
-       src == "BUFFER_B", Column(dtRuns, "BufferB_pH")[r],
-       Column(dtRuns, pHCol)[r])
+ResolvedPHFromRow = Function({{runsTable, r, sourceCol, pHCol}}, {{src}},
+    src = Uppercase(Char(Column(runsTable, sourceCol)[r]));
+    If(src == "BUFFER_A", Column(runsTable, "BufferA_pH")[r],
+       src == "BUFFER_B", Column(runsTable, "BufferB_pH")[r],
+       Column(runsTable, pHCol)[r])
 );
-ResolvedPHFromPercentBRow = Function({{r, pctCol}}, {{pct, a, b, f}},
-    pct = Num(Column(dtRuns, pctCol)[r]); a = Num(Column(dtRuns, "BufferA_pH")[r]); b = Num(Column(dtRuns, "BufferB_pH")[r]);
+ResolvedPHFromPercentBRow = Function({{runsTable, r, pctCol}}, {{pct, a, b, f}},
+    pct = Num(Column(runsTable, pctCol)[r]); a = Num(Column(runsTable, "BufferA_pH")[r]); b = Num(Column(runsTable, "BufferB_pH")[r]);
     If(Is Missing(pct) | Is Missing(a) | Is Missing(b), Return(.));
     f = Max(0, Min(100, pct)) / 100; (1-f)*a + f*b
 );
@@ -842,6 +895,7 @@ ChangeLSQSlot = Function({{slot, r}}, {{i, n}},
     );
     SaveLSQReference(slot);
     LoadLSQReference(slot, r);
+    UpdateUI();
     UpdateLSQRunSummary();
 );
 SwitchProcessScope = Function({{useLSQ, runNum}}, {{}},
@@ -914,55 +968,59 @@ UpdateLSQRunSummary = Function({{}}, {{slot, r, n, attached, nPLW, nElution, pat
     lsqProfilesStatus << Set Text(Char(n) || " run(s) selected; " || Char(attached) || " chromatogram(s) entered. Each selected run needs its own file.");
 );
 
-ComputeBatchPHSpan = Function({{}}, {{nRuns, r, i, mn, mx, v, c, stepMode, chemControl, loadMaterialMode, loadMode}},
+ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r, i, mn, mx, v, c, stepMode, chemControl, loadMaterialMode, loadMode}},
     If(Contains(Char(modelBox << Get Selected), "CPA") == 0, Return(0));
-    nRuns = Floor(batchCountBox << Get); If(Is Missing(nRuns), nRuns = 1); nRuns = Max(1, Min({MAX_RUNS}, nRuns));
+    nRuns = If(useSelectedLSQ, Num(lsqRunCount << Get Selected), Floor(batchCountBox << Get));
+    If(Is Missing(nRuns), nRuns = 1);
+    nRuns = Max(1, Min(If(useSelectedLSQ, {MAX_LSQ_PROFILES}, {MAX_RUNS}), nRuns));
     mn = 1e99; mx = -1e99;
-    For(r = 1, r <= nRuns, r++,
-        loadMaterialMode = Uppercase(Char(Column(dtRuns, "Load_Material_Chemistry_Mode")[r]));
-        loadMode = Uppercase(Char(Column(dtRuns, "Load_Mode")[r]));
-        chemControl = Uppercase(Char(Column(dtRuns, "Load_Chemistry_Control")[r]));
+    For(slot = 1, slot <= nRuns, slot++,
+        r = If(useSelectedLSQ, LSQSelectedRun(slot), slot);
+        loadMaterialMode = Uppercase(Char(Column(runsTable, "Load_Material_Chemistry_Mode")[r]));
+        loadMode = Uppercase(Char(Column(runsTable, "Load_Mode")[r]));
+        chemControl = Uppercase(Char(Column(runsTable, "Load_Chemistry_Control")[r]));
         If(loadMaterialMode == "EXPLICIT" | chemControl == "ENDPOINT_CHEMISTRY",
-            v = ResolvedPHFromRow(r, "Load_Source", "Load_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v));
+            v = ResolvedPHFromRow(runsTable, r, "Load_Source", "Load_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v));
         ,
-            If(loadMode != "STEP", v = ResolvedPHFromPercentBRow(r, "Load_Start_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
-            If(loadMode != "SET_POINT", v = ResolvedPHFromPercentBRow(r, "Load_End_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+            If(loadMode != "STEP", v = ResolvedPHFromPercentBRow(runsTable, r, "Load_Start_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+            If(loadMode != "SET_POINT", v = ResolvedPHFromPercentBRow(runsTable, r, "Load_End_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
         );
-        c = Num(Column(dtRuns, "PLW_Count")[r]);
+        c = Num(Column(runsTable, "PLW_Count")[r]);
         For(i = 1, i <= c, i++,
-            stepMode = Uppercase(Char(Column(dtRuns, "PLW" || Char(i) || "_Mode")[r]));
-            chemControl = Uppercase(Char(Column(dtRuns, "PLW" || Char(i) || "_Chemistry_Control")[r]));
+            stepMode = Uppercase(Char(Column(runsTable, "PLW" || Char(i) || "_Mode")[r]));
+            chemControl = Uppercase(Char(Column(runsTable, "PLW" || Char(i) || "_Chemistry_Control")[r]));
             If(chemControl == "BUFFER_B_PERCENT",
-                If(stepMode != "STEP", v = ResolvedPHFromPercentBRow(r, "PLW" || Char(i) || "_Start_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
-                If(stepMode != "SET_POINT", v = ResolvedPHFromPercentBRow(r, "PLW" || Char(i) || "_End_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+                If(stepMode != "STEP", v = ResolvedPHFromPercentBRow(runsTable, r, "PLW" || Char(i) || "_Start_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+                If(stepMode != "SET_POINT", v = ResolvedPHFromPercentBRow(runsTable, r, "PLW" || Char(i) || "_End_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
             ,
-                If(stepMode != "STEP", v = ResolvedPHFromRow(r, "PLW" || Char(i) || "_Start_Source", "PLW" || Char(i) || "_Start_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
-                If(stepMode != "SET_POINT", v = ResolvedPHFromRow(r, "PLW" || Char(i) || "_End_Source", "PLW" || Char(i) || "_End_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+                If(stepMode != "STEP", v = ResolvedPHFromRow(runsTable, r, "PLW" || Char(i) || "_Start_Source", "PLW" || Char(i) || "_Start_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+                If(stepMode != "SET_POINT", v = ResolvedPHFromRow(runsTable, r, "PLW" || Char(i) || "_End_Source", "PLW" || Char(i) || "_End_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
             );
         );
-        c = Num(Column(dtRuns, "Elution_Count")[r]);
+        c = Num(Column(runsTable, "Elution_Count")[r]);
         For(i = 1, i <= c, i++,
-            stepMode = Uppercase(Char(Column(dtRuns, "Elution" || Char(i) || "_Mode")[r]));
-            chemControl = Uppercase(Char(Column(dtRuns, "Elution" || Char(i) || "_Chemistry_Control")[r]));
+            stepMode = Uppercase(Char(Column(runsTable, "Elution" || Char(i) || "_Mode")[r]));
+            chemControl = Uppercase(Char(Column(runsTable, "Elution" || Char(i) || "_Chemistry_Control")[r]));
             If(chemControl == "BUFFER_B_PERCENT",
-                If(stepMode != "STEP", v = ResolvedPHFromPercentBRow(r, "Elution" || Char(i) || "_Start_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
-                If(stepMode != "SET_POINT", v = ResolvedPHFromPercentBRow(r, "Elution" || Char(i) || "_End_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+                If(stepMode != "STEP", v = ResolvedPHFromPercentBRow(runsTable, r, "Elution" || Char(i) || "_Start_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+                If(stepMode != "SET_POINT", v = ResolvedPHFromPercentBRow(runsTable, r, "Elution" || Char(i) || "_End_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
             ,
-                If(stepMode != "STEP", v = ResolvedPHFromRow(r, "Elution" || Char(i) || "_Start_Source", "Elution" || Char(i) || "_Start_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
-                If(stepMode != "SET_POINT", v = ResolvedPHFromRow(r, "Elution" || Char(i) || "_End_Source", "Elution" || Char(i) || "_End_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+                If(stepMode != "STEP", v = ResolvedPHFromRow(runsTable, r, "Elution" || Char(i) || "_Start_Source", "Elution" || Char(i) || "_Start_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
+                If(stepMode != "SET_POINT", v = ResolvedPHFromRow(runsTable, r, "Elution" || Char(i) || "_End_Source", "Elution" || Char(i) || "_End_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
             );
         );
     );
     If(mn > mx, 0, mx - mn)
 );
 
-UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLangmuir, isHIC, plwCount, elutionCount, stepMode, stepControl, startPct, endPct, startSalt, endSalt, activeStart, activeEnd, batchPHSpan, reqText, lsqUsesComposition, lsqRefCount, loadSaltValue, loadSourceLabel, stationaryFraction, nominalCapacity, targetDose}},
+UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLangmuir, isWang, isHIC, plwCount, elutionCount, stepMode, stepControl, startPct, endPct, startSalt, endSalt, activeStart, activeEnd, batchPHSpan, fitPHSpan, reqText, lsqUsesComposition, lsqRefCount, loadSaltValue, loadSourceLabel, stationaryFraction, nominalCapacity, targetDose}},
     modelLabel = Char(modelBox << Get Selected);
-    loadVolumeSummary << Set Text("Capacity: " || Char(loadDensity << Get) || " g/L resin; required feed volume: " || Char((loadCV << Get) * (columnVolume << Get)) || " mL (" || Char(loadCV << Get) || " CV)");
+    loadVolumeSummary << Set Text("Capacity: " || Char(loadDensity << Get) || " g/L resin; required feed volume: " || Char(loadVolumeML << Get) || " mL (" || Char(loadCV << Get) || " CV)");
     SyncLangmuirDerived();
     impurityCount = Num(impurityCountBox << Get Selected); If(Is Missing(impurityCount), impurityCount = 0);
     isTDM = Contains(modelLabel, "TDM") > 0; isEDM = Contains(modelLabel, "EDM") > 0;
-    isCPA = Contains(modelLabel, "CPA") > 0; isLangmuir = Contains(modelLabel, "Competitive Langmuir") > 0;
+    isCPA = Contains(modelLabel, "CPA") > 0; isLangmuir = Contains(modelLabel, "Competitive Langmuir") > 0; isWang = Contains(modelLabel, "Modified Wang") > 0;
+    If(isWang & Uppercase(Char(chromatographyMode << Get Selected)) != "HIC", chromatographyMode << Set(1));
     isHIC = Uppercase(Char(chromatographyMode << Get Selected)) == "HIC";
     If(isLangmuir & !Is Missing(c1Qmax << Get) & !Is Missing(c1Mass << Get) & !Is Missing(loadDensity << Get) &
        If(isEDM, !Is Missing(edmPorosity << Get), !Is Missing(voidFraction << Get) & !Is Missing(particlePorosity << Get)),
@@ -979,7 +1037,9 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     {''.join(lsq_selection_visibility)}
     plwCount = Num(plwCountBox << Get Selected); If(Is Missing(plwCount), plwCount = 0);
     elutionCount = Num(elutionCountBox << Get Selected); If(Is Missing(elutionCount), elutionCount = 0);
-    batchPHSpan = ComputeBatchPHSpan();
+    fitPHSpan = ComputePHSpanForRuns(dtLSQRuns, 1);
+    batchPHSpan = If(isLSQSetup, fitPHSpan, ComputePHSpanForRuns(dtBatchRuns, 0));
+    fitPHSpan = Max(fitPHSpan, batchPHSpan);
     bufferSection << Visibility("Visible");
     bufferAIonicSourceRow << Visibility("Visible");
     bufferBIonicSourceRow << Visibility("Visible");
@@ -1001,18 +1061,22 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
         Char(ResolvedBufferSalt(bufferBCond, bufferBSalt, bufferBSaltMode)) || " M (" ||
         Char(bufferBSaltMode << Get Selected) || "); load start " || Char(loadSaltValue) || " M.");
     loadChemControlRow << Visibility("Visible");
-    loadChemPanel << Visibility(If((isCPA | isLangmuir) & (Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT" | Uppercase(Char(loadChemControl << Get Selected)) == "ENDPOINT_CHEMISTRY"), "Visible", "Collapse"));
-    loadPH << Visibility(If(isCPA, "Visible", "Collapse")); loadPHLabel << Visibility(If(isCPA, "Visible", "Collapse"));
-    loadCond << Visibility(If(isCPA | isLangmuir, "Visible", "Collapse")); loadCondLabel << Visibility(If(isCPA | isLangmuir, "Visible", "Collapse"));
+    loadChemPanel << Visibility(If((isCPA | isLangmuir | isWang) & (Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT" | Uppercase(Char(loadChemControl << Get Selected)) == "ENDPOINT_CHEMISTRY"), "Visible", "Collapse"));
+    loadPH << Visibility(If(isCPA | isWang, "Visible", "Collapse")); loadPHLabel << Visibility(If(isCPA | isWang, "Visible", "Collapse"));
+    loadCond << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse")); loadCondLabel << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse"));
     tdmPanel << Visibility(If(isTDM, "Visible", "Collapse")); edmPanel << Visibility(If(isEDM, "Visible", "Collapse"));
     cpaSystemPanel << Visibility(If(isCPA & !isHIC, "Visible", "Collapse"));
-    condConversionRow << Visibility(If(isCPA | isLangmuir, "Visible", "Collapse"));
+    wangSharedPanel << Visibility(If(isWang, "Visible", "Collapse"));
+    wangModeHelp << Visibility(If(isWang, "Visible", "Collapse"));
+    legacyModeHelp << Visibility(If(isWang, "Collapse", "Visible"));
+    condConversionRow << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse"));
     tdmSaltRow << Visibility("Collapse");
     {''.join(component_vis)}
     {''.join(process_vis)}
     speciesStatus << Set Text("Showing target protein + " || Char(impurityCount) || If(impurityCount == 1, " impurity", " impurities") || ". Only these species are sent to the solver.");
     reqText = "";
     If(modelLabel == {_q(MODEL_LABELS[MODEL_EDM_LANGMUIR])}, reqText = {req_edm_l});
+    If(isWang, reqText = {req_wang});
     If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_LANGMUIR])}, reqText = {req_tdm_l});
     If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])}, If(batchPHSpan > 1, reqText = {req_tdm_c2}, If(batchPHSpan > 1e-9, reqText = {req_tdm_c05}, reqText = {req_tdm_c0})));
     If(modelLabel == {_q(MODEL_LABELS[MODEL_EDM_CPA])}, If(batchPHSpan > 1, reqText = {req_edm_c2}, If(batchPHSpan > 1e-9, reqText = {req_edm_c05}, reqText = {req_edm_c0})));
@@ -1166,9 +1230,10 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                         {_trow("Run name", "runNameBox", "")},
         {_nrow("Load flow [mL/min]", "loadFlow", None, 290, "If(!isLoading, SaveCurrentRun(); UpdateUI())")},
                         {_nrow("Feed concentration [mg/mL]", "feedConcentration", None, 290, "If(!isLoading, SyncLoadAmount())")},
-                        H List Box(Text Box("Load amount specified by", << Set Width(290)), loadAmountBasis = Combo Box({{"Capacity [g/L resin]", "Load volume [CV]"}}, << Set Width(180), << Set Function(Function({{this}}, If(!isLoading, SyncLoadAmount()))))),
+                        H List Box(Text Box("Load amount specified by", << Set Width(290)), loadAmountBasis = Combo Box({{"Capacity [g/L resin]", "Load volume [CV]", "Load volume [mL]"}}, << Set Width(180), << Set Function(Function({{this}}, If(!isLoading, SyncLoadAmount()))))),
                         {_nrow("Load capacity [g/L resin]", "loadDensity", 10.0, 290, "If(!isLoading, SyncLoadAmount())")},
                         {_nrow("Required load volume [CV]", "loadCV", 10.0, 290, "If(!isLoading, SyncLoadAmount())")},
+                        {_nrow("Required load volume [mL]", "loadVolumeML", None, 290, "If(!isLoading, SyncLoadAmount())")},
                         loadVolumeSummary = Text Box("Capacity and total feed volume are calculated from the selected load basis.", << Set Wrap(680)),
                         loadSaturationStatus = Text Box("", << Set Wrap(680)),
                         H List Box(Text Box("Load mode", << Set Width(290)), loadMode = Combo Box({{"SET_POINT", "LINEAR", "STEP"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
@@ -1193,7 +1258,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     V List Box(
                         H List Box(Text Box("Post-load washes [0-5]", << Set Width(220)), plwCountBox = Combo Box({count_items}, << Set Width(75), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         H List Box(Text Box("Elution steps [0-5]", << Set Width(220)), elutionCountBox = Combo Box({count_items}, << Set Width(75), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-                        Text Box("Load and every PLW/Elution step store Start and End %B. Buffer A = 0% B and Buffer B = 100% B. SET_POINT holds Start %B, LINEAR interpolates Start to End across the CV, and STEP switches to End %B. Both endpoints remain visible and saved in every mode. HIC Competitive Langmuir uses local salt concentration through b_eff = b × exp(k_s × salt); CPA uses pH/salt through its CPA equations.", << Set Wrap(740))
+                        Text Box("Load and every PLW/Elution step store Start and End %B. Buffer A = 0% B and Buffer B = 100% B. SET_POINT holds Start %B, LINEAR interpolates across the CV, and STEP switches to End %B. TDM–Wang uses the resulting local pore salt and pH in its kinetic law.", << Set Wrap(740))
                     )
                 ),
                 Spacer Box(Size(1,8)),
@@ -1215,7 +1280,8 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                 )),
                 Outline Box("HIC / ion exchange and system response", V List Box(
                     H List Box(Text Box("Chromatography mode", << Set Width(360)), chromatographyMode = Combo Box({{"HIC", "ION_EXCHANGE"}}, << Set({1 if is_hic(cfg) else 2}), << Set Function(Function({{this}}, UpdateUI())))),
-                    Text Box("For 100% B loading followed by a 0% B gradient, Buffer B must be the high-salt endpoint. Native CPA is an ion-exchange model. CPA in HIC mode uses empirical exp(k_s × salt) affinity with CPA surface competition; calibrate it for your protein and resin.", << Set Wrap(740)),
+                    legacyModeHelp = Text Box("For 100% B loading followed by a 0% B gradient, Buffer B must be the high-salt endpoint. Native CPA is an ion-exchange model. CPA in HIC mode uses empirical exp(k_s × salt) affinity with CPA surface competition; calibrate it for your protein and resin.", << Set Wrap(740)),
+                    wangModeHelp = Text Box("Modified Wang is available with TDM in HIC mode. Buffer B should be the high-salt endpoint for a descending-salt elution. Calibrate the Wang coefficients for the protein, resin and buffers used.", << Set Wrap(740)),
                     {', '.join(system_rows)},
                     H List Box(Text Box("Buffer mixer dispersion", << Set Width(360)), bufferDispersionToggle = Combo Box({{"On", "Off"}}, << Set({1 if sys['buffer_dispersion_enabled'] else 2}))),
                     H List Box(Text Box("Salt axial dispersion", << Set Width(360)), saltDispersionToggle = Combo Box({{"On", "Off"}}, << Set({1 if sys['salt_dispersion_enabled'] else 2}))),
@@ -1243,6 +1309,10 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     {_nrow("Ligand surface density Γ_L [µmol/m²]", "ligandSurface", cp.get("ligand_surface_density_umol_m2"), 360, fit_path="cpa.ligand_surface_density_umol_m2", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                     {_nrow("System-specific adsorption parameter [-]", "systemAdsorption", cp.get("system_specific_adsorption_parameter"), 360, fit_path="cpa.system_specific_adsorption_parameter", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}
                 )),
+                wangSharedPanel = Outline Box("Modified Wang shared parameters", V List Box(
+                    {wang_q0_row},
+                    {wang_eta_row}
+                )),
                 Text Box("Every visible numeric box is sent to the solver. For least-squares fitting, each mechanistic field has an adjacent Locked/Unlocked control. Column geometry, feed composition, and each profile's process recipe remain fixed experimental inputs.", << Set Wrap(760), << Set Font Style("Italic")),
                 {', '.join(component_bodies)}
             )),
@@ -1250,18 +1320,18 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
             V Scroll Box(Size(850, 690), V List Box(
                 H List Box(Text Box("Number of runs to fit [1–5]", << Set Width(240)), lsqRunCount = Combo Box({{"1", "2", "3", "4", "5"}}, << Set({len(saved_selection)}), << Set Width(100), << Set Function(Function({{this}}, UpdateUI(); UpdateLSQRunSummary())))),
                 lsqProfilesStatus = Text Box("", << Set Wrap(740)),
-                Text Box("Attach one measured CV/mL versus UV mAU chromatogram in each run section. The run count immediately shows or hides sections; each section keeps its own file, X units, X=0 origin and process recipe.", << Set Wrap(760)),
+                Text Box("Attach one measured CV/mL versus UV chromatogram in each run section. UV values in AU are converted to mAU; select the signal column explicitly if its heading is generic. The run count immediately shows or hides sections; each section keeps its own file, X units, X=0 origin and process recipe.", << Set Wrap(760)),
                 {', '.join(lsq_run_sections)},
                 Outline Box("Fit settings", V List Box(
                     H List Box(Text Box("Refinement mode", << Set Width(200)), lsqModeBox = Combo Box({{"Normal least-squares: chromatogram only", "Least-squares: chromatogram + species mass% at CV"}}, << Set Width(340), << Set Function(Function({{this}}, UpdateUI())))),
                     lsqTargetRunRow = H List Box(Text Box("Species reference run", << Set Width(200)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(140))),
                     H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
                     Text Box("Leave objective and weights alone for ordinary pointwise least-squares. The optimizer keeps the best improvement and stops when the objective, gradient, or parameter step converges. Each unlocked parameter adds another column solve per numerical Jacobian for every selected run. Progress is saved to least_squares_objective_history.csv. Set individual parameter locks on Model Parameters.", << Set Wrap(740)),
+                    {_nrow("Safety cap: optimizer evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 320)},
                     Outline Box("Optional objective and stopping settings", << Close(1), V List Box(
                         H List Box(Text Box("Objective", << Set Width(240)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
                         H List Box(Text Box("Baseline policy", << Set Width(240)), lsqBaselineMode = Combo Box({{"NONE", "INITIAL_MEDIAN"}}, << Set({1 if cfg['least_squares']['baseline_mode']=='NONE' else 2}), << Set Width(220))),
-                        {_nrow("Fixed detector baseline [mAU]", "lsqBaseline", cfg['least_squares']['detector_baseline'], 240)},
-                        {_nrow("Safety cap: optimizer evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 240)}
+                        {_nrow("Fixed detector baseline [mAU]", "lsqBaseline", cfg['least_squares']['detector_baseline'], 240)}
                     ))
                 )),
                 Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ")),
@@ -1358,8 +1428,15 @@ def _validate_jsl(jsl: str) -> None:
         model_choices = json.loads("[" + model_combo.group(1) + "]")
     except (ValueError, TypeError) as exc:
         raise ValueError("Could not parse model selector choices.") from exc
-    if len(model_choices) != len(MODEL_LABELS) or set(model_choices) != set(MODEL_LABELS.values()):
+    expected_models = [MODEL_LABELS[model] for model in (
+        MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_EDM_CPA,
+        MODEL_TDM_CPA, MODEL_TDM_WANG,
+    )]
+    if sorted(model_choices) != sorted(expected_models):
         raise ValueError(f"Model selector contains unsupported choices: {model_choices}")
+    mode_combo = re.search(r'chromatographyMode\s*=\s*Combo Box\(\s*\{([^{}]*)\}', jsl)
+    if mode_combo is None or json.loads("[" + mode_combo.group(1) + "]") != ["HIC", "ION_EXCHANGE"]:
+        raise ValueError("Chromatography mode selector must retain HIC and ion exchange.")
     forbidden_labels = ("Model template", "Resin template", "Mechanistic model templates")
     for label in re.findall(r'\b(?:Text Box|Outline Box|Button Box)\(\s*"([^"]*)"', jsl):
         for forbidden in forbidden_labels:
