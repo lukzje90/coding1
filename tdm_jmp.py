@@ -600,6 +600,7 @@ Column(dtLSQRuns, "LSQ_Sheet") << Data Type(Character);
 Column(dtLSQRuns, "LSQ_X_Column") << Data Type(Character);
 Column(dtLSQRuns, "LSQ_Signal_Column") << Data Type(Character);
 Column(dtLSQRuns, "LSQ_X_Unit") << Data Type(Character);
+Column(dtLSQRuns, "LSQ_X_Origin") << Data Type(Character);
 
 SetModeCombo = Function({{box, txt}}, {{}},
     If(Uppercase(txt) == "LINEAR", box << Set(2), Uppercase(txt) == "STEP", box << Set(3), box << Set(1));
@@ -718,9 +719,10 @@ SaveLSQReference = Function({{}}, {{r}},
     Column(dtLSQRuns, "LSQ_X_Column")[r] = Trim(Char(lsqXColumn << Get Text));
     Column(dtLSQRuns, "LSQ_Signal_Column")[r] = Trim(Char(lsqSignalColumn << Get Text));
     Column(dtLSQRuns, "LSQ_X_Unit")[r] = lsqXUnit << Get Selected;
+    Column(dtLSQRuns, "LSQ_X_Origin")[r] = lsqXOrigin << Get Selected;
     dtLSQRuns << Save(lsqRunsFile);
 );
-LoadLSQReference = Function({{r}}, {{w, path, unit}},
+LoadLSQReference = Function({{r}}, {{w, path, unit, origin}},
     r = Max(1, Min({MAX_LSQ_PROFILES}, r));
     path = Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r];
     w = Num(Column(dtLSQRuns, "LSQ_Weight")[r]);
@@ -732,6 +734,8 @@ LoadLSQReference = Function({{r}}, {{w, path, unit}},
     lsqSignalColumn << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_Signal_Column")[r]), "", Char(Column(dtLSQRuns, "LSQ_Signal_Column")[r])));
     unit = Uppercase(Char(Column(dtLSQRuns, "LSQ_X_Unit")[r]));
     lsqXUnit << Set(If(unit == "CV", 2, unit == "ML", 3, unit == "MIN", 4, unit == "S", 5, unit == "H", 6, unit == "INDEX", 7, 1));
+    origin = Uppercase(Char(Column(dtLSQRuns, "LSQ_X_Origin")[r]));
+    lsqXOrigin << Set(If(origin == "ELUTION_START", 2, 1));
 );
 ChangeLSQTarget = Function({{r}}, {{}},
     If(!isLoading, SaveLSQReference());
@@ -809,30 +813,10 @@ UpdateLSQRunSummary = Function({{}}, {{r, runName, nPLW, nElution, i, j, summary
             profileText = profileText || If(profileText == "", "", "\\!n") || "Run " || Char(j) || " — " || profileName || ": " || profilePath
         )
     );
-    lsqProfilesStatus << Set Text("Independent LSQ recipes; attached chromatograms: " || Char(profileCount) || "; selected run count: " || Char(lsqRunCount << Get Selected) ||
-        " — fit uses only the runs selected above." ||
-        If(profileCount == 0, "\\!nNo chromatograms attached yet.", "\\!n" || profileText));
-    summary = "Fit target: Run " || Char(r) || " — " || runName || "\\!n" ||
-        "Chromatogram: " || If(Is Empty(Trim(Char(lsqCsvPath << Get Text))), "not attached", Char(lsqCsvPath << Get Text)) || "\\!n" ||
-        "Column: " || Char(columnVolume << Get) || " mL × " || Char(columnLength << Get) || " mm; load capacity: " || LSQRunCellText(r, "Load_Density_mg_mL_resin") ||
-        " g/L resin; required feed volume: " || If(Is Missing(requiredVolume), "—", Char(requiredVolume)) || " mL (" || LSQRunCellText(r, "Load_CV") ||
-        " CV) @ " || LSQRunCellText(r, "Load_Flow_mL_min") || " mL/min; feed: " || LSQRunCellText(r, "Feed_Concentration_mg_mL") ||
-        " mg/mL; load %B " || LSQRunCellText(r, "Load_Start_Percent_B") || "→" || LSQRunCellText(r, "Load_End_Percent_B") ||
-        " (" || LSQRunCellText(r, "Load_Mode") || "); resolution: " || LSQRunCellText(r, "Time_Steps") ||
-        " time steps × " || LSQRunCellText(r, "Axial_Positions") || " axial cells\\!n" ||
-        "Load chemistry: " || LSQRunCellText(r, "Load_Source") || ", pH " || LSQRunCellText(r, "Load_pH") ||
-        ", conductivity " || LSQRunCellText(r, "Load_Conductivity_mS_cm") || " mS/cm\\!n" ||
-        "Buffer A: " || LSQRunCellText(r, "BufferA_Name") || " (pH " || LSQRunCellText(r, "BufferA_pH") ||
-        ", conductivity " || LSQRunCellText(r, "BufferA_Conductivity_mS_cm") ||
-        " mS/cm; ions " || LSQBufferIonSummary(r, "BufferA") || "); Buffer B: " || LSQRunCellText(r, "BufferB_Name") || " (pH " || LSQRunCellText(r, "BufferB_pH") ||
-        ", conductivity " || LSQRunCellText(r, "BufferB_Conductivity_mS_cm") || " mS/cm)";
-    summary = summary || " (ions " || LSQBufferIonSummary(r, "BufferB") || ")";
-    stageText = "\\!nPLWs (" || Char(nPLW) || "):";
-    For(i = 1, i <= nPLW, i++, stageText = stageText || "\\!n" || LSQRunStageSummary(r, "PLW", i));
-    summary = summary || stageText;
-    stageText = "\\!nElution steps (" || Char(nElution) || "):";
-    For(i = 1, i <= nElution, i++, stageText = stageText || "\\!n" || LSQRunStageSummary(r, "Elution", i));
-    lsqRunSummary << Set Text(summary || stageText || "\\!nRun weight: " || LSQRunCellText(r, "LSQ_Weight"));
+    lsqProfilesStatus << Set Text(Char(profileCount) || " chromatogram(s) attached. Fit uses only the selected runs above.");
+    summary = "Run " || Char(r) || " — " || runName || ": load " || LSQRunCellText(r, "Load_CV") ||
+        " CV, " || Char(nPLW) || " wash(es), " || Char(nElution) || " elution step(s). Column volume " || Char(columnVolume << Get) || " mL.";
+    lsqRunSummary << Set Text(summary);
 );
 
 ComputeBatchPHSpan = Function({{}}, {{nRuns, r, i, mn, mx, v, c, stepMode, chemControl, loadMaterialMode, loadMode}},
@@ -1163,39 +1147,43 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
             )),
             "Least-Squares Refinement",
             V Scroll Box(Size(850, 690), V List Box(
-                Text Box("Least-squares has its OWN five process-run setups, entirely separate from the normal batch. Click Edit LSQ process setup above to edit its load, flow, buffers, washes, elution, and resolution in Process Setup. Attach an Excel (.xlsx/.xlsm) or CSV measured chromatogram to each LSQ run. The same unlocked mechanistic parameters are shared by all fitted runs.", << Set Wrap(760)),
-                Outline Box("Global fit profiles (up to {MAX_LSQ_PROFILES})", V List Box(
-                    Text Box("Choose 1–5 INDEPENDENT LSQ runs, then select exactly those setups below. Each selected run must have an attached chromatogram; other attachments are excluded. Each profile uses its own saved load capacity/volume, flow, buffers, PLWs and elution recipe. All profiles share one fitted mechanistic parameter set.", << Set Wrap(740)),
-                    H List Box(Text Box("Number of runs to refine [1-5]", << Set Width(240)), lsqRunCount = Combo Box({{"1", "2", "3", "4", "5"}}, << Set({len(saved_selection)}), << Set Function(Function({{this}}, UpdateUI())))),
+                Text Box("Fit measured UV absorbance (mAU) against column volume (CV) or collected volume (mL). Each LSQ run has its own process recipe; unlocked Model Parameters are fitted across the selected runs.", << Set Wrap(760)),
+                Outline Box("1. Measured chromatogram", V List Box(
+                    H List Box(Text Box("LSQ run", << Set Width(200)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(150), << Set Function(Function({{this}}, If(!isLoading, ChangeLSQTarget(RunNumberFromLabel(this << Get Selected))))))),
+                    lsqRunSummary = Text Box("", << Set Wrap(740)),
+                    H List Box(Text Box("Excel / CSV file", << Set Width(200)), lsqCsvPath = Text Edit Box("", << Set Width(460))),
+                    H List Box(Text Box("X units", << Set Width(200)), lsqXUnit = Combo Box({{"AUTO", "CV", "ML", "MIN", "S", "H", "INDEX"}}, << Set(1), << Set Width(160))),
+                    H List Box(Text Box("X = 0 at", << Set Width(200)), lsqXOrigin = Combo Box({{"RUN_START", "ELUTION_START"}}, << Set(1), << Set Width(160))),
+                    Text Box("Y: UV detector mAU. AUTO detects CV or mL and prefers a UV/mAU column. For an elution-only export, choose ELUTION_START so the measured peak aligns after load and washes. mL is divided by the column volume shown above.", << Set Wrap(740)),
+                    H List Box(Button Box("Attach / validate chromatogram CSV or Excel", AttachLSQCSV()),
+                               Button Box("Edit this run's process recipe", SwitchProcessScope(1, RunNumberFromLabel(lsqTargetRunSelector << Get Selected)); mainTabs << Set(1))),
+                    Outline Box("Advanced column selection", << Close(1), V List Box(
+                        H List Box(Text Box("Excel worksheet (blank = auto)", << Set Width(240)), lsqSheet = Text Edit Box("", << Set Width(380))),
+                        H List Box(Text Box("X column (blank = auto)", << Set Width(240)), lsqXColumn = Text Edit Box("", << Set Width(380))),
+                        H List Box(Text Box("UV mAU column (blank = auto)", << Set Width(240)), lsqSignalColumn = Text Edit Box("", << Set Width(380))),
+                        Text Box("Choose exact headings when an export has several channels. If you override X, set its units above. An optional Weight column supplies per-point weights.", << Set Wrap(700))
+                    ))
+                )),
+                Outline Box("2. Runs to fit", V List Box(
+                    H List Box(Text Box("Number of runs [1–5]", << Set Width(200)), lsqRunCount = Combo Box({{"1", "2", "3", "4", "5"}}, << Set({len(saved_selection)}), << Set Function(Function({{this}}, UpdateUI())))),
                     {', '.join(lsq_selection_rows)},
-                    lsqProfilesStatus = Text Box("", << Set Wrap(740), << Set Height(110))
+                    lsqProfilesStatus = Text Box("", << Set Wrap(740)),
+                    {_nrow("Weight for this LSQ run (>0)", "lsqWeight", 1.0, 240)}
                 )),
-                Outline Box("Mechanistic parameter locks", V List Box(
-                    Text Box("Each mechanistic input has a Locked/Unlocked selector beside its value on the Model Parameters tab. Locked values cannot change during fitting. Column geometry, feed composition and per-profile process recipes remain fixed experimental inputs.", << Set Wrap(740)),
-                    H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked")))
+                Outline Box("3. Fit settings", V List Box(
+                    H List Box(Text Box("Objective", << Set Width(200)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
+                    H List Box(Text Box("Refinement mode", << Set Width(200)), lsqModeBox = Combo Box({{"Normal least-squares: chromatogram only", "Least-squares: chromatogram + species mass% at CV"}}, << Set Width(340), << Set Function(Function({{this}}, UpdateUI())))),
+                    H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
+                    Text Box("Set individual Locked/Unlocked controls on Model Parameters. RAW_SSE fits pointwise mAU error; WEIGHTED_RMSE uses run and optional point weights.", << Set Wrap(740)),
+                    Outline Box("Advanced objective settings", << Close(1), V List Box(
+                        H List Box(Text Box("Baseline policy", << Set Width(240)), lsqBaselineMode = Combo Box({{"NONE", "INITIAL_MEDIAN"}}, << Set({1 if cfg['least_squares']['baseline_mode']=='NONE' else 2}), << Set Width(220))),
+                        {_nrow("Fixed detector baseline [mAU]", "lsqBaseline", cfg['least_squares']['detector_baseline'], 240)},
+                        {_nrow("Maximum solver evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 240)}
+                    ))
                 )),
-                Outline Box("Chromatogram target run and process recipe", V List Box(
-                    H List Box(Text Box("This chromatogram profile", << Set Width(240)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(150), << Set Function(Function({{this}}, If(!isLoading, ChangeLSQTarget(RunNumberFromLabel(this << Get Selected))))))),
-                    lsqRunSummary = Text Box("Select the run represented by this chromatogram.", << Set Wrap(760), << Set Height(340))
-                )),
-                H List Box(Text Box("Least-squares objective", << Set Width(240)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
-                Text Box("RAW_SSE is equation 9: sum of (predicted UV - measured UV)² across selected runs. NORMALIZED_MSE is equal normalized profile MSE. WEIGHTED_RMSE minimizes the square root of run-weighted sample-weighted mean squared error (unit-preserving). Set each run weight below; optional Excel/CSV Weight column controls per-point weights. Only Unlocked mechanistic fields vary.", << Set Wrap(740)),
-                H List Box(Text Box("Reference baseline policy", << Set Width(240)), lsqBaselineMode = Combo Box({{"NONE", "INITIAL_MEDIAN"}}, << Set({1 if cfg['least_squares']['baseline_mode']=='NONE' else 2}), << Set Width(220))),
-                {_nrow("Fixed detector baseline (signal units)", "lsqBaseline", cfg['least_squares']['detector_baseline'], 360)},
-                {_nrow("Maximum solver evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 360)},
-                H List Box(Text Box("Refinement option", << Set Width(240)), lsqModeBox = Combo Box({{"Normal least-squares: chromatogram only", "Least-squares: chromatogram + species mass% at CV"}}, << Set Width(340), << Set Function(Function({{this}}, UpdateUI())))),
-                H List Box(Text Box("Measured chromatogram Excel/CSV path", << Set Width(240)), lsqCsvPath = Text Edit Box("", << Set Width(380))),
-                {_nrow("This LSQ run weight (>0)", "lsqWeight", 1.0, 360)},
-                H List Box(Text Box("Excel worksheet (blank = auto)", << Set Width(240)), lsqSheet = Text Edit Box("", << Set Width(380))),
-                H List Box(Text Box("Reference X column (blank = auto)", << Set Width(240)), lsqXColumn = Text Edit Box("", << Set Width(380))),
-                H List Box(Text Box("Measured signal column (blank = auto)", << Set Width(240)), lsqSignalColumn = Text Edit Box("", << Set Width(380))),
-                H List Box(Text Box("Reference X-axis units", << Set Width(240)), lsqXUnit = Combo Box({{"AUTO", "CV", "ML", "MIN", "S", "H", "INDEX"}}, << Set(1), << Set Width(160))),
-                Text Box("Optional: specify a worksheet and exact measured signal/time-or-volume column headings for Excel files with several detectors. Set axis units when overriding the X column. Weighted RMSE also reads an optional Weight column.", << Set Wrap(740)),
-                Button Box("Attach / validate chromatogram CSV or Excel", AttachLSQCSV()),
-                Button Box("Edit this LSQ run's process setup", SwitchProcessScope(1, RunNumberFromLabel(lsqTargetRunSelector << Get Selected)); mainTabs << Set(1)),
-                Spacer Box(Size(1,6)), Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ")),
-                lsqStatusText = Text Box("", << Set Wrap(760), << Set Height(220)),
+                Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ")),
                 H List Box(Button Box("Open fit report", OpenFitReport())),
+                lsqStatusText = Text Box("", << Set Wrap(760), << Set Height(130)),
                 lsqCompositionPanel = Outline Box("Species mass% reference points", V List Box(
                     Text Box("Enter the expected species mass% at one or more CV positions. Only the target + selected impurities are shown. Each reference CV must sum to 100%.", << Set Wrap(740)),
                     H List Box(Text Box("Reference CV count [1-10]", << Set Width(240)), lsqReferenceCountBox = Combo Box({ref_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI())))),

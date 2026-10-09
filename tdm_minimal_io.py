@@ -1273,7 +1273,7 @@ def _migrate_row_salt_inputs(row: dict[str, Any]) -> dict[str, Any]:
 
 def batch_run_fields() -> list[str]:
     fields = [
-        "Run_Number", "Run_Name", "LSQ_Chromatogram_CSV", "LSQ_Weight", "LSQ_Sheet", "LSQ_X_Column", "LSQ_Signal_Column", "LSQ_X_Unit", "Load_Flow_mL_min", "Feed_Concentration_mg_mL",
+        "Run_Number", "Run_Name", "LSQ_Chromatogram_CSV", "LSQ_Weight", "LSQ_Sheet", "LSQ_X_Column", "LSQ_Signal_Column", "LSQ_X_Unit", "LSQ_X_Origin", "Load_Flow_mL_min", "Feed_Concentration_mg_mL",
         "Load_Amount_Basis", "Load_CV", "Load_Density_mg_mL_resin", "Load_Mode", "Load_Start_Percent_B", "Load_End_Percent_B",
         "Load_Chemistry_Control", "Load_Material_Chemistry_Mode", "Time_Steps", "Axial_Positions",
         "Load_Source", "Load_pH", "Load_Salt_M", "Load_Conductivity_mS_cm",
@@ -1309,6 +1309,7 @@ def default_batch_row(run_number: int) -> dict[str, Any]:
         "LSQ_X_Column": "",
         "LSQ_Signal_Column": "",
         "LSQ_X_Unit": "AUTO",
+        "LSQ_X_Origin": "RUN_START",
         "Load_Flow_mL_min": 1.0,
         "Feed_Concentration_mg_mL": 1.0,
         "Load_Amount_Basis": "LOAD_VOLUME",

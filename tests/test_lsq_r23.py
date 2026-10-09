@@ -101,6 +101,7 @@ class RefinementTests(unittest.TestCase):
         dst = load_lsq_rows()
         self.assertEqual(len(dst), 30)
         self.assertEqual(dst[0]["LSQ_Weight"], "1.0")
+        self.assertEqual(dst[0]["LSQ_X_Origin"], "RUN_START")
         self.assertNotEqual(str(BATCH_RUNS_CSV.resolve()), str(LSQ_RUNS_CSV.resolve()))
         self.assertNotEqual(dst[0]["Run_Name"], src[0]["Run_Name"])
 
@@ -112,8 +113,43 @@ class RefinementTests(unittest.TestCase):
         _validate_jsl(jsl)
         for expected in ["dtLSQRuns", "SwitchProcessScope", "lsqWeight",
                          "WEIGHTED_RMSE", "lsqRunsFile", "activeRunsFile",
-                         "lsqSheet", "lsqXColumn", "lsqSignalColumn", "lsqXUnit"]:
+                         "lsqSheet", "lsqXColumn", "lsqSignalColumn", "lsqXUnit", "lsqXOrigin",
+                         "1. Measured chromatogram", "3. Fit settings"]:
             self.assertIn(expected, jsl)
+
+    def test_conference_cv_and_ml_mau_axes_align_with_solver(self):
+        cfg = config_for()
+        cfg["column"]["volume_mL"] = 2.5
+        cfg["least_squares"]["objective"] = "RAW_SSE"
+        trace = simulate(cfg)["trace"]
+        program = ls._build_program(cfg, np.zeros(1))
+        elution_start = next(program.stage_start_CV[i] for i, stage in enumerate(program.stages)
+                             if stage.kind == "ELUTION")
+        cv = np.asarray(trace["CV"], dtype=float)
+        uv = np.asarray(trace["uv_mAU"], dtype=float)
+        keep = cv >= elution_start
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            whole_run = tmp / "whole_run.xlsx"
+            elution_only = tmp / "conference_elution.csv"
+            write_excel(whole_run, cv, uv, np.ones(len(cv)))
+            with elution_only.open("w", newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["Elution Volume (mL)", "Signal", "UV 280 [mAU]"])
+                writer.writerows(zip((cv[keep] - elution_start) * 2.5,
+                                     np.full(np.count_nonzero(keep), 999.0), uv[keep]))
+            info = ls.inspect_chromatogram_csv(elution_only, x_origin="ELUTION_START")
+            self.assertEqual((info["x_column"], info["x_unit"], info["signal_column"]),
+                             ("Elution Volume (mL)", "ML", "UV 280 [mAU]"))
+            full = ls.load_chromatogram_reference(whole_run, cfg)
+            partial = ls.load_chromatogram_reference(elution_only, cfg, x_origin="ELUTION_START")
+            self.assertTrue(np.allclose(full.cv, cv))
+            self.assertTrue(np.allclose(partial.cv, cv[keep]))
+            self.assertTrue(np.allclose(partial.signal, uv[keep]))
+            residuals, _ = ls._chromatogram_residuals(cfg, partial, trace)
+            self.assertLess(float(np.max(np.abs(residuals))), 1e-8)
+            with self.assertRaisesRegex(ValueError, "requires CV or mL"):
+                ls.inspect_chromatogram_csv(elution_only, x_unit="MIN", x_origin="ELUTION_START")
 
     def test_xlsx_and_csv_weighted_objective_and_optimisation(self):
         true1 = config_for(1)
@@ -121,6 +157,7 @@ class RefinementTests(unittest.TestCase):
         # Change the SECOND LSQ profile recipe so a shared fit truly spans two
         # different chromatographic operating conditions.
         true2["feed"]["total_concentration_mg_mL"] *= 0.8
+        true2["column"]["volume_mL"] = 2.5
         # Build a known true UV reference from the existing mechanistic solver.
         sim1 = simulate(true1)["trace"]
         sim2 = simulate(true2)["trace"]
@@ -135,8 +172,8 @@ class RefinementTests(unittest.TestCase):
             write_excel(xlsx, x1, y1, w1)
             with csvfile.open("w",newline="") as fh:
                 writer = csv.writer(fh)
-                writer.writerow(["CV", "Signal", "Weight"])
-                writer.writerows(zip(x2,y2,w2))
+                writer.writerow(["Volume (mL)", "UV 280 [mAU]", "Weight"])
+                writer.writerows(zip(x2 * true2["column"]["volume_mL"],y2,w2))
             self.assertEqual(ls.inspect_chromatogram_csv(xlsx)["weight_column"], "Weight")
             r1 = ls.load_chromatogram_reference(xlsx, true1)
             self.assertEqual(len(r1.cv), len(x1))
@@ -195,6 +232,7 @@ class RefinementTests(unittest.TestCase):
             row = {"LSQ_Sheet": "Actual target", "LSQ_X_Column": "Sample index",
                    "LSQ_Signal_Column": "Measured response", "LSQ_X_Unit": "INDEX"}
             options = _lsq_reference_column_options(row)
+            self.assertEqual(options["x_origin"], "RUN_START")
             info = ls.inspect_chromatogram_csv(source, **options)
             self.assertEqual(info["signal_column"], "Measured response")
             self.assertEqual(info["weight_column"], "Point Weight")

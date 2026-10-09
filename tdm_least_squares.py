@@ -374,11 +374,10 @@ def _detect_columns(fields: list[str], rows: list[dict[str, str]]) -> tuple[str,
     numeric_fields = [f for f in fields if _column_numeric_count(rows, f) >= 3]
     # A point-weight column is not a detector response or x-axis.
     numeric_fields = [f for f in numeric_fields if _norm_header(f) not in {"weight", "weights", "pointweight", "sampleweight", "lsqweight", "fitweight"}]
-    signal_aliases = [
-        "uvmau", "uv280", "uv", "absorbancemau", "absorbance", "signal", "y",
-        "totalproteingl", "totalgl", "proteingl", "concentrationgl", "response",
-    ]
-    signal_tags = ("uv", "a280", "mau", "abs", "absorbance", "signal", "detector", "response", "intensity", "totalprotein", "totalgl", "proteingl", "concentrationgl", "yaxis")
+    # Prefer an explicitly labelled UV/mAU channel to generic "Signal" when
+    # an instrument export contains several numerical detector channels.
+    signal_aliases = ["uvmau", "uv280mau", "uv280", "uv", "absorbancemau"]
+    signal_tags = ("uv", "a280", "mau", "absorbance")
     signal_field = ""
     for alias in signal_aliases:
         candidate = by_norm.get(alias)
@@ -389,6 +388,18 @@ def _detect_columns(fields: list[str], rows: list[dict[str, str]]) -> tuple[str,
         for field in fields:
             norm = _norm_header(field)
             if field in numeric_fields and any(tag in norm for tag in signal_tags):
+                signal_field = field
+                break
+    if not signal_field:
+        for alias in ("absorbance", "signal", "y", "totalproteingl", "totalgl", "proteingl", "concentrationgl", "response"):
+            candidate = by_norm.get(alias)
+            if candidate in numeric_fields:
+                signal_field = candidate
+                break
+    if not signal_field:
+        for field in fields:
+            norm = _norm_header(field)
+            if field in numeric_fields and any(tag in norm for tag in ("signal", "detector", "response", "intensity", "totalprotein", "concentrationgl", "yaxis")):
                 signal_field = field
                 break
 
@@ -457,10 +468,11 @@ def _select_columns(fields: list[str], rows: list[dict[str, str]], *,
 
 def inspect_chromatogram_csv(path: Path | str, *, sheet_name: str | None = None,
                              x_column: str | None = None, signal_column: str | None = None,
-                             x_unit: str | None = None) -> dict[str, Any]:
+                             x_unit: str | None = None, x_origin: str | None = None) -> dict[str, Any]:
     p = _resolve_chromatogram_path(path)
     fields, rows = _read_numeric_rows(p, sheet_name=sheet_name)
     x_field, signal_field, unit = _select_columns(fields, rows, x_column=x_column, signal_column=signal_column, x_unit=x_unit)
+    origin = _validate_x_origin(x_origin, unit)
     paired = (
         _column_numeric_count(rows, signal_field)
         if x_field == SAMPLE_ORDER_FIELD else
@@ -477,6 +489,7 @@ def inspect_chromatogram_csv(path: Path | str, *, sheet_name: str | None = None,
         "x_column": "sample order (assumed)" if x_field == SAMPLE_ORDER_FIELD else x_field,
         "signal_column": signal_field,
         "x_unit": unit,
+        "x_origin": origin,
         "sheet_name": sheet_name or "auto",
         "columns": fields,
         "x_axis_assumption": assumption,
@@ -524,12 +537,31 @@ def _x_to_cv(x: np.ndarray, x_unit: str, config: dict[str, Any]) -> np.ndarray:
     raise ValueError(f"Unsupported chromatogram x-axis unit: {x_unit}")
 
 
+def _validate_x_origin(x_origin: str | None, x_unit: str) -> str:
+    origin = str(x_origin or "RUN_START").strip().upper()
+    if origin not in {"RUN_START", "ELUTION_START"}:
+        raise ValueError("Reference X-axis zero must be RUN_START or ELUTION_START.")
+    if origin == "ELUTION_START" and x_unit not in {"CV", "ML"}:
+        raise ValueError("Elution-start X-axis zero requires CV or mL units.")
+    return origin
+
+
+def _elution_start_cv(config: dict[str, Any]) -> float:
+    program = _build_program(config, np.zeros(max(1, len(active_components(config))), dtype=float))
+    for index, stage in enumerate(program.stages):
+        if stage.kind == "ELUTION":
+            return float(program.stage_start_CV[index])
+    raise ValueError("The selected LSQ process recipe has no elution stage; elution-start X-axis zero cannot be used.")
+
+
 def load_chromatogram_reference(path: Path | str, config: dict[str, Any], *,
                                 sheet_name: str | None = None, x_column: str | None = None,
-                                signal_column: str | None = None, x_unit: str | None = None) -> ChromatogramReference:
+                                signal_column: str | None = None, x_unit: str | None = None,
+                                x_origin: str | None = None) -> ChromatogramReference:
     p = _resolve_chromatogram_path(path)
     fields, rows = _read_numeric_rows(p, sheet_name=sheet_name)
     x_field, signal_field, unit = _select_columns(fields, rows, x_column=x_column, signal_column=signal_column, x_unit=x_unit)
+    origin = _validate_x_origin(x_origin, unit)
     weights_field = _weight_column(fields)
     pairs: list[tuple[float, float, float]] = []
     if x_field == SAMPLE_ORDER_FIELD:
@@ -553,6 +585,8 @@ def load_chromatogram_reference(path: Path | str, config: dict[str, Any], *,
     y = arr[order, 1]
     weights = arr[order, 2]
     cv = _x_to_cv(x, unit, config)
+    if origin == "ELUTION_START":
+        cv = cv + _elution_start_cv(config)
     finite = np.isfinite(cv) & np.isfinite(y)
     cv, y, weights = cv[finite], y[finite], weights[finite]
     if len(cv) < 3:
@@ -1364,7 +1398,8 @@ def run_global_least_squares_refinement(
                                          sheet_name=profile.get("sheet_name"),
                                          x_column=profile.get("x_column"),
                                          signal_column=profile.get("signal_column"),
-                                         x_unit=profile.get("x_unit"))
+                                         x_unit=profile.get("x_unit"),
+                                         x_origin=profile.get("x_origin"))
         profile_weight = float(profile.get("weight", 1.0))
         if not math.isfinite(profile_weight) or profile_weight <= 0:
             raise ValueError(f"Global-fit profile {index}: run weight must be finite and > 0.")
@@ -1385,6 +1420,7 @@ def run_global_least_squares_refinement(
             "composition_references": profile_refs,
             "run_context": context,
             "weight": profile_weight,
+            "x_origin": _validate_x_origin(profile.get("x_origin"), ref.x_unit),
         })
 
     if mode == MODE_CHROMATOGRAM_AND_COMPOSITION and not any(p["composition_references"] for p in normalized_profiles):
@@ -1698,6 +1734,7 @@ def run_global_least_squares_refinement(
                 "x_column": p["reference"].x_column,
                 "signal_column": p["reference"].signal_column,
                 "x_unit": p["reference"].x_unit,
+                "x_origin": p["x_origin"],
                 "x_axis_assumption": p["reference"].x_axis_assumption,
                 "selected_sheet": p.get("sheet_name", "auto"),
                 "composition_references": p["composition_references"],

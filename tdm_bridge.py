@@ -262,6 +262,7 @@ def _lsq_reference_column_options(row: dict[str, Any]) -> dict[str, str | None]:
         "x_column": str(row.get("LSQ_X_Column") or "").strip() or None,
         "signal_column": str(row.get("LSQ_Signal_Column") or "").strip() or None,
         "x_unit": str(row.get("LSQ_X_Unit") or "AUTO").strip() or "AUTO",
+        "x_origin": str(row.get("LSQ_X_Origin") or "RUN_START").strip() or "RUN_START",
     }
 
 
@@ -426,22 +427,45 @@ def main() -> int:
         save_config(shared, CONFIG_PATH)
 
         if action == "ATTACH_LSQ_CSV":
-            from tdm_least_squares import attach_chromatogram_csv
+            from tdm_least_squares import attach_chromatogram_csv, load_chromatogram_reference
+            from tdm_minimal_model import _build_program
+            import numpy as np
             source = _lsq_profile_csv_path(run_number, _text("tdm_ui_lsq_csv_path"))
             if not source:
                 raise ValueError(f"Enter or choose a chromatogram CSV for LSQ profile Run {run_number}.")
             rows = load_lsq_rows()
             options = _lsq_reference_column_options(rows[run_number - 1])
             info = attach_chromatogram_csv(source, **options)
+            run_cfg = batch_row_to_run_config(rows[run_number - 1])
+            profile_config, _ = apply_batch_shared_parameters(shared_raw, run_cfg)
+            errors = validate_config(profile_config, strict=True)
+            if errors:
+                raise ValueError(f"LSQ Run {run_number} process recipe must be complete before attaching:\n- " + "\n- ".join(errors))
+            reference = load_chromatogram_reference(info["source_path"], profile_config, **options)
+            program = _build_program(profile_config, np.zeros(max(1, len(active_components(profile_config)))))
+            cv_min, cv_max = float(np.min(reference.cv)), float(np.max(reference.cv))
+            if cv_min < -1e-9 or cv_max > program.total_CV + 1e-9:
+                raise ValueError(
+                    f"Measured X converts to {cv_min:.4g}–{cv_max:.4g} CV, outside LSQ Run {run_number}'s "
+                    f"0–{program.total_CV:.4g} CV recipe. Check mL/CV units, column volume, and X=0 origin."
+                )
             rows[run_number - 1]["LSQ_Chromatogram_CSV"] = info["source_path"]
             _save_lsq_profile_csv_path(run_number, info["source_path"])
             run_name = load_lsq_rows()[run_number - 1].get("Run_Name") or f"LSQ Run {run_number}"
             x_warning = f"\nAxis assumption: {info['x_axis_assumption']}" if info.get("x_axis_assumption") else ""
+            x_receipt = (
+                f"Measured mL divided by column volume ({shared_raw['column']['volume_mL']} mL) to align with solver CV."
+                if info["x_unit"] == "ML" else "Measured CV aligned directly with solver CV."
+                if info["x_unit"] == "CV" else f"Measured {info['x_unit']} converted to solver CV using the LSQ recipe."
+            )
+            if info["x_origin"] == "ELUTION_START":
+                x_receipt += " X=0 is the start of elution; load and wash CV are added."
             _write_status(
                 f"Chromatogram attached to LSQ profile Run {run_number} — {run_name}.\n"
                 f"Active model folder: {PROJECT_DIR}\n"
                 f"Selected chromatogram: {info['source_path']}\n"
-                f"Detected x column: {info['x_column']} ({info['x_unit']}); signal: {info['signal_column']}; points: {info['rows']}.{x_warning}\n"
+                f"X: {info['x_column']} ({info['x_unit']}, zero at {info['x_origin']}); Y: {info['signal_column']} (UV mAU unless labelled g/L); points: {info['rows']}.\n"
+                f"Aligned measured range: {cv_min:.4g}–{cv_max:.4g} CV; saved recipe: 0–{program.total_CV:.4g} CV. {x_receipt}{x_warning}\n"
                 f"Independent process setup: {LSQ_RUNS_CSV}"
             )
             return 0
