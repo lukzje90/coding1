@@ -1,0 +1,39 @@
+{
+  "build": "2026-10-07-R16",
+  "full_resolution": {
+    "time_steps": 1400,
+    "axial_positions": 100
+  },
+  "peak_CV": 11.85142857142857,
+  "R15_peak_CV": 11.85142857142857,
+  "before_elution_percent": 7.0009960791336415e-279,
+  "mass_balance": {
+    "input_g": 0.001,
+    "outlet_g": 0.0010000034975312696,
+    "column_inventory_g": 9.6684213040382e-91,
+    "closure_error_g": -3.4975312695941646e-09,
+    "closure_error_percent_of_input": -0.00034975312695941646
+  },
+  "elapsed_seconds": 8.382625781999877,
+  "model": "EDM_LANGMUIR",
+  "buffer_chemistry": {
+    "buffer_A": {
+      "pH": 6.0,
+      "salt_input_mode": "CONDUCTIVITY",
+      "salt_concentration_M": 0.1,
+      "conductivity_mS_cm": 5.0,
+      "ionic_strength_source": "SALT_PROXY",
+      "ionic_strength_M": 0.1,
+      "conductivity_source": "ENTERED"
+    },
+    "buffer_B": {
+      "pH": 6.0,
+      "salt_input_mode": "CONDUCTIVITY",
+      "salt_concentration_M": 2.0,
+      "conductivity_mS_cm": 100.0,
+      "ionic_strength_source": "SALT_PROXY",
+      "ionic_strength_M": 2.0,
+      "conductivity_source": "ENTERED"
+    }
+  }
+}

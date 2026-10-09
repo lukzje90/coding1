@@ -1,0 +1,54 @@
+{
+  "build": "2026-10-07-R15",
+  "model": "EDM_LANGMUIR",
+  "mode": "HIC",
+  "default_saved_run": 1,
+  "single_target_no_impurities": true,
+  "shared_inputs_and_saved_run_verified": true,
+  "generated_JSL_defaults_verified": true,
+  "other_saved_run_recipes_preserved": true,
+  "solver_logic_unchanged_from_R14": true,
+  "native_JMP_executed": false,
+  "synthetic_parameters_not_calibrated_to_sample": true,
+  "numerics": {
+    "time_steps": 1400,
+    "axial_positions": 100
+  },
+  "preset_values": {
+    "column.volume_mL": 1.0,
+    "column.length_mm": 50.0,
+    "column.flow_mL_min": 1.0,
+    "edm.total_bed_porosity": 0.75,
+    "components[0].qmax_g_L": 100.0,
+    "components[0].b_L_g": 0.001,
+    "components[0].salt_sensitivity_per_M": 6.0,
+    "components[0].D_app_mm2_s": 0.067,
+    "conversion.uv_to_protein_mAU_L_g": 1000.0,
+    "conversion.conductivity_to_salt_M_per_mS_cm": 0.02,
+    "system.buffer_dispersion_mL": 0.1,
+    "system.salt_dispersion_mm2_s": 0.05,
+    "system.uv_dead_volume_mL": 0.15,
+    "system.conductivity_dead_volume_mL": 0.3,
+    "process.buffer_A.conductivity_mS_cm": 5.0,
+    "process.buffer_B.conductivity_mS_cm": 100.0
+  },
+  "total_CV": 17.0,
+  "elution_start_CV": 5.0,
+  "significant_peak_count": 1,
+  "peak_CV": 11.85142857142857,
+  "peak_UV_mAU": 4348.618106320186,
+  "FWHM_CV": 0.22495759605856547,
+  "before_elution_percent_of_load": 7.0009960791336415e-279,
+  "recovery_percent": 100.00036586229068,
+  "mass_balance": {
+    "Target protein": {
+      "input_g": 0.001,
+      "outlet_g": 0.0010000036586229068,
+      "column_inventory_g": 0.0,
+      "closure_error_g": -3.658622906802661e-09,
+      "closure_error_percent_of_input": -0.0003658622906802661
+    }
+  },
+  "matches_previously_tested_parameter_set": true,
+  "current_result_fingerprint_verified": true
+}

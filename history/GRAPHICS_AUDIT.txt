@@ -1,0 +1,18 @@
+Graphics audit
+==============
+
+1. HTML result/report buttons now use JSL Web(path) rather than Open(path).
+   Open() treats HTML as an importable file/data source; Web() is the JSL utility
+   intended to open a URL or local file in the system web browser.
+2. Result SVG now has explicit dimensions, white background, dark axes/ticks,
+   responsive HTML CSS, and six distinct series colours.
+3. Legend was changed to a two-column/three-row layout so target + five
+   impurities all remain inside the SVG viewBox.
+4. Standalone SVG is parsed as valid XML in verification. Result HTML and batch
+   gallery references are generated from the actual solver output.
+5. The verifier runs a six-species graphic test and checks that all six legend
+   labels are present and inside the viewBox.
+6. Native JMP itself is not installed in this build environment, so final
+   on-screen JMP rendering cannot be physically clicked here. The generated JSL,
+   file-opening method, SVG/HTML structure, solver output and file references are
+   all validated automatically.

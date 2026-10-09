@@ -1,0 +1,59 @@
+{
+  "build": "2026-10-08-R19",
+  "checks": [
+    "All four models transport salt, ionic strength and conductivity independently; sulfate stoichiometry is preserved",
+    "Saved-run round trip preserves blanks, chosen salt inputs, direct endpoints and distinct per-run buffers",
+    "Selected chemistry is required with no silent fallback; legacy conductivity priority and salt-only migration work",
+    "SET_POINT, STEP and LINEAR endpoint programs use the selected analytical salt",
+    "Generated JMP controls save salt and mode before calling the bridge; JSL delimiters are balanced",
+    "EDM_CPA: high-salt retention, gradient recovery and low-salt breakthrough respond with conductivity held fixed",
+    "EDM_LANGMUIR: high-salt retention, gradient recovery and low-salt breakthrough respond with conductivity held fixed",
+    "TDM_CPA: high-salt retention, gradient recovery and low-salt breakthrough respond with conductivity held fixed",
+    "TDM_LANGMUIR: high-salt retention, gradient recovery and low-salt breakthrough respond with conductivity held fixed",
+    "Native CPA ion-exchange salt screening is retained independently of the HIC extension"
+  ],
+  "metrics": [
+    {
+      "model": "EDM_CPA",
+      "before_elution_percent": 0.0,
+      "gradient_recovery_percent": 99.99999999999959,
+      "high_salt_hold_recovery_percent": 0.0,
+      "low_salt_before_elution_percent": 100.01977706421319,
+      "peak_CV": 9.75,
+      "closure_error_percent": 4.119968255444917e-13,
+      "equivalent_input_max_UV_difference_mAU": 5.328444103724905e-07
+    },
+    {
+      "model": "EDM_LANGMUIR",
+      "before_elution_percent": 4.896765301720164e-65,
+      "gradient_recovery_percent": 99.9988429673808,
+      "high_salt_hold_recovery_percent": 1.4965245012130587e-55,
+      "low_salt_before_elution_percent": 99.99910173548042,
+      "peak_CV": 9.72,
+      "closure_error_percent": 0.0011570326192153826,
+      "equivalent_input_max_UV_difference_mAU": 0.020209111618441966
+    },
+    {
+      "model": "TDM_CPA",
+      "before_elution_percent": 1.5709485136925676e-22,
+      "gradient_recovery_percent": 99.99683119526505,
+      "high_salt_hold_recovery_percent": 9.382127951085691e-08,
+      "low_salt_before_elution_percent": 99.99786533365754,
+      "peak_CV": 9.75,
+      "closure_error_percent": 0.0031688047420759587,
+      "equivalent_input_max_UV_difference_mAU": 0.00940970523629403
+    },
+    {
+      "model": "TDM_LANGMUIR",
+      "before_elution_percent": 6.61651669409254e-13,
+      "gradient_recovery_percent": 100.00181478738732,
+      "high_salt_hold_recovery_percent": 6.690755804605928e-13,
+      "low_salt_before_elution_percent": 99.99915361519032,
+      "peak_CV": 9.72,
+      "closure_error_percent": -0.0018147873871827282,
+      "equivalent_input_max_UV_difference_mAU": 0.005170824721062672
+    }
+  ],
+  "elapsed_seconds": 92.84287439500008,
+  "scope": "Synthetic numerical and saved-run/JSL checks; no experimental calibration or native JMP execution"
+}

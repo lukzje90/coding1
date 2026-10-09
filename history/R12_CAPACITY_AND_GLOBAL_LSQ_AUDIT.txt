@@ -1,0 +1,48 @@
+R12 CAPACITY AND GLOBAL LEAST-SQUARES VERIFICATION
+=================================================
+
+Changes
+-------
+- The JMP load-basis selector writes canonical CAPACITY or LOAD_VOLUME values to the
+  saved run table. Older display labels such as "Capacity [g/L resin]" are accepted.
+- Capacity mode derives load CV as capacity [g/L resin] divided by feed concentration
+  [mg/mL]. Since these units are numerically equivalent to mg/mL resin and mg/mL feed,
+  the ratio is CV. Required total feed volume is then load CV × column volume.
+- The solver run receipt records the selected basis, capacity, derived CV, derived mL,
+  and total input protein mass. The saved-batch summary reports capacity and feed volume.
+- Up to five saved runs with attached chromatogram CSVs are fitted together. Each run
+  retains its own flow, feed, buffers, load basis, PLWs, elution and numerical settings;
+  the optimizer applies one shared mechanistic parameter vector to all profiles.
+- The normalized objective gives each chromatogram equal weight. Per-parameter locks,
+  Lock all and Unlock all controls, an objective history log and a per-profile report are
+  included.
+- The bridge now uses the canonical file path returned by the CSV inspector when building
+  the global-fit profiles.
+
+Verification performed
+----------------------
+- `python -m py_compile` passed for the I/O, model, JMP generator, bridge, least-squares,
+  and verification modules.
+- Generated JSL passed `_validate_jsl`; it contains the load-basis token mapping, capacity
+  volume summary, global profile count, lock controls and lock-state handoff.
+- Automated capacity-basis check: 12 g/L resin at 3 mg/mL feed and a 2.5 mL column
+  produces 4 CV, 10 mL total feed and 0.03 g input protein. A stale saved 99 CV value is
+  replaced. Volume mode was separately checked to derive capacity from CV × feed
+  concentration.
+- Global fitter check: two synthetic chromatograms with distinct process recipes and
+  column geometries were evaluated together with all candidate parameters locked; both
+  profiles and their recipes were present in the report/settings output.
+- JMP bridge route check: attached CSVs to two different saved runs and ran one global
+  refinement. The status reported both profile names and metrics; both had finite fit
+  metrics and the result was accepted.
+- `python verify_model.py --buttons-only` passed, including saved run execution, batch
+  results, CSV attachment and a two-profile global fit.
+- The final clean `python -u verify_model.py` run passed all graphics, buffer, inline-%B,
+  salt, ion, pH-gradient, classic-UI and solver checks, including capacity handling,
+  chromatogram refinement and the two-profile bridge route.
+
+Runtime boundary
+----------------
+JMP itself is not installed in the automated build environment. The generated JSL is
+structurally validated and its Python bridge routes execute end to end, but native JMP UI
+clicking and JMP 19's embedded Python runtime cannot be exercised here.

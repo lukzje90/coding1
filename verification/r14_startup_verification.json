@@ -1,0 +1,26 @@
+{
+  "build": "2026-10-01-R14",
+  "startup_UV_exactly_matches_R13": true,
+  "qmax_values_g_L": [
+    100.0,
+    100.0
+  ],
+  "volume_basis": "non-mobile stationary phase",
+  "before_elution_percent": 2.0350786206760166e-70,
+  "mass_balance": {
+    "Target protein": {
+      "input_g": 0.0007000000000000001,
+      "outlet_g": 0.0007000259660206165,
+      "column_inventory_g": 0.0,
+      "closure_error_g": -2.5966020616432703e-08,
+      "closure_error_percent_of_input": -0.0037094315166332423
+    },
+    "Impurity 1": {
+      "input_g": 0.0003,
+      "outlet_g": 0.0003000013714983453,
+      "column_inventory_g": 0.0,
+      "closure_error_g": -1.3714983453398319e-09,
+      "closure_error_percent_of_input": -0.0004571661151132773
+    }
+  }
+}

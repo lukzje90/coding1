@@ -1,0 +1,53 @@
+R7 TRACE RESPONSE AND RESULTS TABLE AUDIT
+=========================================
+
+R8 supersession
+---------------
+R8 adds the HIC salt-dependent exponentially modified competitive Langmuir isotherm.
+Competitive Langmuir is no longer salt-independent in the current package. Its local
+affinity is multiplied by exp(k_s,i × m_s), and both EDM and TDM chromatograms respond
+to programmed salt/conductivity. See `R8_HIC_SALT_DEPENDENCE_AUDIT.txt`. The findings
+below document R7 behavior only.
+
+Build
+-----
+2026-09-30-R7
+
+Changes
+-------
+- The output CSV now includes `percent_B` for every reported point, alongside `CV`,
+  `time_min`, and `flow_mL_min`. It is blank for direct endpoint-chemistry stages where
+  no Buffer A/B percent is defined.
+- The results graphic keeps CV on the horizontal axis, adds an elapsed-time scale above
+  it, and adds a pointwise programmed-%B panel aligned below the protein chromatogram.
+  Stage boundaries continue to label Load, each PLW and each Elution across the chart.
+- The output %B values use the same outlet chemistry delay as the program's salt and
+  conductivity outputs. Buffer A load reports 0% B; Buffer B load reports 100% B.
+- Competitive Langmuir remains independent of pH and salt. A %B edit updates the result
+  table and process panel for Langmuir, while CPA allows the resulting chemistry to
+  change the predicted protein trace.
+- Verification edits a saved run table row one parameter at a time, runs through the
+  same bridge action used by the JMP buttons, and checks the resulting CSV and SVG for
+  CV, flow, and %B changes. It also checks that only CPA's protein curve responds to %B.
+
+Verification
+------------
+- Python modules compile.
+- Paired output-file checks confirm that changing CV updates total/end CV and stage
+  markers, changing flow updates pointwise flow/time and the elapsed-time axis, and
+  changing %B updates the point table and the plotted %B program.
+- Paired CPA results confirm that a meaningful %B gradient change alters the protein
+  curve. Paired Competitive Langmuir results confirm that %B does not alter its
+  salt-independent protein curve.
+- The bridge test edits saved-run CSV fields for CV, flow and %B separately, then runs
+  `RUN_SELECTED` each time and reads the generated result files. It restores the original
+  row before testing saved-batch execution.
+- `python3 verify_model.py --buttons-only` and the full `python3 verify_model.py` suite
+  are run for this package build.
+
+JMP verification boundary
+-------------------------
+Native JMP is not installed in this environment. The generated JSL save callbacks are
+checked, and the saved-run table to Python bridge to CSV/SVG execution path is exercised
+with separate parameter edits. The actual controls and table rendering still require a
+native JMP run on the user's installation.

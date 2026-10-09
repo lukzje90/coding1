@@ -1,0 +1,142 @@
+[1/22] stacked classic UI structure, direct editable controls and buffer chemistry
+[2/22] exact per-model parameter contracts
+[3/22] hidden process values do not become hidden model requirements
+[4/22] JMP-to-Python direct parameter mapping
+[5/22] 30-run storage and PLW/elution row mapping
+[6/22] all four solvers with restored multistep operating program
+[6a] HIC salt-dependent competitive Langmuir responds in both column solvers
+[7/22] process stage mode, conductivity conversion and variable-flow semantics
+[8/22] shared mechanistic parameters are locked across batch runs
+[9/22] run-specific numerical resolution feeds the solvers
+[10/22] limited axial transport reduces grid smearing and preserves mass balance
+[11/22] results include the exact run recipe, stage markers, and stale-result rejection
+[12/22] both least-squares objective modes consume raw CSV + optional composition
+[13/22] feed mass% and UV conversion are consumed, not display-only
+[14/22] conductivity × required conversion factor is the sole salt input
+[15/22] Buffer A/B salt calculation and TDM ion-derived ionic strength feed solver
+[16/22] PLW/elution pH + salt gradients feed both CPA column models
+[17/22] six-species legend and browser-opening paths are not clipped/imported as HTML tables
+[18/22] Buffer B % gradients resolve from Buffer A/B and feed CPA calculations
+[19/22] inline %B run inputs propagate through all four model programs and outputs
+[19a] CV, flow and %B edits update result tables and chromatogram axes
+[20/22] mass-balance integration works when NumPy has no trapz attribute
+[21/22] opening another extraction and each action refreshes JMP persistent Python imports
+[22/22] raw CSV attachment, composition fit improvement, and JMP parameter apply
+    fit objective: 31615.9 -> 1079.06
+[23/23] execute JMP bridge routes for save, run, freshness, batch, CSV attach and fit
+Model parameters saved. Direct input boxes are authoritative; no templates are used.
+Selected batch: 2 run(s). Shared mechanistic values are locked across those runs.
+ERROR: Run validation failed:
+- Target protein qmax,i [mg/mL stationary phase] is required.
+
+Traceback (most recent call last):
+  File "/workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/tdm_bridge.py", line 507, in main
+    raise ValueError("Run validation failed:\n- " + "\n- ".join(errors))
+ValueError: Run validation failed:
+- Target protein qmax,i [mg/mL stationary phase] is required.
+
+Run 1 — Button audit run 1 completed successfully.
+Recipe used: Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL; 14.6 CV total (Load 10 CV @ 1 mL/min [0–10 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), PLW 1 0.47 CV @ 1.35 mL/min [10–10.47 CV] (%B 12→34) (salt 0.164→0.373 M; conductivity 16.4→37.3 mS/cm), PLW 2 0.31 CV @ 0.78 mL/min [10.47–10.78 CV] (%B 34→55) (salt 0.373→0.5725 M; conductivity 37.3→57.25 mS/cm), PLW 3 0.22 CV @ 1.7 mL/min [10.78–11 CV] (%B 55→80) (salt 0.5725→0.81 M; conductivity 57.25→81 mS/cm), Elution 1 1.26 CV @ 0.63 mL/min [11–12.26 CV] (%B 21→66) (salt 0.2495→0.677 M; conductivity 24.95→67.7 mS/cm), Elution 2 2.34 CV @ 1.44 mL/min [12.26–14.6 CV] (%B 66→93) (salt 0.677→0.9335 M; conductivity 67.7→93.35 mS/cm))
+Active mechanistic inputs consumed: 20
+HTML: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.html
+CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.csv
+SVG: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.svg
+Run receipt: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results_manifest.json
+Run 1 — Button audit run 1 completed successfully.
+Recipe used: Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL; 14.68 CV total (Load 10 CV @ 1 mL/min [0–10 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), PLW 1 0.55 CV @ 1.35 mL/min [10–10.55 CV] (%B 12→34) (salt 0.164→0.373 M; conductivity 16.4→37.3 mS/cm), PLW 2 0.31 CV @ 0.78 mL/min [10.55–10.86 CV] (%B 34→55) (salt 0.373→0.5725 M; conductivity 37.3→57.25 mS/cm), PLW 3 0.22 CV @ 1.7 mL/min [10.86–11.08 CV] (%B 55→80) (salt 0.5725→0.81 M; conductivity 57.25→81 mS/cm), Elution 1 1.26 CV @ 0.63 mL/min [11.08–12.34 CV] (%B 21→66) (salt 0.2495→0.677 M; conductivity 24.95→67.7 mS/cm), Elution 2 2.34 CV @ 1.44 mL/min [12.34–14.68 CV] (%B 66→93) (salt 0.677→0.9335 M; conductivity 67.7→93.35 mS/cm))
+Active mechanistic inputs consumed: 20
+HTML: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.html
+CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.csv
+SVG: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.svg
+Run receipt: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results_manifest.json
+Run 1 — Button audit run 1 completed successfully.
+Recipe used: Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL; 14.6 CV total (Load 10 CV @ 1 mL/min [0–10 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), PLW 1 0.47 CV @ 2.15 mL/min [10–10.47 CV] (%B 12→34) (salt 0.164→0.373 M; conductivity 16.4→37.3 mS/cm), PLW 2 0.31 CV @ 0.78 mL/min [10.47–10.78 CV] (%B 34→55) (salt 0.373→0.5725 M; conductivity 37.3→57.25 mS/cm), PLW 3 0.22 CV @ 1.7 mL/min [10.78–11 CV] (%B 55→80) (salt 0.5725→0.81 M; conductivity 57.25→81 mS/cm), Elution 1 1.26 CV @ 0.63 mL/min [11–12.26 CV] (%B 21→66) (salt 0.2495→0.677 M; conductivity 24.95→67.7 mS/cm), Elution 2 2.34 CV @ 1.44 mL/min [12.26–14.6 CV] (%B 66→93) (salt 0.677→0.9335 M; conductivity 67.7→93.35 mS/cm))
+Active mechanistic inputs consumed: 20
+HTML: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.html
+CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.csv
+SVG: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.svg
+Run receipt: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results_manifest.json
+Run 1 — Button audit run 1 completed successfully.
+Recipe used: Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL; 14.6 CV total (Load 10 CV @ 1 mL/min [0–10 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), PLW 1 0.47 CV @ 1.35 mL/min [10–10.47 CV] (%B 20→60) (salt 0.24→0.62 M; conductivity 24→62 mS/cm), PLW 2 0.31 CV @ 0.78 mL/min [10.47–10.78 CV] (%B 34→55) (salt 0.373→0.5725 M; conductivity 37.3→57.25 mS/cm), PLW 3 0.22 CV @ 1.7 mL/min [10.78–11 CV] (%B 55→80) (salt 0.5725→0.81 M; conductivity 57.25→81 mS/cm), Elution 1 1.26 CV @ 0.63 mL/min [11–12.26 CV] (%B 21→66) (salt 0.2495→0.677 M; conductivity 24.95→67.7 mS/cm), Elution 2 2.34 CV @ 1.44 mL/min [12.26–14.6 CV] (%B 66→93) (salt 0.677→0.9335 M; conductivity 67.7→93.35 mS/cm))
+Active mechanistic inputs consumed: 20
+HTML: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.html
+CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.csv
+SVG: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.svg
+Run receipt: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results_manifest.json
+Run 1 — Button audit run 1 completed successfully.
+Recipe used: Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL; 14.6 CV total (Load 10 CV @ 1 mL/min [0–10 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), PLW 1 0.47 CV @ 1.35 mL/min [10–10.47 CV] (%B 12→34) (salt 0.164→0.373 M; conductivity 16.4→37.3 mS/cm), PLW 2 0.31 CV @ 0.78 mL/min [10.47–10.78 CV] (%B 34→55) (salt 0.373→0.5725 M; conductivity 37.3→57.25 mS/cm), PLW 3 0.22 CV @ 1.7 mL/min [10.78–11 CV] (%B 55→80) (salt 0.5725→0.81 M; conductivity 57.25→81 mS/cm), Elution 1 1.26 CV @ 0.63 mL/min [11–12.26 CV] (%B 21→66) (salt 0.2495→0.677 M; conductivity 24.95→67.7 mS/cm), Elution 2 2.34 CV @ 1.44 mL/min [12.26–14.6 CV] (%B 66→93) (salt 0.677→0.9335 M; conductivity 67.7→93.35 mS/cm))
+Active mechanistic inputs consumed: 20
+HTML: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.html
+CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.csv
+SVG: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.svg
+Run receipt: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results_manifest.json
+Run 1 — Saved conductivity salt test completed successfully.
+Recipe used: Run 1 — Saved conductivity salt test: load capacity 0.8 g/L resin; required feed volume 0.4 mL; 5.4 CV total (Load 0.4 CV @ 1 mL/min [0–0.4 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), Elution 1 5 CV @ 1 mL/min [0.4–5.4 CV] (%B 0→100) (salt 0.05→0.05 M; conductivity 5→5 mS/cm))
+Active mechanistic inputs consumed: 20
+HTML: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.html
+CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.csv
+SVG: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.svg
+Run receipt: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results_manifest.json
+Run 1 — Saved conductivity salt test completed successfully.
+Recipe used: Run 1 — Saved conductivity salt test: load capacity 0.8 g/L resin; required feed volume 0.4 mL; 5.4 CV total (Load 0.4 CV @ 1 mL/min [0–0.4 CV] (%B 0→0) (salt 0.75→0.75 M; conductivity 75→75 mS/cm), Elution 1 5 CV @ 1 mL/min [0.4–5.4 CV] (%B 0→100) (salt 0.75→0.75 M; conductivity 75→75 mS/cm))
+Active mechanistic inputs consumed: 20
+HTML: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.html
+CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.csv
+SVG: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.svg
+Run receipt: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results_manifest.json
+Run 1 — Saved conductivity salt test completed successfully.
+Recipe used: Run 1 — Saved conductivity salt test: load capacity 0.8 g/L resin; required feed volume 0.4 mL; 5.4 CV total (Load 0.4 CV @ 1 mL/min [0–0.4 CV] (%B 0→0) (salt 1.5→1.5 M; conductivity 75→75 mS/cm), Elution 1 5 CV @ 1 mL/min [0.4–5.4 CV] (%B 0→100) (salt 1.5→1.5 M; conductivity 75→75 mS/cm))
+Active mechanistic inputs consumed: 20
+HTML: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.html
+CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.csv
+SVG: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.svg
+Run receipt: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results_manifest.json
+    conductivity 5→75 mS/cm changed salt by 0.700 M and chromatogram by 0.704594 g/L; with conductivity fixed at 75, factor 0.01→0.02 changed chromatogram by 0.272133 g/L
+Run 1 — Button audit run 1 completed successfully.
+Recipe used: Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL; 14.6 CV total (Load 10 CV @ 1 mL/min [0–10 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), PLW 1 0.47 CV @ 1.35 mL/min [10–10.47 CV] (%B 12→34) (salt 0.164→0.373 M; conductivity 16.4→37.3 mS/cm), PLW 2 0.31 CV @ 0.78 mL/min [10.47–10.78 CV] (%B 34→55) (salt 0.373→0.5725 M; conductivity 37.3→57.25 mS/cm), PLW 3 0.22 CV @ 1.7 mL/min [10.78–11 CV] (%B 55→80) (salt 0.5725→0.81 M; conductivity 57.25→81 mS/cm), Elution 1 1.26 CV @ 0.63 mL/min [11–12.26 CV] (%B 21→66) (salt 0.2495→0.677 M; conductivity 24.95→67.7 mS/cm), Elution 2 2.34 CV @ 1.44 mL/min [12.26–14.6 CV] (%B 66→93) (salt 0.677→0.9335 M; conductivity 67.7→93.35 mS/cm))
+Active mechanistic inputs consumed: 20
+HTML: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.html
+CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.csv
+SVG: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results.svg
+Run receipt: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/latest_results_manifest.json
+RESULT_CURRENT: Result matches Run 1 — Button audit run 1; build 2026-10-01-R13.
+RESULT_STALE: Current settings differ from the settings used for this chromatogram. Run the selected model again.
+Batch completed: 2 run(s).
+Recipes used:
+Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL; 14.6 CV total (Load 10 CV @ 1 mL/min [0–10 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), PLW 1 0.47 CV @ 1.35 mL/min [10–10.47 CV] (%B 12→34) (salt 0.164→0.373 M; conductivity 16.4→37.3 mS/cm), PLW 2 0.31 CV @ 0.78 mL/min [10.47–10.78 CV] (%B 34→55) (salt 0.373→0.5725 M; conductivity 37.3→57.25 mS/cm), PLW 3 0.22 CV @ 1.7 mL/min [10.78–11 CV] (%B 55→80) (salt 0.5725→0.81 M; conductivity 57.25→81 mS/cm), Elution 1 1.26 CV @ 0.63 mL/min [11–12.26 CV] (%B 21→66) (salt 0.2495→0.677 M; conductivity 24.95→67.7 mS/cm), Elution 2 2.34 CV @ 1.44 mL/min [12.26–14.6 CV] (%B 66→93) (salt 0.677→0.9335 M; conductivity 67.7→93.35 mS/cm))
+Run 2 — Button audit run 2: load capacity 0.4 g/L resin; required feed volume 0.2 mL; 0.32 CV total (Load 0.2 CV @ 1 mL/min [0–0.2 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), Elution 1 0.12 CV @ 1 mL/min [0.2–0.32 CV] (%B 0→100) (salt 0.05→1 M; conductivity 5→100 mS/cm))
+Shared model fingerprint: 5725d69b3f8c24dd16a17eac6a7f120851c4f18fe6b73adf2253e7af62ad5568
+Batch result folder: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/batch_results/batch_20261001T120129Z_0318ae30
+Summary: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/tdm_batch_summary.csv
+Gallery: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/tdm_batch_gallery.html
+Batch completed: 2 run(s).
+Recipes used:
+Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL; 14.6 CV total (Load 10 CV @ 1 mL/min [0–10 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), PLW 1 0.47 CV @ 1.35 mL/min [10–10.47 CV] (%B 12→34) (salt 0.164→0.373 M; conductivity 16.4→37.3 mS/cm), PLW 2 0.31 CV @ 0.78 mL/min [10.47–10.78 CV] (%B 34→55) (salt 0.373→0.5725 M; conductivity 37.3→57.25 mS/cm), PLW 3 0.22 CV @ 1.7 mL/min [10.78–11 CV] (%B 55→80) (salt 0.5725→0.81 M; conductivity 57.25→81 mS/cm), Elution 1 1.26 CV @ 0.63 mL/min [11–12.26 CV] (%B 21→66) (salt 0.2495→0.677 M; conductivity 24.95→67.7 mS/cm), Elution 2 2.34 CV @ 1.44 mL/min [12.26–14.6 CV] (%B 66→93) (salt 0.677→0.9335 M; conductivity 67.7→93.35 mS/cm))
+Run 2 — Button audit run 2: load capacity 0.4 g/L resin; required feed volume 0.2 mL; 0.32 CV total (Load 0.2 CV @ 1 mL/min [0–0.2 CV] (%B 0→0) (salt 0.05→0.05 M; conductivity 5→5 mS/cm), Elution 1 0.12 CV @ 1 mL/min [0.2–0.32 CV] (%B 0→100) (salt 0.05→1 M; conductivity 5→100 mS/cm))
+Shared model fingerprint: 5725d69b3f8c24dd16a17eac6a7f120851c4f18fe6b73adf2253e7af62ad5568
+Batch result folder: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/batch_results/batch_20261001T120130Z_eeb1d45f
+Summary: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/tdm_batch_summary.csv
+Gallery: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/tdm_batch_gallery.html
+Chromatogram attached to LSQ profile Run 2 — Button audit run 2.
+Active model folder: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model
+Selected CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/run_2_target.csv
+Detected x column: CV (CV); signal: UV_mAU; points: 51.
+Attached copy: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/least_squares_reference_chromatogram.csv
+Chromatogram attached to LSQ profile Run 1 — Button audit run 1.
+Active model folder: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model
+Selected CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/run_1_target.csv
+Detected x column: CV (CV); signal: UV_mAU; points: 51.
+Attached copy: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/least_squares_reference_chromatogram.csv
+Least-squares refinement completed.
+Global profiles fitted: 2 (objective: RAW_SSE).
+Run 1 — Button audit run 1: 51 points, normalized NRMSE 1.83112e-09
+Run 2 — Button audit run 2: 51 points, normalized NRMSE 0
+Mode: CHROMATOGRAM
+Initial objective: 2.736038e-11
+Final objective: 2.736038e-11
+Objective improvement: 0%
+Optimizer converged: True; `xtol` termination condition is satisfied.
+Accepted/applied to shared batch parameters: True
+Report: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/least_squares_fit_report.html
+Objective history CSV: /workspace/scratch/fcaab82a7047/TDM22_HIC_LSQ_R13/tmp4vr3jfr8/model/least_squares_objective_history.csv
+ALL GRAPHICS / BUFFER / INLINE-%B / SALT / ION / P_H-GRADIENT / CLASSIC-UI / SOLVER CHECKS PASSED

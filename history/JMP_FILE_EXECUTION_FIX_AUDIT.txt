@@ -1,0 +1,29 @@
+JMP Python Submit File execution fix
+====================================
+
+Problem reproduced from user traceback:
+    NameError: name '__file__' is not defined
+
+Root cause:
+    tdm_bridge.py was run by JMP through Python Submit File(). In this execution mode JMP may execute the file as submitted source without defining Python __file__. The bridge previously evaluated Path(__file__) at module load time.
+
+Fix:
+    tdm_bridge.py now resolves the project directory in this order:
+      1. tdm_project_dir sent by 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl
+      2. tdm_project_dir_posix
+      3. TDM_PROJECT_DIR environment variable set by open_tdm_setup.py
+      4. current working directory (the launcher sets this to the extracted model folder)
+      5. __file__ only if it actually exists
+
+    The launcher also handles JMP's persistent Python interpreter when another
+    extracted copy is opened later. It moves the selected folder to the front
+    of sys.path and clears cached TDM modules before importing tdm_jmp. Every
+    subsequent UI action resends its own active folder, moves it to the front of
+    sys.path and clears cached solver/isotherm modules before import. This avoids
+    reusing old code or file paths after a package update.
+
+Verification:
+    - direct compile/import checks
+    - simulated JMP-style exec of tdm_bridge.py with __file__ deliberately absent
+    - two-folder import-cache regression check at setup and each UI action
+    - full verify_model.py regression suite

@@ -1,0 +1,61 @@
+R10 CONDUCTIVITY-DRIVEN SALT INPUT AND SOLVER AUDIT
+===================================================
+
+Change
+------
+Conductivity is the sole user-entered input for salt-related buffer and process
+chemistry. The required Model Parameters value
+`conductivity_to_salt_M_per_mS_cm` converts each entered conductivity to salt:
+
+  salt concentration [M] = conductivity [mS/cm] * conversion factor [M/(mS/cm)]
+
+The JMP interface no longer exposes direct salt concentration controls. Older
+configuration and batch CSV salt columns remain readable for compatibility but
+are ignored by the solver; saving a run clears their old values. Missing
+conductivity or conversion-factor inputs fail run validation.
+
+Solver path
+-----------
+1. JMP saves Buffer A/B and endpoint conductivity in the selected run row.
+2. `batch_row_to_run_config` maps those values to the selected run configuration.
+3. `buffer_salt_concentration_M` and `resolve_process_chemistry` convert
+   conductivity using the required shared factor. %B blends the resolved Buffer
+   A/B endpoints; endpoint chemistry converts each entered conductivity.
+4. `_build_program` records the conductivity and derived salt profiles.
+5. EDM and TDM Competitive Langmuir solvers sample the delayed local salt at
+   each axial cell and evaluate `b_eff,i = b_i * exp(k_s,i * salt)` in the
+   competitive Langmuir equilibrium.
+6. The chromatogram CSV, HTML phase receipt, and JMP run status report the
+   consumed conductivity and derived salt values.
+
+TDM-CPA can still select ion-derived ionic strength for its CPA electrostatic
+calculation. This option does not change the conductivity-derived salt profile
+reported for the run or the HIC Langmuir isotherm.
+
+Verification
+------------
+The regression suite verifies the saved-run mapping, ignores contradictory
+legacy direct-salt values, and exercises the actual Python bridge action used by
+the JMP buttons. With conductivity changing from 5 to 75 mS/cm and the required
+factor set to 0.01 M/(mS/cm), the bridge result reports salt changing from 0.05
+to 0.75 M and the CSV salt profile changes by 0.70 M. The total-protein
+chromatogram also changes. Focused solver comparisons at the same settings
+produced maximum outlet concentration differences of approximately 1.253 g/L
+for EDM and 1.036 g/L for TDM. Both HIC solvers also retain the mass-balance
+closure check.
+
+The generated JSL is structurally validated and its real Python bridge routes
+are executed by `verify_model.py`. JMP itself is not installed in this
+verification environment, so native JMP rendering cannot be exercised here.
+
+Least-squares regression note
+-----------------------------
+The full test uncovered a legacy-config case where a missing impurity UV factor
+was normalized for fitting but the report still read the unnormalized input.
+Refinement now normalizes the config before writing parameter receipts. A focused
+synthetic UV + composition fit passed: impurity response factor 200 -> 79.9907,
+normalized objective 0.0280304 -> 4.77657e-9, with report and objective-history
+CSV generated.
+
+This R10 conductivity-only behavior supersedes the R8 audit's direct-salt input
+description. The HIC isotherm form and local-salt solver coupling remain the same.

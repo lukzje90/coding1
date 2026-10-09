@@ -1,0 +1,30 @@
+{
+  "build_id": "2026-10-07-R18",
+  "purpose": "Verify buffer and explicit load chemistry plus HIC affinity through the generated JMP field names and bridge.",
+  "bridge_sensitivity": {
+    "model": "EDM_LANGMUIR",
+    "buffer_B_conductivity_mS_cm": 100.0,
+    "factor_M_per_mS_cm_baseline": 0.02,
+    "factor_M_per_mS_cm_changed": 0.01,
+    "load_salt_M_baseline": 2.0,
+    "load_salt_M_changed": 1.0,
+    "k_s_per_M_baseline": 6.0,
+    "k_s_per_M_changed": 0.0,
+    "max_uv_difference_from_k_s_change_mAU": 6498.695324787567
+  },
+  "edited_load_from_prior_buffer_A_row": {
+    "saved_source_after_edit": "DIRECT",
+    "material_chemistry_mode": "EXPLICIT",
+    "pH_used": 8.25,
+    "conductivity_mS_cm_used": 35.0,
+    "salt_M_used": 0.7000000000000001,
+    "retained_load_percent_B": 100.0,
+    "programmed_load_percent_B": null
+  },
+  "flow_overlay_values_mL_min": [
+    0.8,
+    1.7,
+    2.4
+  ],
+  "status": "PASS"
+}

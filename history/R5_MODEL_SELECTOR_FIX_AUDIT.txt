@@ -1,0 +1,48 @@
+R5 MODEL SELECTOR AND EDM/TDM VISIBILITY FIX AUDIT
+=================================================
+
+Build
+-----
+2026-09-30-R5
+
+Reported errors
+---------------
+- JMP raised `argument is wrong type in access or evaluation of 'Contains'` at
+  `Contains(modelLabel, "TDM")`.
+- TDM parameters remained visible after selecting an EDM model.
+
+Root cause and correction
+-------------------------
+- R4 read text-valued JMP Combo Boxes with `<< Get()`. That message returns the
+  selected item index. `modelLabel` therefore became numeric, and `Contains()` could
+  not evaluate it as text.
+- R5 uses `<< Get Selected` for model, process mode, chemistry control, source, count,
+  run label, and least-squares mode/profile Combo Boxes. Number Edit Boxes continue to
+  use `<< Get`.
+- `modelLabel` is converted to character text before the `Contains()` checks. The EDM
+  and TDM flags then control both the top-level parameter panels and each component's
+  EDM/TDM transport fields. EDM selection collapses TDM-only panels; TDM selection
+  displays them.
+- Both run selectors pass the selected `Run N` label through `RunNumberFromLabel()`.
+  This preserves the correct run row while using the selected text from the Combo Box.
+- The JSL validator now checks selected-text reads for each Combo Box class, confirms
+  the EDM/TDM visibility rules, and checks that numeric edit controls still use numeric
+  reads. Generated-JSL checks in `verify_model.py` exercise these same rules.
+
+Verification
+------------
+- Python syntax compilation passed.
+- Generated 218,838-character JSL passed delimiter and construct validation.
+- Targeted generated-JSL assertions confirmed a text model label, EDM/TDM visibility
+  rules, per-component transport visibility and selected PLW values.
+- `python3 verify_model.py --buttons-only` passed, including save/run, freshness,
+  repeated batch, chromatogram attachment and least-squares bridge actions.
+- `python3 verify_model.py` passed all 23 verification groups. This includes all four
+  model combinations, process recipes, solver checks, chromatogram output, both
+  least-squares modes, persistent-import refresh, batch actions and CSV attachment.
+
+JMP verification boundary
+-------------------------
+Native JMP is not installed in this environment, so the actual JMP window could not
+be clicked here. The Combo Box method behavior is checked against JMP's documentation;
+the generated JSL structure, bridge inputs and Python model execution passed locally.

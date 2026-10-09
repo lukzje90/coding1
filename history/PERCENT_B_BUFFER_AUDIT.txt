@@ -1,0 +1,68 @@
+TDM22 — BUFFER A/B AND %B PROGRAM AUDIT
+========================================
+
+Scope
+-----
+Added a Buffer B percentage program to every selected post-load wash (PLW) and
+Elution stage while keeping the existing direct endpoint chemistry path.
+
+Process Setup
+-------------
+Each saved run contains Buffer A and Buffer B definitions.
+  • Buffer A = 0% B
+  • Buffer B = 100% B
+  • Each has editable pH, salt concentration [M], conductivity [mS/cm]
+  • TDM-CPA additionally exposes up to four ion rows (species, concentration,
+    valency) for ionic-strength calculation.
+
+If a buffer salt concentration is blank, it is calculated from conductivity
+using the model-level conductivity-to-salt factor.
+
+PLW / Elution chemistry control
+-------------------------------
+Each selected stage has two chemistry modes:
+  BUFFER_B_PERCENT
+    SET_POINT : Start/set-point %B is used for the stage.
+    LINEAR    : %B changes linearly from Start %B to End %B over the stage CV.
+    STEP      : the stage immediately uses End %B.
+
+  ENDPOINT_CHEMISTRY
+    Retains the existing direct Start/End source, pH, salt concentration and
+    conductivity controls for non-%B programs.
+
+%B calculation
+--------------
+For f = %B / 100:
+  salt = (1-f) * salt_A + f * salt_B
+  pH   = (1-f) * pH_A   + f * pH_B
+
+The pH expression is an explicit endpoint interpolation because only Buffer A/B
+pH values are requested in this simplified interface. It is not a full buffer
+acid/base equilibrium solver. Direct endpoint chemistry remains available when a
+measured/nonlinear pH program should be entered instead.
+
+TDM-CPA ions
+------------
+For each buffer endpoint, complete ion rows give:
+  I = 0.5 * sum(c_i * z_i^2)
+If an endpoint has no complete ion rows, its resolved salt concentration is used
+as the monovalent-electrolyte proxy. Endpoint ionic strengths are then blended by
+%B and supplied to the TDM-CPA salt/ionic-strength transport calculation.
+
+Verification
+------------
+Automated checks verify:
+  1. Buffer A/B pH and salt controls are present in Process Setup.
+  2. Start/set-point and End Buffer B [%] controls are present for all five PLW
+     and all five Elution slots.
+  3. Batch CSV stores Chemistry_Control, Start_Percent_B and End_Percent_B for
+     every PLW/Elution slot and maps them back into run configurations.
+  4. 0% B resolves to Buffer A, 100% B resolves to Buffer B, and intermediate
+     %B values resolve to the expected pH/salt values.
+  5. TDM-CPA intermediate %B uses the ion-derived endpoint ionic strengths.
+  6. The resolved %B endpoints enter ProgramStage and therefore the actual CPA
+     calculation for EDM-CPA and TDM-CPA.
+  7. Direct endpoint chemistry remains functional and direct salt still takes
+     precedence over conductivity conversion.
+  8. Existing graphics, 30-run workflow, numerical grids, impurity handling,
+     batch locking and both least-squares modes continue to pass regression tests.

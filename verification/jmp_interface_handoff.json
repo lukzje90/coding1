@@ -1,0 +1,101 @@
+{
+  "build_id": "2026-10-08-R22",
+  "status": "PASS",
+  "scope": "Generated JMP source contract, saved run table, Python bridge, HIC solver receipt and factor-1000 rejection; synthetic cases; no native JMP session.",
+  "max_supported_hic_salt_M": 10.0,
+  "interface_contract": {
+    "generated_python_send_names": 231,
+    "saved_run_fields": 218,
+    "restored_run_fields": 217
+  },
+  "models": [
+    {
+      "model": "EDM_CPA",
+      "shared_inputs_checked": 22,
+      "active_components_checked": 2,
+      "load_conductivity_mode_salt_M": 0.8,
+      "load_salt_M_mode_salt_M": 1.25,
+      "buffer_A_salt_M": 0.2,
+      "buffer_B_salt_M": 1.4,
+      "max_uv_change_when_k_s_zeroed_mAU": 396.33031471516637,
+      "max_uv_change_when_b_doubled_mAU": null,
+      "stage_flows_mL_min": [
+        1.3,
+        0.8,
+        2.4
+      ],
+      "factor_1000_rejected": true,
+      "factor_1000_errors": [
+        "Load material resolves to 40000 M salt from conductivity 40.0 mS/cm \u00d7 factor 1000 M/(mS/cm). The HIC model limit is 10 M; check the input mode and units.",
+        "Buffer A resolves to 10000 M salt from conductivity 10.0 mS/cm \u00d7 factor 1000 M/(mS/cm). The HIC model limit is 10 M; check the input mode and units."
+      ],
+      "all_SALT_M_modes_ignore_factor": true
+    },
+    {
+      "model": "EDM_LANGMUIR",
+      "shared_inputs_checked": 20,
+      "active_components_checked": 2,
+      "load_conductivity_mode_salt_M": 0.8,
+      "load_salt_M_mode_salt_M": 1.25,
+      "buffer_A_salt_M": 0.2,
+      "buffer_B_salt_M": 1.4,
+      "max_uv_change_when_k_s_zeroed_mAU": 379.0277625929982,
+      "max_uv_change_when_b_doubled_mAU": 6.87529335179034e-06,
+      "stage_flows_mL_min": [
+        1.3,
+        0.8,
+        2.4
+      ],
+      "factor_1000_rejected": true,
+      "factor_1000_errors": [
+        "Load material resolves to 40000 M salt from conductivity 40.0 mS/cm \u00d7 factor 1000 M/(mS/cm). The HIC model limit is 10 M; check the input mode and units.",
+        "Buffer A resolves to 10000 M salt from conductivity 10.0 mS/cm \u00d7 factor 1000 M/(mS/cm). The HIC model limit is 10 M; check the input mode and units."
+      ],
+      "all_SALT_M_modes_ignore_factor": true
+    },
+    {
+      "model": "TDM_CPA",
+      "shared_inputs_checked": 30,
+      "active_components_checked": 2,
+      "load_conductivity_mode_salt_M": 0.8,
+      "load_salt_M_mode_salt_M": 1.25,
+      "buffer_A_salt_M": 0.2,
+      "buffer_B_salt_M": 1.4,
+      "max_uv_change_when_k_s_zeroed_mAU": 401.48125721716656,
+      "max_uv_change_when_b_doubled_mAU": null,
+      "stage_flows_mL_min": [
+        1.3,
+        0.8,
+        2.4
+      ],
+      "factor_1000_rejected": true,
+      "factor_1000_errors": [
+        "Load material resolves to 40000 M salt from conductivity 40.0 mS/cm \u00d7 factor 1000 M/(mS/cm). The HIC model limit is 10 M; check the input mode and units.",
+        "Buffer A resolves to 10000 M salt from conductivity 10.0 mS/cm \u00d7 factor 1000 M/(mS/cm). The HIC model limit is 10 M; check the input mode and units."
+      ],
+      "all_SALT_M_modes_ignore_factor": true
+    },
+    {
+      "model": "TDM_LANGMUIR",
+      "shared_inputs_checked": 26,
+      "active_components_checked": 2,
+      "load_conductivity_mode_salt_M": 0.8,
+      "load_salt_M_mode_salt_M": 1.25,
+      "buffer_A_salt_M": 0.2,
+      "buffer_B_salt_M": 1.4,
+      "max_uv_change_when_k_s_zeroed_mAU": 403.9505602945039,
+      "max_uv_change_when_b_doubled_mAU": 0.0009749546839312043,
+      "stage_flows_mL_min": [
+        1.3,
+        0.8,
+        2.4
+      ],
+      "factor_1000_rejected": true,
+      "factor_1000_errors": [
+        "Load material resolves to 40000 M salt from conductivity 40.0 mS/cm \u00d7 factor 1000 M/(mS/cm). The HIC model limit is 10 M; check the input mode and units.",
+        "Buffer A resolves to 10000 M salt from conductivity 10.0 mS/cm \u00d7 factor 1000 M/(mS/cm). The HIC model limit is 10 M; check the input mode and units."
+      ],
+      "all_SALT_M_modes_ignore_factor": true
+    }
+  ]
+}

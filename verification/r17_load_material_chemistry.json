@@ -1,0 +1,35 @@
+{
+  "build_id": "2026-10-07-R17",
+  "purpose": "End-to-end verification that saved load material pH/conductivity reach the solver and that flow rate is plotted/exported.",
+  "input": {
+    "model": "EDM_LANGMUIR",
+    "load_chemistry_control": "BUFFER_B_PERCENT",
+    "load_material_chemistry_mode": "EXPLICIT",
+    "load_source": "DIRECT",
+    "load_pH": 8.25,
+    "load_conductivity_mS_cm": 35.0,
+    "load_salt_input_mode": "CONDUCTIVITY",
+    "conductivity_to_salt_M_per_mS_cm": 0.02,
+    "retained_load_start_percent_B": 100.0,
+    "retained_load_end_percent_B": 100.0,
+    "flow_program_mL_min": {
+      "load": 1.7,
+      "plw_1": 0.8,
+      "elution_1": 2.4
+    }
+  },
+  "solver_receipt": {
+    "load_stage_chemistry_control": "EXPLICIT_LOAD_MATERIAL",
+    "load_start_pH": 8.25,
+    "load_start_salt_M": 0.7,
+    "load_start_conductivity_mS_cm": 35.0,
+    "load_start_percent_B": null,
+    "flow_trace_values_mL_min": [0.8, 1.7, 2.4]
+  },
+  "output_checks": {
+    "html_toggle": "Show flow rate",
+    "svg_overlay": "data-overlay=flow-rate",
+    "csv_column": "flow_mL_min",
+    "status": "PASS"
+  }
+}

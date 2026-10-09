@@ -1,0 +1,16 @@
+PASS All four models transport salt, ionic strength and conductivity independently; sulfate stoichiometry is preserved
+PASS Saved-run round trip preserves blanks, chosen salt inputs, direct endpoints and distinct per-run buffers
+PASS Selected chemistry is required with no silent fallback; legacy conductivity priority and salt-only migration work
+PASS SET_POINT, STEP and LINEAR endpoint programs use the selected analytical salt
+PASS Generated JMP controls save salt and mode before calling the bridge; JSL delimiters are balanced
+PASS EDM_CPA: high-salt retention, gradient recovery and low-salt breakthrough respond with conductivity held fixed
+PASS EDM_LANGMUIR: high-salt retention, gradient recovery and low-salt breakthrough respond with conductivity held fixed
+PASS TDM_CPA: high-salt retention, gradient recovery and low-salt breakthrough respond with conductivity held fixed
+PASS TDM_LANGMUIR: high-salt retention, gradient recovery and low-salt breakthrough respond with conductivity held fixed
+Traceback (most recent call last):
+  File "/workspace/scratch/98e11e0e3451/project/TDM22_HIC_LSQ_R15/verify_r16.py", line 220, in <module>
+    main()
+  File "/workspace/scratch/98e11e0e3451/project/TDM22_HIC_LSQ_R15/verify_r16.py", line 208, in main
+    assert np.max(np.abs(first["trace"]["uv_mAU"] - second["trace"]["uv_mAU"])) > .01
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

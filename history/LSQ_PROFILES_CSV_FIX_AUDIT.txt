@@ -1,0 +1,45 @@
+LEAST-SQUARES PROFILES AND CSV AXIS FIX AUDIT
+============================================
+
+Per-chromatogram process profiles
+---------------------------------
+Each saved run row is now an independent LSQ profile. The profile stores its own CSV path
+in the LSQ_Chromatogram_CSV field of tdm_batch_runs.csv. The LSQ selector and the global
+current-run selector are synchronized: choosing a profile loads that row into the existing
+Process Setup controls, where flow, feed/loading, buffers, PLW steps, elution steps and
+numerical resolution are editable and saved. This supports separate named profiles such as
+Overload, Standard and Gradient, each with its own attached chromatogram.
+
+Attach validates the CSV and saves its resolved source path to the selected profile. Fit
+reads that profile's source path and exact saved run recipe, and uses the recipe's actual
+flow schedule to convert time axes to column volumes. Reports, settings, traces, parameter
+results and fitted-input snapshots are retained with a _run_XX filename suffix; the
+existing latest-fit report and UI buttons continue to work.
+
+Chromatogram CSV reading
+------------------------
+The reader now detects comma, semicolon, tab and pipe delimiters, can skip instrument
+metadata lines before a header, and parses decimal commas and elapsed-time values such as
+mm:ss or hh:mm:ss. It recognizes CV, mL, time, retention-time, sample-index and common
+signal headers. If detector data has no numeric x column, sample order is accepted and
+mapped uniformly over the selected process recipe's duration. The attach status, fit
+settings and HTML report clearly record this assumption; a measured x axis is preferred.
+
+Verification
+------------
+- Python compilation passed for the IO, JSL generator, bridge, least-squares module and
+  verifier.
+- Generated JMP/JSL passed structural validation.
+- Regression coverage confirms three separate profile paths survive save/reload and that
+  selecting a profile loads the matching process row and CSV path.
+- CSV checks passed for metadata-prefixed semicolon exports with decimal commas, timestamps,
+  UTF-16, ordinary comma-delimited files, and detector-only files with sample-order fallback.
+- End-to-end least-squares verification passed all 22 checks. The synthetic fit objective
+  improved from 0.0098403 to 1.62669e-08. A named profile's report, settings and trace
+  outputs were retained separately while the latest-fit paths remained available.
+
+JMP availability
+----------------
+JMP is not installed in the build environment, so native UI interaction could not be
+clicked through. Generated JSL structure, Python profile routing, CSV parsing, model
+execution, fit outputs and reports were exercised by automated checks.

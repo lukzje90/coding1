@@ -1,0 +1,37 @@
+Names Default To Here( 1 );
+
+// Restored classic run-oriented UI with direct editable inputs.
+// Run this file from inside the extracted folder.  No template database is required.
+projectDir = Convert File Path( Get Default Directory(), "Absolute", "POSIX" );
+If( Right( projectDir, 1 ) != "/", projectDir = projectDir || "/" );
+
+If( !File Exists( projectDir || "open_tdm_setup.py" ) |
+    !File Exists( projectDir || "tdm_jmp.py" ) |
+    !File Exists( projectDir || "tdm_bridge.py" ) |
+    !File Exists( projectDir || "tdm_minimal_io.py" ) |
+    !File Exists( projectDir || "tdm_minimal_model.py" ) |
+    !File Exists( projectDir || "tdm_least_squares.py" ),
+    Write( "\!nERROR: Run 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl from the extracted model folder.\!n" );
+    Stop();
+);
+
+Set Default Directory( projectDir );
+
+// R23 requires openpyxl for experimental Excel chromatogram ingestion. Use a
+// new dependency marker so users upgrading from R22 also get the Excel reader.
+dependencyMarker = "$USER_APPDATA/tdm22_classic_direct_dependencies_r23_checked.txt";
+If( !File Exists( dependencyMarker ),
+    Python Install Packages( "numpy scipy openpyxl" );
+    Save Text File( dependencyMarker, "checked" );
+);
+
+pythonFile = projectDir || "open_tdm_setup.py";
+projectDirWindows = Convert File Path( projectDir, "Absolute", "Windows" );
+pythonFileWindows = Convert File Path( pythonFile, "Absolute", "Windows" );
+Python Send( projectDirWindows, Python Name( "tdm_project_dir" ) );
+Python Send( projectDir, Python Name( "tdm_project_dir_posix" ) );
+Python Send( pythonFileWindows, Python Name( "tdm_wrapper_file" ) );
+returnCode = Python Submit File( pythonFile );
+If( returnCode != 0,
+    Write( "\!nERROR: The interface did not open. Check View > Log for the Python traceback.\!n" );
+);

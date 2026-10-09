@@ -1,0 +1,106 @@
+{
+  "build": "2026-10-01-R13",
+  "synthetic_references": true,
+  "native_JMP_executed": false,
+  "checks_passed": [
+    "EDM_LANGMUIR high-salt hold, low-salt breakthrough and gradient recovery",
+    "TDM_LANGMUIR high-salt hold, low-salt breakthrough and gradient recovery",
+    "EDM_CPA high-salt hold, low-salt breakthrough and gradient recovery",
+    "TDM_CPA high-salt hold, low-salt breakthrough and gradient recovery",
+    "Equation 9 raw SSE and explicit optional normalized MSE",
+    "HIC salt direction, IEX CPA preservation and negative HIC sensitivity rejection",
+    "Independent detector volumes, UV units, variable flow, overlay and physical dispersion toggles",
+    "Explicit arbitrary run selection, duplicate rejection and all global lock handoffs",
+    "Global RAW_SSE contains all points for 1, 2, 3, 4 and 5 profiles; invalid counts rejected",
+    "Replicate samples, optional composition per profile, reference coverage, and a zero-start UV-volume fit",
+    "EDM_LANGMUIR two-profile nonlinear fit improves SSE >99%; locked values unchanged",
+    "TDM_LANGMUIR two-profile nonlinear fit improves SSE >99%; locked values unchanged",
+    "EDM_CPA two-profile nonlinear fit improves SSE >99%; locked values unchanged",
+    "TDM_CPA two-profile nonlinear fit improves SSE >99%; locked values unchanged",
+    "Five distinct recipes refined by one shared nonlinear parameter vector",
+    "Two-species competitive HIC retention, gradient elution and mass conservation"
+  ],
+  "retention_elution": [
+    {
+      "model": "EDM_LANGMUIR",
+      "before_elution_percent": 3.082721755908907e-51,
+      "recovery_percent": 99.99781438795148,
+      "peak_CV": 9.75,
+      "mass_closure_error_percent": 0.0021856120485273453
+    },
+    {
+      "model": "TDM_LANGMUIR",
+      "before_elution_percent": 3.2224667270687296e-15,
+      "recovery_percent": 100.00880508519272,
+      "peak_CV": 9.75,
+      "mass_closure_error_percent": -0.008805085192713745
+    },
+    {
+      "model": "EDM_CPA",
+      "before_elution_percent": 0.0,
+      "recovery_percent": 100.00000000000021,
+      "peak_CV": 9.75,
+      "mass_closure_error_percent": -2.1684043449710089e-13
+    },
+    {
+      "model": "TDM_CPA",
+      "before_elution_percent": 7.551945449207154e-09,
+      "recovery_percent": 99.99832583236208,
+      "peak_CV": 9.75,
+      "mass_closure_error_percent": 0.0016741676391045879
+    }
+  ],
+  "nonlinear_fits": [
+    {
+      "model": "EDM_LANGMUIR",
+      "profiles": 2,
+      "parameter": "components[0].b_L_g",
+      "truth": 0.001,
+      "fitted": 0.0010000001807416732,
+      "initial_SSE": 3865709.1193601927,
+      "final_SSE": 1.3482431522243115e-05,
+      "optimizer_success": true
+    },
+    {
+      "model": "TDM_LANGMUIR",
+      "profiles": 2,
+      "parameter": "components[0].b_L_g",
+      "truth": 0.001,
+      "fitted": 0.0009999998672038262,
+      "initial_SSE": 3736172.003075126,
+      "final_SSE": 1.6581456307696153e-05,
+      "optimizer_success": true
+    },
+    {
+      "model": "EDM_CPA",
+      "profiles": 2,
+      "parameter": "components[0].delta_ref",
+      "truth": 0.1,
+      "fitted": 0.09999999998549135,
+      "initial_SSE": 4333777.043985847,
+      "final_SSE": 5.476376685648988e-13,
+      "optimizer_success": true
+    },
+    {
+      "model": "TDM_CPA",
+      "profiles": 2,
+      "parameter": "components[0].delta_ref",
+      "truth": 0.1,
+      "fitted": 0.09999996799347742,
+      "initial_SSE": 3314287.565563389,
+      "final_SSE": 8.106406852124176e-05,
+      "optimizer_success": true
+    },
+    {
+      "model": "EDM_LANGMUIR",
+      "profiles": 5,
+      "parameter": "salt_sensitivity_per_M",
+      "truth": 6.0,
+      "fitted": 5.999999773279747,
+      "initial_SSE": 7194251.821834688,
+      "final_SSE": 0.00019432398939739994,
+      "optimizer_success": true
+    }
+  ],
+  "elapsed_seconds": 341.93813212999885
+}

@@ -1,0 +1,29 @@
+R23 least-squares fitting — verification summary
+===============================================
+
+Verified in this environment with Python 3.13, NumPy, SciPy and openpyxl:
+
+1. Six automated tests passed, including a two-run global fit using a
+   synthetic Excel workbook plus CSV and different process/feed recipes.
+2. A deliberately perturbed detector-response parameter was recovered by
+   bounded nonlinear least-squares fitting against known mechanistic signals.
+3. Each weighted point and run contributed mathematically to the objective:
+   summing the trace's objective contributions equals the final squared WRMSE.
+4. Invalid weights and unsupported >5 profiles were rejected.
+5. Independent LSQ process CSV, generated JMP/JSL interface structure,
+   and individual Excel worksheet/column overrides passed tests.
+6. Mixing composition mass%-based errors into a detector-units WRMSE is
+   explicitly rejected instead of silently producing dimensionally mixed RMSE.
+7. Python files compile, and the generated JSL passes static validation.
+
+NOTE: The provided model archive did not include experimental measured
+chromatogram .xlsx/.xlsm files. Therefore no experiment-derived improved
+parameters can be calculated without attaching the real files and configuring
+matching run conditions. The app exports fitted values automatically as
+least_squares_improved_parameters.csv and .txt after refinement.
+
+JMP is not installed in this execution environment: opening/clicking the
+JMP interface requires verification on the user's JMP installation.
+
+Run complete tests: python -m unittest discover -s tests -v
+See LSQ_R23_IMPLEMENTATION_AND_USAGE.md for workflow and limits.

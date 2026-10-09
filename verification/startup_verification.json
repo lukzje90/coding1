@@ -1,0 +1,58 @@
+[
+  {
+    "model": "EDM_LANGMUIR",
+    "before_elution_percent": 2.0350786206760166e-70,
+    "species": {
+      "Target protein": {
+        "recovery_percent": 100.00370943151663,
+        "mass_closure_error_percent": -0.0037094315166332423
+      },
+      "Impurity 1": {
+        "recovery_percent": 100.00045716611511,
+        "mass_closure_error_percent": -0.0004571661151132773
+      }
+    }
+  },
+  {
+    "model": "TDM_LANGMUIR",
+    "before_elution_percent": 1.210104928829802e-16,
+    "species": {
+      "Target protein": {
+        "recovery_percent": 99.99839336109298,
+        "mass_closure_error_percent": 0.001606641885246387
+      },
+      "Impurity 1": {
+        "recovery_percent": 100.00283309431545,
+        "mass_closure_error_percent": -0.0028330886907857638
+      }
+    }
+  },
+  {
+    "model": "EDM_CPA",
+    "before_elution_percent": 8.292137712130305e-76,
+    "species": {
+      "Target protein": {
+        "recovery_percent": 99.99999999999997,
+        "mass_closure_error_percent": 3.0977204928157266e-14
+      },
+      "Impurity 1": {
+        "recovery_percent": 99.99999999999994,
+        "mass_closure_error_percent": 5.421010862427522e-14
+      }
+    }
+  },
+  {
+    "model": "TDM_CPA",
+    "before_elution_percent": 2.890635126557912e-29,
+    "species": {
+      "Target protein": {
+        "recovery_percent": 99.99870556825861,
+        "mass_closure_error_percent": 0.0012944765315245448
+      },
+      "Impurity 1": {
+        "recovery_percent": 100.00148859342723,
+        "mass_closure_error_percent": -0.0014885740335480557
+      }
+    }
+  }
+]

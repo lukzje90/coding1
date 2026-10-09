@@ -1,0 +1,57 @@
+RUN RECIPE / CHROMATOGRAM CONSISTENCY AUDIT
+============================================
+
+Build
+-----
+2026-09-29-R2
+
+Issue reproduced from the supplied screenshots
+----------------------------------------------
+The process settings showed a 10 CV load, three washes of 1, 4 and 0.8 CV, and a
+6 CV elution. The expected program length was therefore 21.8 CV. The displayed result
+instead described one 2 CV wash and a 10 CV elution. The available model package opened
+the most recent HTML/CSV files directly and had no receipt tying those files to the
+selected run or its current settings. It also omitted a complete process-stage table.
+
+Changes
+-------
+- Results now include run number/name, build ID, UTC generation time, complete normalized
+  settings fingerprint, requested time steps and axial cells.
+- The HTML result includes the solver's exact stage recipe: start/end/duration CV, mode,
+  flow, chemistry control, %B endpoints and resolved pH/salt endpoints.
+- The SVG marks every stage boundary and labels the phase bands. The CV axis spans the
+  actual run duration, including load CV derived from load density / feed concentration.
+- The CSV carries run identity and settings fingerprint and reports active program stage
+  and flow at every output sample.
+- The result buttons validate the current run/configuration against a JSON receipt and
+  verify HTML/CSV/SVG hashes. A changed run or recipe, missing receipt, different build,
+  or edited output produces RESULT_STALE and does not open the old file.
+- The open callback reads `tdm_status.txt` after the Python bridge completes instead of
+  depending on a return value from a nested JSL callback. It opens the HTML/CSV only after
+  finding an explicit RESULT_CURRENT status and confirming the selected file exists. The
+  previous status is cleared before the check, so an old success cannot authorize opening.
+- Freshness-check errors stay in the status file and do not raise through `Python Submit
+  File`; the JSL callback can display the actual bridge error instead of stopping midway.
+- Batch result writing records each run's own identity and recipe receipt. Starting a
+  batch invalidates the single-run latest-result receipt.
+
+Verification
+------------
+- `python3 -m py_compile` passed for the model, IO, bridge, JSL generator and verifier.
+- The generated JSL passed structural validation and includes the result freshness action.
+- The full `verify_model.py` suite passed all 22 checks, including the existing four-model
+  solver, mass-balance, least-squares, CSV and JMP bridge coverage.
+- The screenshot settings were round-tripped through `batch_row_to_run_config`, the same
+  saved-run mapper used by the bridge. The resulting stages ended at 10, 11, 15, 15.8 and
+  21.8 CV. The output trace and x-axis also ended at 21.8 CV.
+- The stage labels, %B table, flow/mode columns, run identity, and settings fingerprint
+  were checked in the generated HTML/CSV/manifest. Freshness passed for the matching run
+  and failed after recipe edits, run identity changes, and CSV modification.
+- The bridge freshness action was exercised end-to-end: a matching run wrote RESULT_CURRENT;
+  after changing a recipe, the same action wrote RESULT_STALE for the JSL callback to read.
+
+JMP verification boundary
+-------------------------
+JMP is not installed in this build environment, so native button clicking could not be
+performed here. The generated JSL was structurally checked; the exact Python bridge
+actions, saved-run mapping, solver, result generation and freshness decision were run.

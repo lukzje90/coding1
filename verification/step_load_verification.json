@@ -1,0 +1,22 @@
+[
+  {
+    "model": "EDM_LANGMUIR",
+    "before_elution_percent": 2.0246361843812114e-37,
+    "recovery_percent": 100.02023582604757
+  },
+  {
+    "model": "TDM_LANGMUIR",
+    "before_elution_percent": 9.78747613243282e-15,
+    "recovery_percent": 99.96195985106984
+  },
+  {
+    "model": "EDM_CPA",
+    "before_elution_percent": 0.0,
+    "recovery_percent": 100.00000000000011
+  },
+  {
+    "model": "TDM_CPA",
+    "before_elution_percent": 6.086389096790822e-10,
+    "recovery_percent": 100.02885220477641
+  }
+]

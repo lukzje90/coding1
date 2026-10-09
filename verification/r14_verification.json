@@ -1,0 +1,47 @@
+{
+  "build": "2026-10-01-R14",
+  "unit_identity": "1 mg/mL = 1 g/L",
+  "qmax_volume_basis": "non-mobile stationary phase",
+  "synthetic_tests": true,
+  "native_JMP_executed": false,
+  "checks_passed": [
+    "Legacy mg/mL capacities migrate to g/L with factor 1; saved keys and locks use g/L",
+    "All-locked state and five selected saved runs survive save/reload without truncation",
+    "Explicit new-schema values take precedence over legacy aliases, including cleared input",
+    "g/L qmax reaches the isotherm saturation limit and derived H without a scaling error",
+    "Old and new fitting-lock paths address the same g/L parameter in both Langmuir models",
+    "JMP sends g/L qmax, legacy sends remain readable, and clearing an input stays authoritative",
+    "New labels, all six species sends, CSV feed binding and JSL structure are valid",
+    "Feed concentration persists through run CSV and correctly determines capacity-based load CV",
+    "EDM_LANGMUIR legacy/g/L predictions match exactly; feed concentration changes load mass and UV",
+    "TDM_LANGMUIR legacy/g/L predictions match exactly; feed concentration changes load mass and UV",
+    "EDM_CPA legacy/g/L predictions match exactly; feed concentration changes load mass and UV",
+    "TDM_CPA legacy/g/L predictions match exactly; feed concentration changes load mass and UV"
+  ],
+  "model_checks": [
+    {
+      "model": "EDM_LANGMUIR",
+      "legacy_and_g_L_outputs_identical": true,
+      "feed_0_5_mg_mL_input_g": 0.001,
+      "feed_1_0_mg_mL_fixed_volume_input_g": 0.002
+    },
+    {
+      "model": "TDM_LANGMUIR",
+      "legacy_and_g_L_outputs_identical": true,
+      "feed_0_5_mg_mL_input_g": 0.001,
+      "feed_1_0_mg_mL_fixed_volume_input_g": 0.002
+    },
+    {
+      "model": "EDM_CPA",
+      "legacy_and_g_L_outputs_identical": true,
+      "feed_0_5_mg_mL_input_g": 0.001,
+      "feed_1_0_mg_mL_fixed_volume_input_g": 0.002
+    },
+    {
+      "model": "TDM_CPA",
+      "legacy_and_g_L_outputs_identical": true,
+      "feed_0_5_mg_mL_input_g": 0.001,
+      "feed_1_0_mg_mL_fixed_volume_input_g": 0.002
+    }
+  ]
+}

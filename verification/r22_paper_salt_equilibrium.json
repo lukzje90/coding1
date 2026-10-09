@@ -1,0 +1,31 @@
+{
+  "build_id": "2026-10-08-R22",
+  "paper_equation": {
+    "equation": "q_i=qmax_i*b_i*exp(k_s_i*m)*c_i/(1+sum_j b_j*exp(k_s_j*m)*c_j)",
+    "salt_values_M": [
+      0.0,
+      0.5,
+      2.0
+    ],
+    "high_affinity_inversion": "PASS"
+  },
+  "JMP_to_solver": [
+    {
+      "model": "EDM_LANGMUIR",
+      "both_buffers_2M_low_B_end_salt_M": 2.0,
+      "both_buffers_2M_low_B_recovery_percent": 8.493105030112413e-49,
+      "A_0M_B_2M_low_B_end_salt_M": 0.2,
+      "A_0M_B_2M_low_B_recovery_percent": 99.99885144807477,
+      "target_b_eff_at_2M_L_g": 162.7547914190039
+    },
+    {
+      "model": "TDM_LANGMUIR",
+      "both_buffers_2M_low_B_end_salt_M": 2.0,
+      "both_buffers_2M_low_B_recovery_percent": 1.4256829215438497e-14,
+      "A_0M_B_2M_low_B_end_salt_M": 0.2,
+      "A_0M_B_2M_low_B_recovery_percent": 100.00194255187056,
+      "target_b_eff_at_2M_L_g": 162.7547914190039
+    }
+  ],
+  "status": "PASS"
+}

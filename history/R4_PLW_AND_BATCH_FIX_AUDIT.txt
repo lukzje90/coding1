@@ -1,0 +1,64 @@
+R4 PLW HANDOFF AND BATCH OUTPUT FIX AUDIT
+========================================
+
+Superseded by R5: the first bullet under Root causes and corrections was incorrect.
+JMP Combo Box `Get()` returns the selected item index, not its text. R4 consequently
+passed a numeric index to model-label logic such as `Contains(modelLabel, "TDM")`.
+R5 corrects text-valued Combo Box reads to use `Get Selected` and verifies the EDM/TDM
+panel visibility rules. This R4 audit is retained as a historical record of the batch
+and recipe fixes only.
+
+Build
+-----
+2026-09-30-R4
+
+Reported failures
+-----------------
+- A process setup with three PLWs (2, 1 and 1 CV) and a 4 CV elution produced a
+  chromatogram whose report showed only one 2 CV PLW and a 10 CV elution.
+- Running a saved batch failed with WinError 5 while recursively deleting
+  `batch_results/run_001`.
+
+Root causes and corrections
+---------------------------
+- The JSL used `Get Selected` to read JMP Combo Boxes. Combo Box selection values
+  now use the documented `Get()` message when saving, displaying or sending model,
+  PLW, Elution, load-source, and least-squares profile values.
+- The run selectors returned labels such as `Run 2`, but the loader and bridge need
+  numeric row number 2. `RunNumberFromLabel()` now converts both the active-run and
+  least-squares target selections before loading the row or sending it to Python.
+- `SaveCurrentRun()` saves the selected PLW/Elution counts and each step's mode,
+  CV, flow, percent-B settings and chemistry endpoints to the selected CSV row before
+  model actions. The Python batch reader uses that row to build the run program.
+- The included Run 1 profile is initialized to the visible 2/1/1 CV PLWs and 4 CV
+  elution, so the corrected extraction loads that recipe immediately.
+- Batch execution no longer recursively removes an existing result tree or removes the
+  single-run result receipt. Each batch writes to a new timestamp-and-randomized folder
+  under `batch_results/`; the root gallery points to the newest folder and older output
+  remains available if it is open in another program.
+- Run status now echoes each result manifest's actual total CV and ordered stage list.
+
+Verification
+------------
+- Python syntax compilation passed for the bridge, JSL generator, model, IO, LSQ module
+  and verifier.
+- Generated JSL passed delimiter and required-control checks. It contains no
+  `Get Selected` reads; assertions check that all five PLW CV inputs and all five Elution
+  CV inputs are saved from their corresponding controls, and that both run selectors use
+  numeric label conversion.
+- The saved-row mapper and model program builder reproduced the supplied visible recipe:
+  Load 10 CV, PLW 1 2 CV, PLW 2 1 CV, PLW 3 1 CV and Elution 1 4 CV, ending at 18 CV.
+- The JMP-style bridge integration generated the matching 18 CV batch result. Its result
+  manifest stage names/durations and HTML phase table were checked.
+- Two consecutive batch button actions succeeded in the same isolated package. They
+  created separate output folders, retained the first folder and its files, updated the
+  gallery base path to the second folder, and preserved the single-run receipt.
+- Existing bridge coverage for selected run, result freshness, CSV attachment and
+  least-squares refinement also passed.
+
+JMP verification boundary
+--------------------------
+JMP is not installed in this automated environment. The native JMP window and controls
+could not be clicked here. JSL generation and its saved-control mappings were structurally
+checked, while the Python bridge, saved CSV mapping, result writer and repeated batch
+execution were run end-to-end.

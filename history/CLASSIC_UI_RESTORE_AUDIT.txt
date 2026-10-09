@@ -1,0 +1,20 @@
+FINAL CLASSIC-UI / BUFFER / SALT / ION / PARAMETER-FLOW AUDIT
+================================================================
+
+1. Process Setup, Model Parameters, Least-Squares and Results remain vertically stacked; no horizontal splitter layout was reintroduced.
+2. Numeric edit boxes remain compact (about 92 px), with vertically stacked controls to avoid horizontal scrolling.
+3. Run & load retains editable Number of time steps and Number of axial positions, stored independently for all 30 runs and fed into every solver.
+4. Each CPA run now contains editable Buffer A and Buffer B definitions: buffer name, pH, optional direct salt concentration [M], conductivity [mS/cm], and four optional ion species/concentration/valency rows.
+5. If direct buffer salt concentration is blank, salt is calculated as conductivity × the Model Parameters conductivity-to-salt factor. A direct salt value takes precedence. The resolved value is displayed in the UI.
+6. For TDM–CPA, complete buffer ion rows are converted to ionic strength I = 0.5 Σ(c_i z_i²). The derived ionic strength is displayed and is fed to the CPA electrostatic calculation. If no complete ion rows are supplied, resolved salt is used as the monovalent-electrolyte ionic-strength proxy.
+7. For EDM–CPA, the resolved salt concentration is used as the ionic-strength proxy; TDM-only ion-composition controls are hidden.
+8. Load, every selected PLW and every selected Elution phase can use DIRECT, BUFFER_A or BUFFER_B chemistry. DIRECT endpoints expose pH, salt concentration and conductivity.
+9. PLW/Elution LINEAR mode interpolates resolved Start→End pH, salt and effective ionic strength across the phase CV; SET_POINT uses Start; STEP switches to End.
+10. Buffer definitions and all source selections are saved per run, copied/pasted with operating conditions, and restored independently for up to 30 runs.
+11. CPA result CSVs report pH, conductivity_mS_cm, salt_concentration_M and ionic_strength_M separately so the programmed chemistry and ion-derived TDM ionic strength can be audited.
+12. No extra ion-specific fitted transport coefficients were invented. TDM transports the effective ionic-strength/salt state required by the supplied CPA formulation, using the existing salt axial-dispersion parameter.
+13. Existing 0–5 impurity selection, feed mass%, exact model-specific parameter visibility, PLW/Elution 0–5 selectors, least-squares modes and shared batch mechanistic-parameter locking remain intact.
+14. Regression tests confirm direct salt overrides conductivity conversion, conductivity fallback works, and changing a TDM buffer ion valency changes the calculated chromatogram.
+15. Regression tests confirm start/end pH + salt gradients alter the CPA calculations in both EDM–CPA and TDM–CPA, while all four solvers continue to pass mass-balance and parameter-flow checks.
+
+Automated result: verify_model.py PASSED all 15 checks.

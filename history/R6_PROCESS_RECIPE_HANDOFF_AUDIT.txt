@@ -1,0 +1,44 @@
+R6 PROCESS RECIPE HANDOFF AUDIT
+===============================
+
+Build
+-----
+2026-09-30-R6
+
+Reported problem
+----------------
+The selected PLW count appeared correct, but the chromatogram did not use the JMP CV,
+flow or %B values. Elution steps could be absent from the result.
+
+Changes
+-------
+- Every PLW and Elution CV and flow Number Edit Box now saves its committed value and
+  refreshes the recipe display. The existing %B edit callbacks use the same save path.
+- `SaveCurrentRun()` and Paste save the JMP data table to the explicit
+  `tdm_batch_runs.csv` path before a Python action starts.
+- The result status now echoes each stage's duration, flow, cumulative CV boundaries and
+  %B endpoints from the manifest actually used to create the chromatogram. Each elution
+  stage is listed individually.
+- The bridge test now runs a six-stage recipe with distinctive values: three PLWs and
+  two elutions, non-default CV durations and flows, and different %B ramps. It checks
+  the saved-row mapper, run program, result manifest, HTML recipe table and returned
+  status for exact values.
+- Generated-JSL validation checks every PLW and Elution CV/flow save callback, explicit
+  CSV path saves, current-control column mappings and selected elution count handling.
+
+Verification
+------------
+- Python modules compile and generated JSL passes delimiter and required-control checks.
+- The targeted recipe handoff test confirms load 10 CV, PLW durations 0.47/0.31/0.22 CV,
+  elution durations 1.26/2.34 CV, exact per-stage flows, %B endpoints, and both elution
+  stages in the generated chromatogram's manifest and HTML.
+- `python3 verify_model.py --buttons-only` passes the bridge, save/run, freshness, batch,
+  attachment and fit paths.
+- `python3 verify_model.py` passes all verification groups.
+
+JMP verification boundary
+-------------------------
+Native JMP is not installed in this environment. The JSL callbacks and explicit save path
+were structurally checked, and the Python bridge-to-chromatogram route was exercised with
+non-default values. The actual JMP window still requires a native run to confirm the
+controls commit and display as expected in the user's installation.

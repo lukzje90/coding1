@@ -1,0 +1,18 @@
+Testing 100% B retention and 0% B elution in all four models
+PASS EDM_LANGMUIR high-salt hold, low-salt breakthrough and gradient recovery
+PASS TDM_LANGMUIR high-salt hold, low-salt breakthrough and gradient recovery
+PASS EDM_CPA high-salt hold, low-salt breakthrough and gradient recovery
+PASS TDM_CPA high-salt hold, low-salt breakthrough and gradient recovery
+PASS Equation 9 raw SSE and explicit optional normalized MSE
+PASS HIC salt direction, IEX CPA preservation and negative HIC sensitivity rejection
+PASS Independent detector volumes, UV units, variable flow, overlay and physical dispersion toggles
+PASS Explicit arbitrary run selection, duplicate rejection and all global lock handoffs
+PASS Global RAW_SSE contains all points for 1, 2, 3, 4 and 5 profiles; invalid counts rejected
+PASS Replicate samples, optional composition per profile, reference coverage, and a zero-start UV-volume fit
+PASS EDM_LANGMUIR two-profile nonlinear fit improves SSE >99%; locked values unchanged
+PASS TDM_LANGMUIR two-profile nonlinear fit improves SSE >99%; locked values unchanged
+PASS EDM_CPA two-profile nonlinear fit improves SSE >99%; locked values unchanged
+PASS TDM_CPA two-profile nonlinear fit improves SSE >99%; locked values unchanged
+PASS Five distinct recipes refined by one shared nonlinear parameter vector
+PASS Two-species competitive HIC retention, gradient elution and mass conservation
+ALL R13 CHECKS PASSED 16 groups 341.9 seconds

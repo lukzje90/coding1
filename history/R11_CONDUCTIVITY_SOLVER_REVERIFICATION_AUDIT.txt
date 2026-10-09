@@ -1,0 +1,42 @@
+R11 CONDUCTIVITY-TO-SALT SOLVER RE-VERIFICATION
+================================================
+
+Scope
+-----
+Re-run the conductivity integration from the JMP controls through the saved-run CSV
+mapper and Python bridge into the chromatography solver. Conductivity is the entered
+salt-related process property; salt concentration is conductivity multiplied by the
+required shared `conductivity_to_salt_M_per_mS_cm` factor. Legacy direct-salt fields are
+ignored.
+
+UI-to-solver route
+------------------
+1. JMP's Model Parameters control sends `condToSalt` as
+   `tdm_ui_cond_to_salt_factor` before each Python action.
+2. The bridge reads that value into `config.conversion.conductivity_to_salt_M_per_mS_cm`.
+3. The selected run row supplies Buffer A/B or direct endpoint conductivity; old direct
+   salt columns are cleared on save and disregarded when reading old files.
+4. The process-program builder converts conductivity to salt and builds the run-specific
+   local salt profile, including %B blends and endpoint chemistry.
+5. EDM/TDM Competitive Langmuir solvers sample local delayed salt at each axial cell and
+   use `b_eff,i = b_i * exp(k_s,i * salt)`. CPA solvers receive resolved salt or the
+   selected TDM-CPA ion-derived ionic strength.
+
+Verification
+------------
+`verify_model.py` checks the generated JSL factor-send assignment and executes the real
+Python bridge route with saved-run rows. At a conversion factor of 0.01 M/(mS/cm), changing
+Buffer A/B conductivity from 5 to 75 mS/cm must change salt from 0.05 to 0.75 M and produce
+a measurable total-protein chromatogram change (> 1e-4 g/L at at least one output point).
+It then holds conductivity at 75 mS/cm and changes only the UI-sent factor from 0.01 to
+0.02; salt must change from 0.75 to 1.5 M and the chromatogram must again change (> 1e-4
+g/L). The verifier rejects a change that affects only the reported salt trace.
+
+Observed in the fresh R11 bridge run: the 5→75 mS/cm change shifted salt by 0.700 M and
+changed the outlet total-protein trace by 0.704594 g/L at its largest pointwise difference.
+At fixed 75 mS/cm, changing the factor 0.01→0.02 changed that trace by 0.272133 g/L.
+
+The full graphics, UI structure, CSV, batch, least-squares, chemistry, solver, mass-balance,
+and bridge regression suite is run against this R11 folder. SHA256SUMS.txt is checked after
+packaging. Native JMP is not installed in this environment; generated JSL structure and the
+Python bridge actions invoked by JMP are exercised directly.

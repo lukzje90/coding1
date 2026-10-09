@@ -1,0 +1,239 @@
+"""Integration and regression tests for independent LSQ process setups and weighted RMSE."""
+from __future__ import annotations
+import copy
+import csv
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import sys
+
+import numpy as np
+from openpyxl import Workbook
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import tdm_least_squares as ls
+from tdm_minimal_io import (
+    BATCH_RUNS_CSV, LSQ_RUNS_CSV, apply_batch_shared_parameters,
+    batch_row_to_run_config, ensure_lsq_runs_csv, load_batch_rows, load_config,
+    load_lsq_rows, save_lsq_rows, validate_config,
+)
+from tdm_minimal_model import simulate
+from tdm_jmp import build_jsl, _validate_jsl
+import tdm_bridge
+from tdm_minimal_io import MODEL_LABELS, MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR
+
+
+def config_for(run=1):
+    shared = load_config()
+    effective, _ = apply_batch_shared_parameters(shared, batch_row_to_run_config(load_lsq_rows()[run-1]))
+    effective["numerics"] = {"time_steps": 52, "axial_positions": 8}
+    effective["least_squares"]["objective"] = "WEIGHTED_RMSE"
+    return effective
+
+
+def write_excel(path, cv, y, weights):
+    wb = Workbook()
+    other = wb.active
+    other.title = "Readme"
+    other.append(["Run signal follows on another worksheet"])
+    sheet = wb.create_sheet("Chromatogram")
+    sheet.append(["CV", "UV 280 [mAU]", "Weight"])
+    for values in zip(cv,y,weights):
+        sheet.append([float(v) for v in values])
+    wb.save(path)
+
+
+class RefinementTests(unittest.TestCase):
+    def test_jmp_capacity_reaches_both_langmuir_solvers(self):
+        jsl = build_jsl()
+        self.assertIn('Python Name("tdm_ui_c1_qmax_g_L")', jsl)
+        for model in (MODEL_LABELS[MODEL_EDM_LANGMUIR], MODEL_LABELS[MODEL_TDM_LANGMUIR]):
+            with self.subTest(model=model), patch.dict(tdm_bridge.__dict__, {
+                "tdm_ui_model": model,
+                "tdm_ui_c1_qmax_g_L": 37.5,
+                "tdm_ui_c1_b_L_g": 0.08,
+                "tdm_ui_c1_qmax_mg_ml": 999.0,
+            }):
+                cfg = tdm_bridge.build_shared_config_from_jmp()
+                self.assertEqual(cfg["components"][0]["qmax_g_L"], 37.5)
+                self.assertAlmostEqual(cfg["components"][0]["H"], 3.0)
+
+    def test_zero_dispersion_fit_starts_at_entered_value(self):
+        cfg = config_for()
+        cfg["components"][0]["D_app_mm2_s"] = 0.0
+        specs = ls.fit_parameter_specs(cfg, unlocked_paths=["components[0].D_app_mm2_s"])
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].initial, 0.0)
+
+    def test_global_fit_can_leave_zero_dispersion_bound(self):
+        true = config_for()
+        true["numerics"] = {"time_steps": 50, "axial_positions": 6}
+        target = float(true["components"][0]["D_app_mm2_s"])
+        trace = simulate(true)["trace"]
+        base = copy.deepcopy(true)
+        base["components"][0]["D_app_mm2_s"] = 0.0
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            source = tmp / "known_dispersion.csv"
+            with source.open("w", newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["CV", "UV_mAU"])
+                writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
+            names = ["FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
+                     "FIT_REPORT_HTML", "FIT_CONFIG_JSON", "FIT_APPLY_JSL",
+                     "FIT_SETTINGS_JSON", "FIT_HISTORY_CSV", "FIT_IMPROVED_CSV",
+                     "FIT_IMPROVED_TXT", "CONFIG_PATH"]
+            with patch.multiple(ls, **{name: tmp / getattr(ls, name).name for name in names}):
+                result = ls.run_global_least_squares_refinement(
+                    [{"config": base, "chromatogram_csv": source}],
+                    unlocked_paths=["components[0].D_app_mm2_s"], max_nfev=20,
+                )
+        self.assertTrue(result["accepted"])
+        self.assertTrue(result["success"], result["message"])
+        self.assertLess(result["final_objective"], result["initial_objective"] * 1e-5)
+        self.assertAlmostEqual(result["fitted_config"]["components"][0]["D_app_mm2_s"], target, delta=target * .01)
+
+    def test_independent_lsq_process_table(self):
+        src = load_batch_rows()
+        dst = load_lsq_rows()
+        self.assertEqual(len(dst), 30)
+        self.assertEqual(dst[0]["LSQ_Weight"], "1.0")
+        self.assertNotEqual(str(BATCH_RUNS_CSV.resolve()), str(LSQ_RUNS_CSV.resolve()))
+        self.assertNotEqual(dst[0]["Run_Name"], src[0]["Run_Name"])
+
+    def test_jsl_includes_new_scope_and_objective(self):
+        launcher = (ROOT / "00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl").read_text(encoding="utf-8")
+        self.assertIn('Python Install Packages( "numpy scipy openpyxl" )', launcher)
+        self.assertIn('dependencies_r23_checked', launcher)
+        jsl = build_jsl()
+        _validate_jsl(jsl)
+        for expected in ["dtLSQRuns", "SwitchProcessScope", "lsqWeight",
+                         "WEIGHTED_RMSE", "lsqRunsFile", "activeRunsFile",
+                         "lsqSheet", "lsqXColumn", "lsqSignalColumn", "lsqXUnit"]:
+            self.assertIn(expected, jsl)
+
+    def test_xlsx_and_csv_weighted_objective_and_optimisation(self):
+        true1 = config_for(1)
+        true2 = config_for(2)
+        # Change the SECOND LSQ profile recipe so a shared fit truly spans two
+        # different chromatographic operating conditions.
+        true2["feed"]["total_concentration_mg_mL"] *= 0.8
+        # Build a known true UV reference from the existing mechanistic solver.
+        sim1 = simulate(true1)["trace"]
+        sim2 = simulate(true2)["trace"]
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            x1, y1 = np.asarray(sim1["CV"]), np.asarray(sim1["uv_mAU"])
+            x2, y2 = np.asarray(sim2["CV"]), np.asarray(sim2["uv_mAU"])
+            w1 = np.linspace(0.5, 2.0, len(x1))
+            w2 = np.ones(len(x2))
+            xlsx = tmp/"ref_profile_1.xlsx"
+            csvfile = tmp/"ref_profile_2.csv"
+            write_excel(xlsx, x1, y1, w1)
+            with csvfile.open("w",newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["CV", "Signal", "Weight"])
+                writer.writerows(zip(x2,y2,w2))
+            self.assertEqual(ls.inspect_chromatogram_csv(xlsx)["weight_column"], "Weight")
+            r1 = ls.load_chromatogram_reference(xlsx, true1)
+            self.assertEqual(len(r1.cv), len(x1))
+            self.assertTrue(np.allclose(r1.signal, y1))
+            self.assertTrue(np.allclose(r1.point_weights, w1))
+            base1 = copy.deepcopy(true1)
+            base2 = copy.deepcopy(true2)
+            true_uv = float(true1["conversion"]["uv_to_protein_mAU_L_g"])
+            base1["conversion"]["uv_to_protein_mAU_L_g"] = true_uv * 0.72
+            base2["conversion"]["uv_to_protein_mAU_L_g"] = true_uv * 0.72
+            profiles = [
+                {"config":base1,"chromatogram_csv":xlsx,"run_context":{"run_number":1,"run_name":"LSQ 1"},"weight":3.0},
+                {"config":base2,"chromatogram_csv":csvfile,"run_context":{"run_number":2,"run_name":"LSQ 2"},"weight":1.0},
+            ]
+            # Prevent test fits from changing the user's original model files.
+            path_constants = ["FIT_RESULTS_CSV","FIT_TRACE_CSV","FIT_COMPOSITION_CSV",
+                              "FIT_REPORT_HTML","FIT_CONFIG_JSON","FIT_APPLY_JSL",
+                              "FIT_SETTINGS_JSON","FIT_HISTORY_CSV","FIT_IMPROVED_CSV",
+                              "FIT_IMPROVED_TXT","CONFIG_PATH"]
+            with patch.multiple(ls, **{name: tmp / getattr(ls, name).name for name in path_constants}):
+                result = ls.run_global_least_squares_refinement(
+                    profiles, unlocked_paths=["conversion.uv_to_protein_mAU_L_g"], max_nfev=6)
+            self.assertTrue(result["accepted"], result["message"])
+            self.assertTrue(result["success"], result["message"])
+            self.assertLess(result["final_weighted_rmse"], result["initial_weighted_rmse"] * 0.15)
+            fitted_uv = float(result["fitted_config"]["conversion"]["uv_to_protein_mAU_L_g"])
+            self.assertAlmostEqual(fitted_uv,true_uv,delta=true_uv*.03)
+            self.assertEqual(len(result["profile_metrics"]),2)
+            # The objective is literally sum(run normalised weight * weighted point MSE).
+            with (tmp/"least_squares_fit_trace.csv").open(newline="") as fh:
+                fit_trace = list(csv.DictReader(fh))
+            sum_contrib = sum(float(row["Profile_Objective_Contribution"]) for row in fit_trace)
+            self.assertAlmostEqual(sum_contrib,result["final_objective"],delta=max(result["final_objective"]*1e-6,1e-8))
+            with (tmp/"least_squares_improved_parameters.csv").open(newline="") as fh:
+                changed = list(csv.DictReader(fh))
+            self.assertEqual([row["Parameter_Path"] for row in changed], ["conversion.uv_to_protein_mAU_L_g"])
+            self.assertTrue((tmp/"least_squares_fit_report.html").is_file())
+            self.assertTrue((tmp/"least_squares_settings.json").is_file())
+            self.assertIn("weighted_rmse_formula",json.loads((tmp/"least_squares_settings.json").read_text()))
+
+    def test_xlsx_column_override_and_independent_metadata(self):
+        from tdm_bridge import _lsq_reference_column_options
+        with tempfile.TemporaryDirectory() as d:
+            source = Path(d)/"multiple_detector_signals.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Baseline data"
+            sheet.append(["CV", "Signal"])
+            for n in range(6):
+                sheet.append([n, 10.0 + n])
+            signal = workbook.create_sheet("Actual target")
+            signal.append(["Sample index", "UV 280 [mAU]", "Measured response", "Point Weight"])
+            for n in range(6):
+                signal.append([n, 99, 10.0 + 2*n, 1.0 + n])
+            workbook.save(source)
+            row = {"LSQ_Sheet": "Actual target", "LSQ_X_Column": "Sample index",
+                   "LSQ_Signal_Column": "Measured response", "LSQ_X_Unit": "INDEX"}
+            options = _lsq_reference_column_options(row)
+            info = ls.inspect_chromatogram_csv(source, **options)
+            self.assertEqual(info["signal_column"], "Measured response")
+            self.assertEqual(info["weight_column"], "Point Weight")
+            cfg = config_for()
+            ref = ls.load_chromatogram_reference(source, cfg, **options)
+            self.assertEqual(ref.x_unit, "INDEX")
+            self.assertEqual(ref.signal.tolist(), [10,12,14,16,18,20])
+            self.assertEqual(ref.point_weights.tolist(), [1,2,3,4,5,6])
+            with self.assertRaisesRegex(ValueError, "worksheet"):
+                ls.inspect_chromatogram_csv(source, sheet_name="Missing tab")
+            with self.assertRaisesRegex(ValueError, "also set the reference X-axis unit"):
+                ls.inspect_chromatogram_csv(source, sheet_name="Actual target", x_column="UV 280 [mAU]", signal_column="Measured response", x_unit="AUTO")
+
+    def test_weighted_rmse_rejects_composition_mix(self):
+        # A composition mass% residual must not silently distort a response-unit RMSE.
+        with tempfile.TemporaryDirectory() as d:
+            source = Path(d)/"chrom.csv"
+            source.write_text("CV,UV 280 [mAU]\n0,1\n1,2\n2,3\n", encoding="utf-8")
+            cfg = config_for()
+            with self.assertRaisesRegex(ValueError, "chromatogram signals only"):
+                ls.run_global_least_squares_refinement([{
+                    "config": cfg, "chromatogram_csv": source, "composition_references": [
+                        {"CV": 0.5, "mass_percent": {"Target": 100.0}}],
+                }], mode="CHROMATOGRAM_AND_COMPOSITION", unlocked_paths=[])
+
+    def test_invalid_sample_and_run_weights_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            file = Path(d)/"broken.csv"
+            file.write_text("CV,Signal,Weight\n0,1,1\n1,2,-1\n2,3,1\n",encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "nonnegative"):
+                ls.load_chromatogram_reference(file, config_for())
+            file.write_text("CV,Signal\n0,1\n1,2\n2,3\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "run weight"):
+                ls.run_global_least_squares_refinement([{
+                    "config": config_for(), "chromatogram_csv": file, "weight": 0,
+                }], unlocked_paths=[])
+            with self.assertRaisesRegex(ValueError, "1–5"):
+                ls.run_global_least_squares_refinement([{}] * 6)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

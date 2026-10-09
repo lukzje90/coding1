@@ -1,0 +1,75 @@
+JMP BUTTON / CHROMATOGRAM READ-PATH AUDIT
+=========================================
+
+Build
+-----
+2026-09-29-R3
+
+Scope
+-----
+Audited the generated JMP/JSL callbacks and the Python bridge actions that save model
+inputs, run the selected saved profile, run a batch, attach an LSQ chromatogram, refine
+parameters, check/open the latest result, and open batch or fit outputs.
+
+Changes in this build
+---------------------
+- The root batch-gallery copy now declares the relative base folder `batch_results/`.
+  The nested gallery and its run assets stay together, and the copied gallery's links
+  now resolve to the actual per-run HTML and SVG files.
+- A failed bridge action now leaves its complete error in `tdm_status.txt` and returns
+  normally to the JSL callback. The previous error guard raised through Python Submit
+  File for most actions, which could stop JSL before it displayed that status. Direct
+  command-line failures still raise an error.
+- Least-squares apply-to-UI JSL is evaluated only when the bridge status confirms that
+  the fit was accepted. An old apply script cannot be applied after a failed or rejected
+  fit.
+- Batch-gallery, batch-summary, and fit-report buttons display a useful status when
+  their output has not been generated, instead of silently doing nothing.
+
+Button paths and expected files
+-------------------------------
+- **Save model + run** -> `SAVE_MODEL`; saves shared mechanistic values and writes the
+  validation result to `tdm_status.txt`.
+- **Run selected** -> `RUN_SELECTED`; reads the current saved run row and current shared
+  model parameters; writes `latest_results.html`, `.csv`, `.svg`, and
+  `latest_results_manifest.json` in the package folder.
+- **Open latest chromatogram / Open latest result data** -> `CHECK_RESULT_CURRENT`;
+  compares the current selected run, its recipe, model settings, and output hashes with
+  the receipt before opening the HTML or CSV. A stale/missing result is reported without
+  opening the old output.
+- **Run saved batch** -> `RUN_BATCH`; reads the first N saved run rows, writes each run
+  under `batch_results/run_NNN/`, and creates the batch summary and gallery.
+- **Open batch gallery / Open batch summary** -> opens the root gallery/CSV copies;
+  gallery links are based from `batch_results/`.
+- **Attach / validate chromatogram CSV** -> `ATTACH_LSQ_CSV`; reads the selected LSQ
+  profile number and visible CSV path, validates/attaches that file, and saves its path
+  to the same profile row in `tdm_batch_runs.csv`.
+- **Run least-squares refinement** -> `FIT_LSQ`; reads the selected LSQ profile's run
+  row and attached CSV, writes a report/settings snapshot and per-profile fit files, and
+  returns accepted fit values to the visible parameter boxes only after acceptance.
+- **Open fit report / Open LSQ report** -> opens the latest fit report or explains that
+  a report must first be generated.
+
+Verification completed
+----------------------
+- Python syntax compilation and the full `verify_model.py` suite passed, including an
+  isolated package integration that executes the bridge in JMP-style globals for
+  `SAVE_MODEL`, a failed `RUN_SELECTED`, a successful `RUN_SELECTED`, freshness checks
+  for both matching and different selected runs, `RUN_BATCH`, CSV attachment to Run 2,
+  and least-squares refinement against a generated Run 2 chromatogram.
+- The integration checked that the selected result receipt and result files were
+  written, a different selected run is rejected as stale, batch summary/gallery files
+  exist, both run assets exist, and the copied gallery base resolves to those assets.
+- The error-path integration confirmed the bridge returned a failing status without
+  raising through the JSL-style submission namespace; the fit path produced an accepted
+  fit status, apply script, and report for the selected profile.
+- Generated JSL callbacks were structurally checked and asserted to use the audited
+  bridge actions and report-opening handlers.
+
+JMP verification boundary
+-------------------------
+JMP is not installed in this automated environment. Native clicking of the JMP buttons
+could not be performed here. The generated JSL was structurally checked, and the
+underlying actions, selected-profile mappings, output paths, status routing, receipt
+logic, and report generation were executed in Python using an isolated copy of the
+package. This audit does not claim a native JMP UI click test.

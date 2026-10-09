@@ -1,0 +1,12 @@
+Competitive Langmuir qmax input correction
+===========================================
+
+The EDM and TDM Competitive Langmuir interfaces now require explicit, positive qmax,i and b_i inputs for every active species.
+
+Isotherm: q_i* = qmax,i * b_i * c_i / (1 + sum_j(b_j * c_j))
+Derived display: H_i = qmax,i * b_i
+qmax is entered as mg/mL stationary phase. Its numeric value equals g/L for the solver.
+
+The Python solver consumes qmax and b; least squares estimates qmax and b and refreshes derived H at each trial. Saved legacy configurations that contain H and b are migrated with qmax = H/b.
+
+Verification: verify_model.py passed all 22 regression stages, including EDM/TDM solver paths, parameter mapping, qmax saturation, legacy migration, least-squares fit improvement, and mass balance. A separate check confirmed that missing qmax is rejected. Generated JSL was structurally validated; native JMP is not installed in the verification environment.

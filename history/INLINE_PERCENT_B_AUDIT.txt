@@ -1,0 +1,47 @@
+INLINE BUFFER-B % UI / DATA-FLOW AUDIT
+======================================
+
+R8 supersession
+---------------
+This R7-era audit records the earlier salt-independent Langmuir behavior. R8 makes HIC
+Competitive Langmuir salt-dependent through the EML affinity factor, and both Langmuir
+column solvers use the local salt profile. See `R8_HIC_SALT_DEPENDENCE_AUDIT.txt`.
+
+Requested behaviour
+-------------------
+1. Buffer-B % controls are direct inputs immediately below each PLW/elution CV and Flow.
+2. Start/set-point %B and End %B are run-specific and saved independently for all 30 runs.
+3. Buffer A = 0% B and Buffer B = 100% B.
+4. %B resolves to run pH, salt concentration, conductivity, and TDM-CPA ionic strength.
+5. The resolved run chemistry propagates through all four model program builders and output traces.
+
+UI checks
+---------
+Generated JSL is asserted to place, in this exact order inside PLW 1 and Elution 1:
+  Volume [CV] < Flow [mL/min] < Start/set-point Buffer B [%] < End Buffer B [%] < Chemistry control.
+The same panel generator is used for PLW 1-5 and Elution 1-5.
+Buffer A/B definitions remain editable in Process Setup for every model combination.
+
+Solver/data-flow checks
+-----------------------
+The regression suite constructs the same Buffer A/B and %B programs for:
+  EDM-Competitive Langmuir
+  TDM-Competitive Langmuir
+  EDM-CPA
+  TDM-CPA
+and verifies that the ProgramStage start/end pH and salt concentrations equal the expected Buffer-A/B blends.
+
+The result trace for every model contains:
+  pH
+  salt_concentration_M
+  conductivity_mS_cm
+  ionic_strength_M
+  stage_index
+so the run chemistry can be audited after simulation.
+
+CPA models: changing %B changes the mechanistic result because CPA consumes pH/ionic strength.
+Competitive Langmuir models: changing %B changes the programmed/output chemistry but intentionally does not change the Langmuir chromatogram because q_i*=H_i c_i/(1+sum b_j c_j) contains no pH or salt term in the supplied model.
+
+Verification result
+-------------------
+Fresh regression suite: 18/18 checks passed.

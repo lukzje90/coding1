@@ -1,0 +1,24 @@
+R16 BUFFER CHEMISTRY HANDOFF FIX AUDIT
+======================================
+
+Defect: Buffer salt was derived from conductivity only, direct/saved salt
+values were discarded, and mobile-phase transport exposed ionic strength in
+the HIC salt slot. TDM-CPA ion composition was not shared by EDM-CPA.
+
+Fix:
+* Add explicit CONDUCTIVITY / SALT_M selection for buffers and direct endpoints.
+* Preserve saved salt, mode and deliberate blanks through CSV migration.
+* Transport salt molarity, ionic strength, conductivity and %B independently.
+* Resolve I = 0.5*sum(c_i*z_i^2) for both CPA models when ION_COMPOSITION is
+  selected; HIC binds against salt molarity.
+* Record resolved chemistry in the parameter receipt, result CSV and HTML.
+* Keep 100% B high-salt -> 0% B low-salt HIC direction and native CPA IEX law.
+
+Checks:
+* verify_r16.py: all 10 R16 checks passed.
+* verify_model.py --buttons-only: passed saved-run, batch, attach and LSQ
+  bridge routes.
+* Full-resolution startup preset: peak 11.8514 CV, pre-elution outlet
+  7.0e-279% of load, mass-closure error -0.00035% of input.
+
+Build: 2026-10-07-R16

@@ -1,0 +1,7 @@
+{
+  "single_initial_SSE": 0.0,
+  "single_final_SSE": 0.0,
+  "global_initial_SSE": 0.0,
+  "global_final_SSE": 0.0,
+  "original_values_preserved_exactly": true
+}

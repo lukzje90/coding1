@@ -1,0 +1,27 @@
+R18 BUFFER AND LOAD CHEMISTRY HANDOFF AUDIT
+===========================================
+
+Observed handoff gap:
+- Editing load pH, salt mode/value or conductivity selected EXPLICIT load
+  chemistry, but could leave Load_Source at BUFFER_A or BUFFER_B.
+- Explicit source resolution then correctly followed that buffer and ignored
+  the separate direct load fields.
+
+Correction:
+- Load pH/salt/conductivity edit callbacks select EXPLICIT and DIRECT before
+  persisting the selected run.
+- A deliberate Buffer A/B load source continues to follow that buffer until a
+  direct load measurement is edited.
+- Result receipts continue to record the exact chemistry and salt inputs used.
+
+End-to-end verification:
+- Generated JMP field names -> Python bridge -> shared model settings and
+  saved run row -> effective run configuration -> solver.
+- Conductivity factor 0.02 -> 0.01 changes 100% Buffer B load salt 2.0 -> 1.0 M.
+- HIC salt sensitivity k_s 6 -> 0 changes the UV trace.
+- Direct load conductivity 35 mS/cm resolves to 0.70 M with factor 0.02 even
+  when the starting row selected BUFFER_A and retains load %B at 100.
+- verify_r18.py and verify_r16.py passed; verify_model.py --buttons-only
+  completed the button/bridge audit.
+
+Build: 2026-10-07-R18

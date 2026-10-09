@@ -1,0 +1,24 @@
+R17_LOAD_CHEMISTRY_AND_FLOW_AUDIT
+Build: 2026-10-07-R17
+
+Changes audited:
+- system.show_flow_rate is normalized, sent from JMP, persisted, and used by the SVG/HTML overlay.
+- Flow is exported in trace and CSV from StageProgram.flow_at_time, the same stage command used by the solver.
+- New per-run Load_Material_Chemistry_Mode values: BUFFER_RECIPE and EXPLICIT.
+- Explicit load material chemistry uses saved Load_Source, Load_pH, Load_Salt_Input_Mode, Load_Salt_M and Load_Conductivity_mS_cm.
+- Legacy endpoint-chemistry rows migrate to EXPLICIT; other legacy rows migrate to BUFFER_RECIPE.
+- Explicit load chemistry is used by _build_program, process_pH_span and _build_cpa_components, including salt input mode.
+- Load stage receipts report EXPLICIT_LOAD_MATERIAL when the explicit mode is consumed.
+
+Focused test:
+- EDM_LANGMUIR, explicit DIRECT load, pH 8.25, conductivity 35.0 mS/cm, conversion factor 0.02 M/(mS/cm).
+- Retained load %B values were 100 -> 100, but the resolved load stage was pH 8.25, salt 0.70 M, conductivity 35.0 mS/cm, with no %B endpoint.
+- Load, PLW and elution flow values 1.7, 0.8 and 2.4 mL/min appeared in the trace and CSV; SVG contains data-overlay="flow-rate" and HTML contains the Show flow rate toggle.
+- Result: PASS.
+
+Regression tests:
+- verify_r16.py: ALL R16 CHEMISTRY CHECKS PASSED.
+- verify_r17.py: JMP field names -> Python bridge -> saved run row -> effective
+  solver config; conductivity factor and HIC k_s changes each changed outputs;
+  load-material chemistry and flow overlay checks passed.
+- verify_model.py --buttons-only: completed the button/bridge audit; its intentional invalid-input case still reports the expected missing-qmax validation before successful runs.

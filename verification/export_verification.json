@@ -1,0 +1,16 @@
+[
+  {
+    "objective": "RAW_SSE",
+    "exported_contributions": 1.3767390000000672,
+    "reported_objective": 1.3767390000000672,
+    "residual_sign": "predicted - measured",
+    "passed": true
+  },
+  {
+    "objective": "NORMALIZED_MSE",
+    "exported_contributions": 1.1312926948999327e-08,
+    "reported_objective": 1.1312926948999329e-08,
+    "residual_sign": "predicted - measured",
+    "passed": true
+  }
+]

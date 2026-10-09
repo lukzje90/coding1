@@ -1,0 +1,40 @@
+LEAST-SQUARES CSV PATH AND ENCODING RECOVERY
+================================
+
+The attach button opens JMP Pick File when the path field is blank or the entered path
+does not exist. Selecting a CSV fills the path field and calls the existing Python
+attachment and validation bridge. If a supplied path has no extension, the Python bridge
+tries the exact path, then the same path with .csv and .CSV appended. A missing-file error
+now reports the checked paths and advises using the picker.
+JMP may also return a Windows drive path with a leading slash (for example,
+`/C:/Users/...`) or backslash (`\C:\Users\...`). The bridge removes only those
+leading separator(s) before a drive letter and preserves UNC network paths. If the
+normalized path still cannot be opened, the error reports both the path received from
+JMP and the normalized path checked.
+
+Every Python Submit File action now sends the active extracted folder to Python, puts it
+first on `sys.path`, and removes cached chromatography modules before importing them.
+This addresses JMP's persistent interpreter retaining an older `tdm_least_squares` module
+or stale project path after an update. Successful attachment status reports the active
+model folder and selected CSV.
+
+CSV decoding is BOM-aware: UTF-8, UTF-16, and UTF-32 byte-order marks are detected.
+For files without a BOM, the reader tries UTF-8, Windows-1252, then Latin-1. The
+regression suite attaches a UTF-16LE BOM chromatogram as well as the normal UTF-8 sample.
+
+Verification performed 2026-09-28:
+- Python syntax compilation passed for tdm_bridge.py, tdm_jmp.py, tdm_least_squares.py,
+  and verify_model.py.
+- Generated JSL passed _validate_jsl; checks cover invalid-path picker fallback, path
+  assignment before the bridge action, and resending the active project folder each time.
+- A temporary chromatogram named “Corabotase 20 CV GE.csv” was found when given the
+  extensionless base path “Corabotase 20 CV GE”.
+- Regression checks cover `/C:/...`, `\C:\...`, and unchanged `\\server\share\...` paths.
+- UTF-16LE BOM and Windows-1252 chromatograms attach and pass CSV header/row validation.
+- Regression checks prove the bridge reloads module files from the active extraction after
+  older versions are already cached in the same Python interpreter.
+- All 22 verify_model.py regression stages passed, including raw CSV attachment,
+  least-squares objective reduction, and applying fitted parameters.
+- Native JMP GUI interaction was not available in this build environment.
+- After the per-action project-folder resend was added, Python compilation and generated JSL
+  validation passed again.

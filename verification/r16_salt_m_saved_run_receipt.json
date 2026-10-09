@@ -1,0 +1,36 @@
+{
+  "build": "2026-10-07-R16",
+  "input_path": "saved-run row -> batch_row_to_run_config -> apply_batch_shared_parameters -> simulate",
+  "buffer_A": {
+    "pH": 6.0,
+    "salt_input_mode": "SALT_M",
+    "salt_concentration_M": 0.1,
+    "conductivity_mS_cm": 5.0,
+    "ionic_strength_source": "SALT_PROXY",
+    "ionic_strength_M": 0.1,
+    "conductivity_source": "SALT_FACTOR_ESTIMATE"
+  },
+  "buffer_B": {
+    "pH": 6.0,
+    "salt_input_mode": "SALT_M",
+    "salt_concentration_M": 1.5,
+    "conductivity_mS_cm": 75.0,
+    "ionic_strength_source": "SALT_PROXY",
+    "ionic_strength_M": 1.5,
+    "conductivity_source": "SALT_FACTOR_ESTIMATE"
+  },
+  "programmed_salt_start_M": 1.5,
+  "programmed_salt_end_M": 0.10000000000000009,
+  "column_salt_start_M": 1.5,
+  "column_salt_end_M": 0.21900000000000017,
+  "binding_salt_min_M": 0.10000018732924,
+  "binding_salt_max_M": 1.5,
+  "mass_balance": {
+    "input_g": 0.01,
+    "outlet_g": 0.010185088563189974,
+    "column_inventory_g": 0.0,
+    "closure_error_g": -0.00018508856318997374,
+    "closure_error_percent_of_input": -1.8508856318997373
+  },
+  "elapsed_seconds": 1.988458375999926
+}

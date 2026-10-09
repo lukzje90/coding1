@@ -1,0 +1,5 @@
+PASS EDM_LANGMUIR STEP start=0/end=100 equilibrates at 100% B
+PASS TDM_LANGMUIR STEP start=0/end=100 equilibrates at 100% B
+PASS EDM_CPA STEP start=0/end=100 equilibrates at 100% B
+PASS TDM_CPA STEP start=0/end=100 equilibrates at 100% B
+ALL STEP LOAD CHECKS PASSED

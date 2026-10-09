@@ -1,0 +1,13 @@
+PASS Legacy mg/mL capacities migrate to g/L with factor 1; saved keys and locks use g/L
+PASS All-locked state and five selected saved runs survive save/reload without truncation
+PASS Explicit new-schema values take precedence over legacy aliases, including cleared input
+PASS g/L qmax reaches the isotherm saturation limit and derived H without a scaling error
+PASS Old and new fitting-lock paths address the same g/L parameter in both Langmuir models
+PASS JMP sends g/L qmax, legacy sends remain readable, and clearing an input stays authoritative
+PASS New labels, all six species sends, CSV feed binding and JSL structure are valid
+PASS Feed concentration persists through run CSV and correctly determines capacity-based load CV
+PASS EDM_LANGMUIR legacy/g/L predictions match exactly; feed concentration changes load mass and UV
+PASS TDM_LANGMUIR legacy/g/L predictions match exactly; feed concentration changes load mass and UV
+PASS EDM_CPA legacy/g/L predictions match exactly; feed concentration changes load mass and UV
+PASS TDM_CPA legacy/g/L predictions match exactly; feed concentration changes load mass and UV
+ALL R14 UNIT AND FEED CHECKS PASSED

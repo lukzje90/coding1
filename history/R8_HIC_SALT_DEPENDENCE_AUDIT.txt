@@ -1,0 +1,52 @@
+R8 HIC SALT-DEPENDENT COMPETITIVE LANGMUIR AUDIT
+================================================
+
+Purpose
+-------
+Make buffer salt concentration and conductivity affect the HIC Competitive Langmuir
+column prediction, while preserving protein mass balance and the existing run-specific
+load/PLW/elution controls.
+
+Isotherm
+--------
+Each component has qmax_i, b_i and salt sensitivity k_s,i [M^-1]. The equilibrium
+capacity is
+
+  b_eff,i = b_i exp(k_s,i m_s)
+  q_i* = qmax_i b_eff,i c_i / (1 + sum_j b_eff,j c_j)
+
+The model uses resolved salt molarity as a molality surrogate because run recipes store
+concentrations in mol/L. Positive k_s represents the normal HIC trend of stronger binding
+at higher salt. This is an empirical salt-affinity extension; its coefficient is specific
+to the protein/resin/salt system. The UI and least-squares parameter list expose k_s,i.
+The initial 1 M^-1 value is a starter, not a calibrated value. Fitting k_s requires data
+at multiple salt conditions; conductivity-to-salt conversion must also be appropriate for
+the actual buffer system.
+
+Model data flow
+---------------
+1. The selected run's Buffer A/B salt comes from direct salt concentration, when provided,
+   or conductivity multiplied by the editable conductivity-to-salt factor.
+2. Load and each PLW/elution resolve a local salt program from the selected endpoints,
+   whether the step uses Buffer B percent or direct endpoint chemistry.
+3. The solver samples salt with the unretained interstitial convective delay to each axial
+   cell and applies that salt to the local competitive affinity.
+4. EDM integrates total concentration c_i + F q_i. TDM integrates particle total
+   concentration cp_i + beta_i q_i. At each solver evaluation, the local salt-dependent
+   equilibrium is inverted to recover mobile concentrations. Thus changing salt changes
+   partitioning/chromatogram response without losing protein mass.
+5. The output chromatogram is the mobile outlet concentration, not the conserved total
+   state. CSV salt/conductivity/%B traces retain the run recipe used for the simulation.
+
+Validation
+----------
+The regression suite checks both EDM and TDM HIC Langmuir by changing only Buffer A/B
+conductivity (with direct salt blank) and then by changing direct salt (with conductivity
+held constant). Each path must change the local salt trace and protein chromatogram, while
+mass-balance closure stays below 0.05% of input. The full suite also checks both solvers' multicomponent competitive isotherm,
+the generated JMP control, JMP-to-Python mapping, least-squares exposure of k_s,i, direct
+salt/conductivity handling, results generation, and stale-result protection.
+
+Native JMP is not installed in the verification environment. Generated JSL structure and
+the same Python bridge path used by the JMP actions are tested; actual JMP rendering should
+be confirmed in the user's JMP installation.

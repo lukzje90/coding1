@@ -1,0 +1,29 @@
+{
+  "build_id": "2026-10-08-R22",
+  "model": "EDM_LANGMUIR",
+  "status": "PASS",
+  "scope": "Generated JMP sends, bridge shared parameters, solver local affinity, result receipt/CSV, and elution peak sensitivity",
+  "profiles": [
+    {
+      "b_L_g": 0.0029,
+      "k_s_per_M": 5.0,
+      "peak_CV": 4.689319955406912,
+      "elution_start_b_eff_L_g": 16.361899945347076,
+      "elution_end_b_eff_L_g": 0.01090597426719858
+    },
+    {
+      "b_L_g": 0.0058,
+      "k_s_per_M": 5.0,
+      "peak_CV": 5.222831661092531,
+      "elution_start_b_eff_L_g": 32.72379989069415,
+      "elution_end_b_eff_L_g": 0.02181194853439716
+    },
+    {
+      "b_L_g": 0.0029,
+      "k_s_per_M": 7.0,
+      "peak_CV": 6.586250464511335,
+      "elution_start_b_eff_L_g": 518.0933601711523,
+      "elution_end_b_eff_L_g": 0.018525547714732176
+    }
+  ]
+}
