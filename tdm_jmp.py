@@ -411,16 +411,51 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         ))''')
         lsq_selection_visibility.append(f'lsqRunSlot{slot}Row << Visibility(If(Num(lsqRunCount << Get Selected) >= {slot}, "Visible", "Collapse"));')
         lsq_selection_sends.append(f'Python Send(RunNumberFromLabel(lsqRunSlot{slot} << Get Selected), Python Name("tdm_ui_lsq_selected_run_{slot}"));')
-    lsq_control_arrays = "\n".join(
-        f'{name} = {{{", ".join(f"{prefix}{slot}" for slot in range(1, 6))}}};'
-        for name, prefix in (
-            ("lsqRunBoxes", "lsqRunSlot"), ("lsqPathBoxes", "lsqCsvPath"),
-            ("lsqWeightBoxes", "lsqWeight"), ("lsqSheetBoxes", "lsqSheet"),
-            ("lsqXColumnBoxes", "lsqXColumn"), ("lsqSignalColumnBoxes", "lsqSignalColumn"),
-            ("lsqUnitBoxes", "lsqXUnit"), ("lsqOriginBoxes", "lsqXOrigin"),
-            ("lsqRunSummaryBoxes", "lsqRunSummary"),
+    # JMP does not preserve a display box as a scriptable object when it is
+    # placed in a JSL list. Dispatch to the named controls directly instead.
+    lsq_getters = []
+    for function_name, prefix, message in (
+        ("LSQSelectedRun", "lsqRunSlot", "Get Selected"),
+        ("LSQPathText", "lsqCsvPath", "Get Text"),
+        ("LSQWeightNumber", "lsqWeight", "Get"),
+        ("LSQSheetText", "lsqSheet", "Get Text"),
+        ("LSQXColumnText", "lsqXColumn", "Get Text"),
+        ("LSQSignalColumnText", "lsqSignalColumn", "Get Text"),
+        ("LSQUnitSelected", "lsqXUnit", "Get Selected"),
+        ("LSQOriginSelected", "lsqXOrigin", "Get Selected"),
+    ):
+        branch_lines = []
+        for i in range(1, MAX_LSQ_PROFILES + 1):
+            expression = f'{prefix}{i} << {message}'
+            if function_name == "LSQSelectedRun":
+                expression = f'RunNumberFromLabel({expression})'
+            branch_lines.append(f'    If(slot == {i}, Return({expression}));')
+        branch = "\n".join(branch_lines)
+        lsq_getters.append(f'{function_name} = Function({{slot}}, {{}},\n{branch}\n    Return("");\n);')
+    lsq_setters = []
+    for function_name, prefix, message in (
+        ("LSQSetPathText", "lsqCsvPath", "Set Text"),
+        ("LSQSetRunChoice", "lsqRunSlot", "Set"),
+        ("LSQSetRunSummary", "lsqRunSummary", "Set Text"),
+    ):
+        branch = "\n".join(
+            f'    If(slot == {i}, {prefix}{i} << {message}(value));'
+            for i in range(1, MAX_LSQ_PROFILES + 1)
         )
+        lsq_setters.append(f'{function_name} = Function({{slot, value}}, {{}},\n{branch}\n);')
+    lsq_load_controls = "\n".join(
+        f'''    If(slot == {i},
+        lsqCsvPath{i} << Set Text(path);
+        lsqWeight{i} << Set(w);
+        lsqSheet{i} << Set Text(sheet);
+        lsqXColumn{i} << Set Text(xcolumn);
+        lsqSignalColumn{i} << Set Text(signal);
+        lsqXUnit{i} << Set(unitIndex);
+        lsqXOrigin{i} << Set(originIndex);
+    );'''
+        for i in range(1, MAX_LSQ_PROFILES + 1)
     )
+    lsq_control_dispatch = "\n".join(lsq_getters + lsq_setters)
     lock_state_parts = []
     for lock_var, parameter_path in fit_lock_vars:
         lock_state_parts.extend([_q(parameter_path + "="), f'{lock_var} << Get Selected', _q(";")])
@@ -622,7 +657,7 @@ batchGallery = {_path(BATCH_GALLERY_HTML)};
 batchSummary = {_path(BATCH_SUMMARY_CSV)};
 lsqApplyFile = {_path(LSQ_APPLY_JSL)};
 lsqReport = {_path(LSQ_REPORT_HTML)};
-currentRun = 1; copiedRun = 0; isLoading = 0; isLSQSetup = 0; lsqCurrentReferenceRun = 1;
+currentRun = 1; copiedRun = 0; isLoading = 0; isLSQSetup = 0;
 dtBatchRuns = Open(batchRunsFile, Invisible);
 dtLSQRuns = Open(lsqRunsFile, Invisible);
 dtRuns = dtBatchRuns; activeRunsFile = batchRunsFile;
@@ -741,41 +776,49 @@ LoadRun = Function({{n}}, {{}},
     isLoading = 0; SyncLoadAmount(); UpdateUI(); UpdateLSQRunSummary();
 );
 
+{lsq_control_dispatch}
+LSQLoadControls = Function({{slot, path, w, sheet, xcolumn, signal, unitIndex, originIndex}}, {{}},
+{lsq_load_controls}
+);
+
 SaveLSQReference = Function({{slot}}, {{r, w}},
     If(isLoading, Return());
     r = lsqLoadedRuns[slot];
     If(r < 1 | r > {MAX_LSQ_PROFILES}, Return());
-    w = lsqWeightBoxes[slot] << Get;
-    Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(lsqPathBoxes[slot] << Get Text));
+    w = LSQWeightNumber(slot);
+    Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(LSQPathText(slot)));
     Column(dtLSQRuns, "LSQ_Weight")[r] = If(Is Missing(w), 1, w);
-    Column(dtLSQRuns, "LSQ_Sheet")[r] = Trim(Char(lsqSheetBoxes[slot] << Get Text));
-    Column(dtLSQRuns, "LSQ_X_Column")[r] = Trim(Char(lsqXColumnBoxes[slot] << Get Text));
-    Column(dtLSQRuns, "LSQ_Signal_Column")[r] = Trim(Char(lsqSignalColumnBoxes[slot] << Get Text));
-    Column(dtLSQRuns, "LSQ_X_Unit")[r] = lsqUnitBoxes[slot] << Get Selected;
-    Column(dtLSQRuns, "LSQ_X_Origin")[r] = lsqOriginBoxes[slot] << Get Selected;
+    Column(dtLSQRuns, "LSQ_Sheet")[r] = Trim(Char(LSQSheetText(slot)));
+    Column(dtLSQRuns, "LSQ_X_Column")[r] = Trim(Char(LSQXColumnText(slot)));
+    Column(dtLSQRuns, "LSQ_Signal_Column")[r] = Trim(Char(LSQSignalColumnText(slot)));
+    Column(dtLSQRuns, "LSQ_X_Unit")[r] = LSQUnitSelected(slot);
+    Column(dtLSQRuns, "LSQ_X_Origin")[r] = LSQOriginSelected(slot);
     dtLSQRuns << Save(lsqRunsFile);
 );
-LoadLSQReference = Function({{slot, r}}, {{w, path, unit, origin}},
-    r = Max(1, Min({MAX_LSQ_PROFILES}, r));
+LoadLSQReference = Function({{slot, r}}, {{w, path, unit, origin, sheet, xcolumn, signal}},
+    If(Is Missing(Num(r)), r = slot);
+    r = Max(1, Min({MAX_LSQ_PROFILES}, Num(r)));
     path = Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r];
     w = Num(Column(dtLSQRuns, "LSQ_Weight")[r]);
     lsqLoadedRuns[slot] = r;
-    lsqPathBoxes[slot] << Set Text(If(Is Missing(path), "", Char(path)));
-    lsqWeightBoxes[slot] << Set(If(Is Missing(w), 1, w));
-    lsqSheetBoxes[slot] << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_Sheet")[r]), "", Char(Column(dtLSQRuns, "LSQ_Sheet")[r])));
-    lsqXColumnBoxes[slot] << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_X_Column")[r]), "", Char(Column(dtLSQRuns, "LSQ_X_Column")[r])));
-    lsqSignalColumnBoxes[slot] << Set Text(If(Is Missing(Column(dtLSQRuns, "LSQ_Signal_Column")[r]), "", Char(Column(dtLSQRuns, "LSQ_Signal_Column")[r])));
+    sheet = Column(dtLSQRuns, "LSQ_Sheet")[r];
+    xcolumn = Column(dtLSQRuns, "LSQ_X_Column")[r];
+    signal = Column(dtLSQRuns, "LSQ_Signal_Column")[r];
     unit = Uppercase(Char(Column(dtLSQRuns, "LSQ_X_Unit")[r]));
-    lsqUnitBoxes[slot] << Set(If(unit == "CV", 2, unit == "ML", 3, unit == "MIN", 4, unit == "S", 5, unit == "H", 6, unit == "INDEX", 7, 1));
     origin = Uppercase(Char(Column(dtLSQRuns, "LSQ_X_Origin")[r]));
-    lsqOriginBoxes[slot] << Set(If(origin == "ELUTION_START", 2, 1));
+    LSQLoadControls(slot,
+        If(Is Missing(path), "", Char(path)), If(Is Missing(w), 1, w),
+        If(Is Missing(sheet), "", Char(sheet)), If(Is Missing(xcolumn), "", Char(xcolumn)),
+        If(Is Missing(signal), "", Char(signal)),
+        If(unit == "CV", 2, unit == "ML", 3, unit == "MIN", 4, unit == "S", 5, unit == "H", 6, unit == "INDEX", 7, 1),
+        If(origin == "ELUTION_START", 2, 1));
 );
 SaveAllLSQReferences = Function({{}}, {{i, j, n, ri}},
     n = Num(lsqRunCount << Get Selected);
     For(i = 1, i <= n, i++,
-        ri = RunNumberFromLabel(lsqRunBoxes[i] << Get Selected);
+        ri = LSQSelectedRun(i);
         For(j = i + 1, j <= n, j++,
-            If(ri == RunNumberFromLabel(lsqRunBoxes[j] << Get Selected),
+            If(ri == LSQSelectedRun(j),
                 lsqStatusText << Set Text("Choose a different LSQ process run in each visible run section.");
                 Return(0)
             )
@@ -789,7 +832,7 @@ ChangeLSQSlot = Function({{slot, r}}, {{i, n}},
     n = Num(lsqRunCount << Get Selected);
     For(i = 1, i <= n, i++,
         If(i != slot & r == lsqLoadedRuns[i],
-            lsqRunBoxes[slot] << Set(lsqLoadedRuns[slot]);
+            isLoading = 1; LSQSetRunChoice(slot, lsqLoadedRuns[slot]); isLoading = 0;
             lsqStatusText << Set Text("Choose a different LSQ process run in each visible run section.");
             Return()
         )
@@ -856,13 +899,13 @@ UpdateLSQRunSummary = Function({{}}, {{slot, r, n, attached, nPLW, nElution, pat
         If(r >= 1 & r <= {MAX_LSQ_PROFILES},
             nPLW = Num(Column(dtLSQRuns, "PLW_Count")[r]); If(Is Missing(nPLW), nPLW = 0);
             nElution = Num(Column(dtLSQRuns, "Elution_Count")[r]); If(Is Missing(nElution), nElution = 0);
-            path = Trim(Char(lsqPathBoxes[slot] << Get Text));
+            path = Trim(Char(LSQPathText(slot)));
             If(slot <= n & !Is Empty(path), attached++);
             summary = "LSQ Run " || Char(r) || " — " || LSQRunCellText(r, "Run_Name") ||
                 ": load " || LSQRunCellText(r, "Load_CV") || " CV, " || Char(nPLW) || " wash(es), " ||
                 Char(nElution) || " elution step(s); column " || Char(columnVolume << Get) || " mL." ||
                 If(Is Empty(path), " No chromatogram attached.", " Chromatogram entered.");
-            lsqRunSummaryBoxes[slot] << Set Text(summary)
+            LSQSetRunSummary(slot, summary)
         )
     );
     lsqProfilesStatus << Set Text(Char(n) || " run(s) selected; " || Char(attached) || " chromatogram(s) entered. Each selected run needs its own file.");
@@ -999,7 +1042,7 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     Python Send(lsqRunCount << Get Selected, Python Name("tdm_ui_lsq_run_count"));
     {''.join(lsq_selection_sends)}
     Python Send(lsqReferenceCountBox << Get Selected, Python Name("tdm_ui_lsq_reference_count"));
-    Python Send(lsqPathBoxes[lsqAttachSlot] << Get Text, Python Name("tdm_ui_lsq_csv_path"));
+    Python Send(LSQPathText(lsqAttachSlot), Python Name("tdm_ui_lsq_csv_path"));
     Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot], RunNumberFromLabel(lsqTargetRunSelector << Get Selected)), Python Name("tdm_ui_lsq_target_run"));
     Python Send(projectDir, Python Name("tdm_project_dir"));
     Python Send(projectDir, Python Name("tdm_project_dir_posix"));
@@ -1056,11 +1099,11 @@ OpenCurrentResult = Function({{openData}}, {{statusValue}},
 
 AttachLSQCSV = Function({{slot}}, {{csvPath}},
     lsqAttachSlot = slot;
-    csvPath = Trim(Char(lsqPathBoxes[slot] << Get Text));
+    csvPath = Trim(Char(LSQPathText(slot)));
     If(Is Empty(csvPath) | !File Exists(csvPath),
         csvPath = Pick File("Select raw chromatogram CSV/Excel", "", {{"Chromatogram files|csv;xlsx;xlsm", "All files|*"}}, 1, 0, "");
         If(Is Empty(csvPath), Return());
-        lsqPathBoxes[slot] << Set Text(csvPath);
+        LSQSetPathText(slot, csvPath);
     );
     SendAndRun("ATTACH_LSQ_CSV");
 );
@@ -1244,15 +1287,13 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
 modelWindow << Set Window Size(920, 850);
 impurityCountBox << Set({imp_count + 1});
 lsqReferenceCountBox << Set(1);
-{lsq_control_arrays}
 lsqLoadedRuns = {{0, 0, 0, 0, 0}};
 lsqAttachSlot = 1;
 For(lsqInitSlot = 1, lsqInitSlot <= {MAX_LSQ_PROFILES}, lsqInitSlot++,
-    LoadLSQReference(lsqInitSlot, RunNumberFromLabel(lsqRunBoxes[lsqInitSlot] << Get Selected))
+    LoadLSQReference(lsqInitSlot, LSQSelectedRun(lsqInitSlot))
 );
 LoadRun(1);
 lsqTargetRunSelector << Set(1);
-LoadLSQReference(1);
 UpdateUI();
 UpdateLSQRunSummary();
 '''
@@ -1272,6 +1313,10 @@ def _validate_jsl(jsl: str) -> None:
     for l, r in [("(", ")"), ("{", "}")]:
         if structural.count(l) != structural.count(r):
             raise ValueError(f"Unbalanced JSL delimiters: {l}{r}")
+    if re.search(r'\blsq\w*Boxes\s*\[', jsl):
+        raise ValueError("JMP display boxes cannot be sent messages through an indexed JSL list.")
+    if re.search(r'\bLoadLSQReference\s*\(\s*\d+\s*\)', jsl):
+        raise ValueError("LoadLSQReference requires both a slot and a run number.")
     required = [
         "Post-load washes [0-5]", "Elution steps [0-5]", "Runs in batch",
         "Run saved batch", "Model combination", "Number of impurities [0-5]",
@@ -1282,7 +1327,7 @@ def _validate_jsl(jsl: str) -> None:
         "Buffer A (0% B)", "Buffer B (100% B)",
         "Saturation capacity qmax,i [g/L stationary phase]", "SyncLangmuirDerived",
         "AttachLSQCSV = Function", "Pick File(\"Select raw chromatogram CSV/Excel\"",
-        "lsqPathBoxes[slot] << Set Text(csvPath)", "!File Exists(csvPath)",
+        "LSQSetPathText(slot, csvPath)", "!File Exists(csvPath)",
         "LSQ_Chromatogram_CSV", "lsqTargetRunSelector << Set(currentRun)", "RunNumberFromLabel(this << Get Selected)",
         "RunNumberFromLabel = Function", "Column(dtRuns, \"PLW_Count\")[currentRun] = Num(plwCountBox << Get Selected)",
         "Column(dtRuns, \"Elution_Count\")[currentRun] = Num(elutionCountBox << Get Selected)",
@@ -1359,6 +1404,10 @@ def _validate_jsl(jsl: str) -> None:
     for slot in range(1, MAX_LSQ_PROFILES + 1):
         if f'Button Box("Attach Excel / CSV", AttachLSQCSV({slot}))' not in jsl:
             raise ValueError(f"LSQ run section {slot} must call its own attachment handler")
+        if f'Return(RunNumberFromLabel(lsqRunSlot{slot} << Get Selected))' not in jsl:
+            raise ValueError(f"LSQ run section {slot} must read its selector directly")
+        if f'lsqCsvPath{slot} << Set Text(path)' not in jsl:
+            raise ValueError(f"LSQ run section {slot} must load its file path directly")
 
 
 def open_in_jmp() -> bool:

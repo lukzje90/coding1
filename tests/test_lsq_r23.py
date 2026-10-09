@@ -118,9 +118,15 @@ class RefinementTests(unittest.TestCase):
             self.assertIn(expected, jsl)
         self.assertLess(jsl.index("Number of runs to fit [1–5]"), jsl.index("Run section 1"))
         self.assertLess(jsl.index("Run section 5"), jsl.index('Outline Box("Fit settings"'))
-        self.assertIn('Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(lsqPathBoxes[slot] << Get Text))', jsl)
-        self.assertIn('Column(dtLSQRuns, "LSQ_X_Origin")[r] = lsqOriginBoxes[slot] << Get Selected', jsl)
+        self.assertIn('Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(LSQPathText(slot)))', jsl)
+        self.assertIn('Column(dtLSQRuns, "LSQ_X_Origin")[r] = LSQOriginSelected(slot)', jsl)
         self.assertIn('Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot]', jsl)
+        self.assertNotIn('LoadLSQReference(1);', jsl)
+        self.assertNotIn('lsqRunBoxes[', jsl)
+        self.assertNotIn('lsqPathBoxes[', jsl)
+        with self.assertRaisesRegex(ValueError, "display boxes cannot"):
+            _validate_jsl(jsl.replace("LSQSelectedRun(lsqInitSlot)",
+                                      "lsqRunBoxes[lsqInitSlot] << Get Selected"))
         for slot in range(1, 6):
             with self.subTest(slot=slot):
                 self.assertIn(f'lsqRunSlot{slot}Row << Visibility(If(Num(lsqRunCount << Get Selected) >= {slot}', jsl)
@@ -128,6 +134,8 @@ class RefinementTests(unittest.TestCase):
                 self.assertIn(f'lsqCsvPath{slot} = Text Edit Box', jsl)
                 self.assertIn(f'lsqXUnit{slot} = Combo Box', jsl)
                 self.assertIn(f'lsqXOrigin{slot} = Combo Box', jsl)
+                self.assertIn(f'Return(RunNumberFromLabel(lsqRunSlot{slot} << Get Selected))', jsl)
+                self.assertIn(f'lsqCsvPath{slot} << Set Text(path)', jsl)
 
     def test_conference_cv_and_ml_mau_axes_align_with_solver(self):
         cfg = config_for()

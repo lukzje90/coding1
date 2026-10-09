@@ -1,4 +1,8 @@
 LSQ CHROMATOGRAM IMPORT UPDATE
+JMP startup fix: the five LSQ run controls are now read by their own named
+display boxes. The run-loader always receives both a slot and a run number.
+Replace tdm_jmp.py in an existing coding1 folder and restart the JMP launcher
+to apply this interface fix while keeping your saved run tables and inputs.
 The Least-Squares Refinement tab starts with the number of runs and immediately
 shows that many file/axis sections for measured CV/mL-versus-mAU traces.
 Objective and run weights can be left at their defaults. For an elution-only conference chromatogram, set
