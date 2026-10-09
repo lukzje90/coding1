@@ -1438,6 +1438,29 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Unsupported model: {model}")
     trace = _output_trace(config, sim)
     program: StageProgram = sim["program"]
+    first_elution_CV = next(
+        (program.stage_start_CV[i] for i, stage in enumerate(program.stages) if stage.kind == "ELUTION"),
+        program.total_CV,
+    )
+    target_detector = np.asarray(trace["component_g_L"])[:, 0]
+    target_column = np.asarray(trace["column_component_g_L"])[:, 0]
+    detector_index = int(np.argmax(target_detector))
+    column_index = int(np.argmax(target_column))
+    detector_peak_CV = float(trace["CV"][detector_index]) if target_detector[detector_index] > 1e-12 else None
+    target_peak = {
+        "detector_peak_CV": detector_peak_CV,
+        "detector_peak_g_L": float(target_detector[detector_index]),
+        "column_outlet_peak_CV": float(trace["CV"][column_index]) if target_column[column_index] > 1e-12 else None,
+        "first_elution_start_CV": float(first_elution_CV),
+        "CV_after_elution_start": (detector_peak_CV - first_elution_CV if detector_peak_CV is not None else None),
+        "stage_at_detector_peak": (
+            program.stages[program._stage_index_time(float(trace["t_s"][detector_index]))].name
+            if detector_peak_CV is not None else None
+        ),
+        "binding_salt_M_at_detector_peak": (
+            float(trace["binding_salt_concentration_M"][detector_index]) if detector_peak_CV is not None else None
+        ),
+    }
     load_capacity = float(config["feed"]["load_density_mg_mL_resin"])
     required_load_CV = float(program.stages[0].duration_CV)
     required_load_volume_mL = required_load_CV * float(config["column"]["volume_mL"])
@@ -1475,6 +1498,7 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
                                   for key in ("buffer_A", "buffer_B")},
         "stage_chemistry_used": stage_chemistry_used,
         "langmuir_affinity_used": affinity_used,
+        "target_peak": target_peak,
     }
     # Keep the receipt next to solver diagnostics so a saved result records the
     # exact visible/required parameter values consumed by this run.
@@ -1484,6 +1508,7 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
     sim["diagnostics"]["column_salt_transport"] = "stirred upstream buffer volume; conservative axial transport; TDM salt fully pore-accessible; column initially equilibrated to effective load chemistry"
     sim["diagnostics"]["binding_chemistry"] = ("Analytical salt molarity [M]" if is_hic(config) or uses_langmuir(model)
                                                else "Ionic strength [M]")
+    sim["diagnostics"]["target_peak"] = target_peak
     if uses_cpa(model) and is_hic(config):
         sim["diagnostics"]["CPA_HIC_extension"] = "K_i = Delta_i * available_surface_i(q) * exp(k_s_i * salt_M); empirical hydrophobic affinity with CPA excluded-area competition, not the paper's IEX electrostatic law"
     warnings = []
@@ -1715,7 +1740,18 @@ def check_result_freshness(
         if manifest.get("build_id") != RESULT_GUARD_BUILD:
             return False, "The result was produced by another model build. Run the selected model again."
         if manifest.get("configuration_fingerprint") != configuration_fingerprint(config):
-            return False, "Current settings differ from the settings used for this chromatogram. Run the selected model again."
+            # Least-squares controls do not enter a forward chromatogram.
+            # Older receipts can also omit newly added fitting controls, so
+            # compare the stored recipe when the full audit hash differs.
+            stored = manifest.get("configuration")
+            if not isinstance(stored, dict):
+                return False, "Current settings differ from the settings used for this chromatogram. Run the selected model again."
+            current_output_config = normalize_config(config)
+            stored_output_config = normalize_config(stored)
+            current_output_config.pop("least_squares", None)
+            stored_output_config.pop("least_squares", None)
+            if current_output_config != stored_output_config:
+                return False, "Current settings differ from the settings used for this chromatogram. Run the selected model again."
         expected_number = int(context.get("run_number", 1))
         expected_name = str(context.get("run_name") or f"Run {expected_number}")
         if int(manifest.get("run_number", -1)) != expected_number or str(manifest.get("run_name")) != expected_name:
@@ -1915,6 +1951,7 @@ def write_outputs(
         "warnings": diagnostics_obj.get("warnings", []),
         "nominal_langmuir_saturation": saturation,
         "langmuir_affinity_used": affinity_used,
+        "target_peak": result.get("parameter_receipt", {}).get("target_peak"),
         "output_sha256": {
             "html": _sha256_file(html_path), "csv": _sha256_file(csv_path), "svg": _sha256_file(svg_path),
         },

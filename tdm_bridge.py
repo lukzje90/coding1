@@ -542,6 +542,15 @@ def main() -> int:
             paths = run_and_write(current_effective, run_context=context)
             result_manifest = json.loads(Path(paths["manifest"]).read_text(encoding="utf-8"))
             run_warnings = result_manifest.get("warnings") or []
+            peak = result_manifest.get("target_peak") or {}
+            peak_line = ""
+            if peak.get("detector_peak_CV") is not None:
+                peak_line = (
+                    f"Target detector peak: {peak['detector_peak_CV']:.3f} total CV "
+                    f"({peak['CV_after_elution_start']:.3f} CV from elution start); "
+                    f"column outlet peak {peak['column_outlet_peak_CV']:.3f} CV; "
+                    f"binding salt at peak {peak['binding_salt_M_at_detector_peak']:.4g} M.\n"
+                )
             affinity = result_manifest.get("langmuir_affinity_used") or []
             affinity_line = ""
             if affinity:
@@ -560,6 +569,7 @@ def main() -> int:
                 f"Run {run_number} — {context['run_name']} completed successfully.\n"
                 f"Recipe used: {_result_recipe_line(paths['manifest'])}\n"
                 f"Active mechanistic inputs consumed: {len(required_parameter_values(current_effective))}\n"
+                + peak_line
                 + affinity_line
                 + ("Run warnings:\n- " + "\n- ".join(run_warnings) + "\n" if run_warnings else "") +
                 f"HTML: {paths['html']}\nCSV: {paths['csv']}\nSVG: {paths['svg']}\nRun receipt: {paths['manifest']}"

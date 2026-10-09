@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "build_id": "2026-10-08-R22",
-  "generated_utc": "2026-10-08T13:11:38+00:00",
+  "generated_utc": "2026-10-09T07:57:40+00:00",
   "run_number": 1,
   "run_name": "EDM Competitive Langmuir - two high-salt washes",
-  "configuration_fingerprint": "abf95502a18028df3f5f5463dee424aa61b48756e9960cb88f631a816af5022a",
+  "configuration_fingerprint": "7153f3f39ab39e3944db30e3ecafc691b277362a1f5bcba2e70b2181c5adf90d",
   "configuration": {
     "model": "EDM_LANGMUIR",
     "chromatography_mode": "HIC",
@@ -23,6 +23,7 @@
       "objective": "RAW_SSE",
       "baseline_mode": "NONE",
       "detector_baseline": 0.0,
+      "max_nfev": 120,
       "unlocked_paths": null,
       "selected_run_numbers": [
         1
@@ -667,9 +668,18 @@
       ]
     }
   ],
+  "target_peak": {
+    "detector_peak_CV": 11.85142857142857,
+    "detector_peak_g_L": 4.348639831641719,
+    "column_outlet_peak_CV": 11.705714285714286,
+    "first_elution_start_CV": 5.0,
+    "CV_after_elution_start": 6.8514285714285705,
+    "stage_at_detector_peak": "Elution 1",
+    "binding_salt_M_at_detector_peak": 0.5746607142849313
+  },
   "output_sha256": {
-    "html": "f5d694f9bc257495407f60e6785cff158cc3597123d2f0317b2bd78f27d81704",
-    "csv": "b3e75e59f1e7e9a8cbfbaa1e19412e46adf5ea126e75861eefe29302607a6bab",
+    "html": "5d1e856929b0e7cd5c7ac3604eb80d57374aeae0b79c636730b7e47439a93ec1",
+    "csv": "91a45a35d2341577038a1bd2b6f2f0e90dcb4239f236e7d0b279ec06126b2b99",
     "svg": "f64256cf49c072b38d665ce08dbce8908d811b64e55ecda91a43e452a3d6d258"
   }
 }

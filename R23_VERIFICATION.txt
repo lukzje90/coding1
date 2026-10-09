@@ -3,7 +3,7 @@ R23 least-squares fitting — verification summary
 
 Verified in this environment with Python 3.13, NumPy, SciPy and openpyxl:
 
-1. Six automated tests passed, including a two-run global fit using a
+1. Twelve automated tests passed, including a two-run global fit using a
    synthetic Excel workbook plus CSV and different process/feed recipes.
 2. A deliberately perturbed detector-response parameter was recovered by
    bounded nonlinear least-squares fitting against known mechanistic signals.
@@ -15,6 +15,12 @@ Verified in this environment with Python 3.13, NumPy, SciPy and openpyxl:
 6. Mixing composition mass%-based errors into a detector-units WRMSE is
    explicitly rejected instead of silently producing dimensionally mixed RMSE.
 7. Python files compile, and the generated JSL passes static validation.
+8. The packaged Run 1 parameters sent through the JMP bridge reproduced the
+   same chromatogram as the saved model inputs. The full-resolution peak is
+   at 11.85 total CV, after elution starts at 5 CV; pre-elution loss is
+   negligible and the mass balance closes within 0.001%.
+9. Result freshness ignores changes to fitting controls while still rejecting
+   changes to binding inputs; the saved Run 1 result is current again.
 
 NOTE: The provided model archive did not include experimental measured
 chromatogram .xlsx/.xlsm files. Therefore no experiment-derived improved

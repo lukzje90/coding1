@@ -2,9 +2,9 @@
 <meta charset="utf-8"><title>Chromatography model results</title>
 <style>body{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}svg{display:block;width:100%;max-width:1000px;height:auto;background:#fff}table{border-collapse:collapse;max-width:100%;font-size:.9rem}td,th{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}td:first-child,th:first-child{text-align:left}pre{background:#f4f4f4;padding:1rem;overflow:auto}.scroll{overflow-x:auto}code{overflow-wrap:anywhere}</style>
 <h1>Chromatography model results</h1>
-<p><b>Run:</b> 1 — EDM Competitive Langmuir - two high-salt washes &nbsp; <b>Build:</b> 2026-10-08-R22 &nbsp; <b>Generated UTC:</b> 2026-10-08T13:11:38+00:00</p>
+<p><b>Run:</b> 1 — EDM Competitive Langmuir - two high-salt washes &nbsp; <b>Build:</b> 2026-10-08-R22 &nbsp; <b>Generated UTC:</b> 2026-10-09T07:57:40+00:00</p>
 <p><b>Model:</b> EDM – Competitive Langmuir</p>
-<p><b>Settings fingerprint:</b> <code>abf95502a18028df3f5f5463dee424aa61b48756e9960cb88f631a816af5022a</code></p>
+<p><b>Settings fingerprint:</b> <code>7153f3f39ab39e3944db30e3ecafc691b277362a1f5bcba2e70b2181c5adf90d</code></p>
 <p><label><input type="checkbox" checked onchange="document.querySelectorAll('[data-overlay=percent-b]').forEach(el=>el.style.display=this.checked?'':'none')"> Show %B</label>
 &nbsp; <label><input type="checkbox" checked onchange="document.querySelectorAll('[data-overlay=conductivity]').forEach(el=>el.style.display=this.checked?'':'none')"> Show conductivity</label>
 &nbsp; <label><input type="checkbox" checked onchange="document.querySelectorAll('[data-overlay=flow-rate]').forEach(el=>el.style.display=this.checked?'':'none')"> Show flow rate</label></p>
@@ -63,7 +63,7 @@
       &quot;target_load_to_saturation_ratio&quot;: 0.04
     }
   },
-  &quot;batch_shared_parameter_fingerprint&quot;: &quot;88d9d53e9a4e615f98a5abfa5c8986fc6e1d99fdac5044c30fc696fc5804e79a&quot;,
+  &quot;batch_shared_parameter_fingerprint&quot;: &quot;1aa2f38e35e96c507a406db646466d386fe7126bf75046efb3e1f91f9c205394&quot;,
   &quot;buffer_chemistry_used&quot;: {
     &quot;buffer_A&quot;: {
       &quot;pH&quot;: 6.0,
@@ -255,7 +255,16 @@
         }
       ]
     }
-  ]
+  ],
+  &quot;target_peak&quot;: {
+    &quot;detector_peak_CV&quot;: 11.85142857142857,
+    &quot;detector_peak_g_L&quot;: 4.348639831641719,
+    &quot;column_outlet_peak_CV&quot;: 11.705714285714286,
+    &quot;first_elution_start_CV&quot;: 5.0,
+    &quot;CV_after_elution_start&quot;: 6.8514285714285705,
+    &quot;stage_at_detector_peak&quot;: &quot;Elution 1&quot;,
+    &quot;binding_salt_M_at_detector_peak&quot;: 0.5746607142849313
+  }
 }</pre>
 <h2>Derived values</h2><pre>{
   &quot;model&quot;: &quot;EDM \u2013 Competitive Langmuir&quot;,
@@ -305,7 +314,7 @@
     100.0
   ],
   &quot;number_of_competing_species&quot;: 1,
-  &quot;batch_shared_parameter_fingerprint&quot;: &quot;88d9d53e9a4e615f98a5abfa5c8986fc6e1d99fdac5044c30fc696fc5804e79a&quot;,
+  &quot;batch_shared_parameter_fingerprint&quot;: &quot;1aa2f38e35e96c507a406db646466d386fe7126bf75046efb3e1f91f9c205394&quot;,
   &quot;chromatography_mode&quot;: &quot;HIC&quot;,
   &quot;system_response&quot;: {
     &quot;buffer_dispersion_enabled&quot;: true,
@@ -320,6 +329,15 @@
   },
   &quot;column_salt_transport&quot;: &quot;stirred upstream buffer volume; conservative axial transport; TDM salt fully pore-accessible; column initially equilibrated to effective load chemistry&quot;,
   &quot;binding_chemistry&quot;: &quot;Analytical salt molarity [M]&quot;,
+  &quot;target_peak&quot;: {
+    &quot;detector_peak_CV&quot;: 11.85142857142857,
+    &quot;detector_peak_g_L&quot;: 4.348639831641719,
+    &quot;column_outlet_peak_CV&quot;: 11.705714285714286,
+    &quot;first_elution_start_CV&quot;: 5.0,
+    &quot;CV_after_elution_start&quot;: 6.8514285714285705,
+    &quot;stage_at_detector_peak&quot;: &quot;Elution 1&quot;,
+    &quot;binding_salt_M_at_detector_peak&quot;: 0.5746607142849313
+  },
   &quot;nominal_langmuir_saturation&quot;: {
     &quot;stationary_fraction_of_bed&quot;: 0.25,
     &quot;target_qmax_g_L_stationary_phase&quot;: 100.0,

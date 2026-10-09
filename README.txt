@@ -99,6 +99,27 @@ For the supplied recipe, Buffer B is high salt, loading/washes are 100% B,
 and elution ramps from 100% to 0% B. Check resolved salt, not %B alone.
 Run the selected model again after changing chemistry.
 
+Checking an early target peak
+-----------------------------
+The supplied Run 1 is an illustrative HIC setup, not a fit to measured data.
+Its entered conductivity and conversion factor resolve Buffer A to 0.1 M
+salt and Buffer B to 2.0 M. Loading and both washes stay at 2.0 M; the
+8 CV elution ramp starts at total CV 5 and falls toward 0.1 M. At the saved
+resolution, the target detector peak is at total CV 11.85 (6.85 CV after
+elution starts), where local binding salt is about 0.575 M. Essentially no
+target exits before elution and the simulated mass balance closes within
+0.001%. The JMP run status and result receipt now state the peak CV, column
+outlet CV and local binding salt explicitly.
+
+If a measured peak is later, first compare the actual prepared Buffer A/B
+salt molarities with the resolved values. Choose SALT_M for known molarity;
+the default 0.02 M/(mS/cm) conductivity conversion is illustrative. Then
+compare load capacity, qmax, b, k_s, and gradient duration with the run
+receipt. b and k_s are empirical HIC values and need measured chromatograms
+for calibration. The LSQ tool can fit selected unlocked parameters against
+the measured trace using the matching process recipe. Do not shift a peak by
+changing an unmeasured input without recording the new value.
+
 Verification
 ------------
 python -m unittest discover -s tests -v
