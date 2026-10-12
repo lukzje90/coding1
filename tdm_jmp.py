@@ -50,6 +50,7 @@ LAST_JSL = PROJECT_DIR / "last_generated_ui.jsl"
 LSQ_ATTACHED_CSV = PROJECT_DIR / "least_squares_reference_chromatogram.csv"
 LSQ_APPLY_JSL = PROJECT_DIR / "least_squares_apply_to_ui.jsl"
 LSQ_REPORT_HTML = PROJECT_DIR / "least_squares_fit_report.html"
+LSQ_ALIGNMENT_HTML = PROJECT_DIR / "least_squares_alignment_preview.html"
 LSQ_HISTORY_CSV = PROJECT_DIR / "least_squares_objective_history.csv"
 MAX_LSQ_REFERENCE_POINTS = 10
 
@@ -703,6 +704,7 @@ batchGallery = {_path(BATCH_GALLERY_HTML)};
 batchSummary = {_path(BATCH_SUMMARY_CSV)};
 lsqApplyFile = {_path(LSQ_APPLY_JSL)};
 lsqReport = {_path(LSQ_REPORT_HTML)};
+lsqPreviewReport = {_path(LSQ_ALIGNMENT_HTML)};
 currentRun = 1; copiedRun = 0; isLoading = 0; isLSQSetup = 0;
 dtBatchRuns = Open(batchRunsFile, Invisible);
 dtLSQRuns = Open(lsqRunsFile, Invisible);
@@ -949,6 +951,19 @@ LSQRunStageSummary = Function({{r, prefix, i}}, {{base, summary, control}},
     Return(summary);
 );
 
+LSQRunLoadCVText = Function({{r}}, {{basis, volume, columnVol}},
+    basis = Uppercase(Char(Column(dtLSQRuns, "Load_Amount_Basis")[r]));
+    If(basis == "VOLUME_ML" | basis == "LOAD VOLUME [ML]",
+        volume = Num(Column(dtLSQRuns, "Load_Volume_mL")[r]);
+        columnVol = columnVolume << Get;
+        If(Is Missing(volume) | Is Missing(columnVol) | columnVol <= 0,
+            Return("—"),
+            Return(Char(Round(volume / columnVol, 0.0001)))
+        )
+    );
+    Return(LSQRunCellText(r, "Load_CV"));
+);
+
 UpdateLSQRunSummary = Function({{}}, {{slot, r, n, attached, nPLW, nElution, path, summary}},
     n = Num(lsqRunCount << Get Selected); attached = 0;
     For(slot = 1, slot <= {MAX_LSQ_PROFILES}, slot++,
@@ -959,7 +974,7 @@ UpdateLSQRunSummary = Function({{}}, {{slot, r, n, attached, nPLW, nElution, pat
             path = Trim(Char(LSQPathText(slot)));
             If(slot <= n & !Is Empty(path), attached++);
             summary = "LSQ Run " || Char(r) || " — " || LSQRunCellText(r, "Run_Name") ||
-                ": load " || LSQRunCellText(r, "Load_CV") || " CV, " || Char(nPLW) || " wash(es), " ||
+                ": load " || LSQRunLoadCVText(r) || " CV, " || Char(nPLW) || " wash(es), " ||
                 Char(nElution) || " elution step(s); column " || Char(columnVolume << Get) || " mL." ||
                 If(Is Empty(path), " No chromatogram attached.", " Chromatogram entered.");
             LSQSetRunSummary(slot, summary)
@@ -1099,7 +1114,7 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     If(isLSQSetup & (actionText == "RUN_SELECTED" | actionText == "RUN_BATCH" | actionText == "CHECK_RESULT_CURRENT"),
         statusText << Set Text("Switch to Normal batch setup before running a production chromatogram."); Return()
     );
-    If(actionText == "FIT_LSQ" | actionText == "ATTACH_LSQ_CSV", If(!SaveAllLSQReferences(), Return()));
+    If(actionText == "FIT_LSQ" | actionText == "PREVIEW_LSQ_ALIGNMENT" | actionText == "ATTACH_LSQ_CSV", If(!SaveAllLSQReferences(), Return()));
     SaveCurrentRun();
     UpdateLSQRunSummary(); SendSharedModel();
     Python Send(actionText, Python Name("tdm_ui_action"));
@@ -1118,12 +1133,23 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
         lsqStatusText << Set Text("Refinement running. The JMP window will respond when Python finishes. Progress is appended to least_squares_objective_history.csv in this folder; each numerical Jacobian needs additional column solves for unlocked parameters.");
         Wait(0.01)
     );
+    If(actionText == "PREVIEW_LSQ_ALIGNMENT",
+        lsqStatusText << Set Text("Previewing measured and model UV. One simulation runs per selected LSQ recipe; no optimization is performed.");
+        Wait(0.01)
+    );
     If(actionText == "CHECK_RESULT_CURRENT", Save Text File(statusFile, "CHECK_RESULT_CURRENT pending"));
     rc = Python Submit File(bridgeFile);
     If(File Exists(statusFile), statusValue = Load Text File(statusFile), statusValue = "No status file was produced. Check View > Log.");
     statusText << Set Text(statusValue); lsqStatusText << Set Text(statusValue);
     If(actionText == "FIT_LSQ" & Contains(statusValue, "Accepted/applied to shared batch parameters: True") > 0 & File Exists(lsqApplyFile), Eval(Parse(Load Text File(lsqApplyFile))));
+    If(actionText == "PREVIEW_LSQ_ALIGNMENT" & Contains(statusValue, "LSQ_ALIGNMENT_READY:") > 0 & File Exists(lsqPreviewReport), Web(lsqPreviewReport));
     UpdateUI();
+);
+
+OpenAlignmentPreview = Function({{}}, {{}},
+    If(File Exists(lsqPreviewReport), Web(lsqPreviewReport),
+        lsqStatusText << Set Text("No alignment preview is available yet. Attach UV chromatograms and click Preview measured vs model UV.")
+    );
 );
 
 OpenFitReport = Function({{}}, {{}},
@@ -1241,7 +1267,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                         H List Box(Text Box("Load end Buffer B [%]", << Set Width(290)), loadEndB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         loadChemControlRow = H List Box(Text Box("Load chemistry control", << Set Width(290)), loadChemControl = Combo Box({{"BUFFER_B_PERCENT", "ENDPOINT_CHEMISTRY"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(loadChemControl << Get Selected)) == "ENDPOINT_CHEMISTRY", loadMaterialMode << Set(2)); SaveCurrentRun(); UpdateUI()))))),
                         H List Box(Text Box("Load material chemistry", << Set Width(290)), loadMaterialMode = Combo Box({{"BUFFER_RECIPE", "EXPLICIT"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-                        Text Box("Select load capacity [g/L resin] or load volume [CV] as the input. Capacity is numerically equal to mg/mL resin; with feed concentration [mg/mL], CV = capacity ÷ concentration. The model applies the resulting total feed volume = CV × column volume. BUFFER_RECIPE resolves chemistry from the load Buffer B % program. EXPLICIT uses the load material source, pH, salt input and conductivity fields below, so feed chemistry reaches the solver even when the load %B display is retained.", << Set Wrap(700), << Set Font Style("Italic")),
+                        Text Box("Select load capacity [g/L resin], load volume [CV], or load volume [mL] as the input. Capacity is numerically equal to mg/mL resin; CV = capacity ÷ feed concentration or mL ÷ column volume. The model applies the resulting total feed volume = CV × column volume. BUFFER_RECIPE resolves chemistry from the load Buffer B % program. EXPLICIT uses the load material source, pH, salt input and conductivity fields below, so feed chemistry reaches the solver even when the load %B display is retained.", << Set Wrap(700), << Set Font Style("Italic")),
                         {_nrow("Number of time steps", "timeStepsBox", 700)},
                         {_nrow("Number of axial positions", "axialPositionsBox", 20)},
                         Text Box("Numerical resolution is stored per run. Time steps set the reported time grid and cap the adaptive integration step; axial positions set the finite-volume cells along the column. For comparing subtle peak shifts from b or k_s changes, use at least 300 reported time steps; 50 points may hide a shift between adjacent samples.", << Set Wrap(700), << Set Font Style("Italic")),
@@ -1334,8 +1360,11 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                         {_nrow("Fixed detector baseline [mAU]", "lsqBaseline", cfg['least_squares']['detector_baseline'], 240)}
                     ))
                 )),
-                Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ")),
-                H List Box(Button Box("Open fit report", OpenFitReport())),
+                H List Box(
+                    Button Box("Preview measured vs model UV", SendAndRun("PREVIEW_LSQ_ALIGNMENT")),
+                    Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ"))
+                ),
+                H List Box(Button Box("Open alignment preview", OpenAlignmentPreview()), Button Box("Open fit report", OpenFitReport())),
                 lsqStatusText = Text Box("", << Set Wrap(760), << Set Height(130)),
                 lsqCompositionPanel = Outline Box("Species mass% reference points", V List Box(
                     Text Box("Enter the expected species mass% at one or more CV positions. Only the target + selected impurities are shown. Each reference CV must sum to 100%.", << Set Wrap(740)),

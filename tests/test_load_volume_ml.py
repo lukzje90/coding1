@@ -116,6 +116,8 @@ class LoadVolumeMLTests(unittest.TestCase):
         self.assertIn('loadAmountBasis = Combo Box({"Capacity [g/L resin]", "Load volume [CV]", "Load volume [mL]"}', jsl)
         self.assertIn('Column(dtRuns, "Load_Volume_mL")[currentRun] = loadVolumeML << Get;', jsl)
         self.assertIn('loadVolumeML << Set(Column(dtRuns, "Load_Volume_mL")[currentRun]);', jsl)
+        self.assertIn('Return(Char(Round(volume / columnVol, 0.0001)))', jsl)
+        self.assertIn('": load " || LSQRunLoadCVText(r) || " CV, "', jsl)
 
 
 if __name__ == "__main__":

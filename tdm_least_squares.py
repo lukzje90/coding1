@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Least-squares refinement for the minimal four-mode chromatography model.
+"""Least-squares refinement for the EDM/TDM chromatography models.
 
 Two objective modes are intentionally supported:
 1. CHROMATOGRAM: ordinary point-by-point least-squares against an attached raw
@@ -58,6 +58,7 @@ FIT_RESULTS_CSV = PROJECT_DIR / "least_squares_fit_results.csv"
 FIT_TRACE_CSV = PROJECT_DIR / "least_squares_fit_trace.csv"
 FIT_COMPOSITION_CSV = PROJECT_DIR / "least_squares_fit_composition.csv"
 FIT_REPORT_HTML = PROJECT_DIR / "least_squares_fit_report.html"
+LSQ_ALIGNMENT_HTML = PROJECT_DIR / "least_squares_alignment_preview.html"
 FIT_CONFIG_JSON = PROJECT_DIR / "least_squares_fitted_inputs.json"
 FIT_APPLY_JSL = PROJECT_DIR / "least_squares_apply_to_ui.jsl"
 FIT_SETTINGS_JSON = PROJECT_DIR / "least_squares_settings.json"
@@ -943,6 +944,84 @@ def _chromatogram_fit_svg(config: dict[str, Any], info: dict[str, Any]) -> str:
         show_conductivity=config["system"]["show_conductivity"],
         show_flow_rate=config["system"].get("show_flow_rate", True),
     )
+
+
+def preview_lsq_alignment(
+    profiles: Iterable[dict[str, Any]], *, output_html: Path | str = LSQ_ALIGNMENT_HTML,
+) -> dict[str, Any]:
+    """Overlay measured UV and the current model for each selected LSQ recipe.
+
+    This uses the same reference reader, UV residual calculation and plot as
+    refinement, but performs one simulation per run and no optimization.
+    """
+    profiles = list(profiles)
+    if not 1 <= len(profiles) <= 5:
+        raise ValueError("Alignment preview requires 1–5 selected LSQ runs.")
+    sections: list[str] = []
+    metrics: list[dict[str, Any]] = []
+    for index, profile in enumerate(profiles, start=1):
+        config = normalize_config(profile["config"])
+        context = dict(profile.get("run_context") or {})
+        run_number = context.get("run_number", index)
+        run_name = str(context.get("run_name") or f"LSQ Run {run_number}")
+        errors = validate_config(config, strict=True)
+        if errors:
+            raise ValueError(f"LSQ Run {run_number} process recipe must be complete:\n- " + "\n- ".join(errors))
+        source = profile.get("chromatogram_csv") or profile.get("csv_path")
+        if not source:
+            raise ValueError(f"LSQ Run {run_number} has no attached UV chromatogram.")
+        reference = load_chromatogram_reference(
+            source, config, sheet_name=profile.get("sheet_name"),
+            x_column=profile.get("x_column"), signal_column=profile.get("signal_column"),
+            x_unit=profile.get("x_unit"), x_origin=profile.get("x_origin"), require_uv=True,
+        )
+        _residual, info = _objective_parts(config, reference, MODE_CHROMATOGRAM, [])
+        chrom = info["chromatogram"]
+        predicted = np.asarray(chrom["predicted_detector_signal"], dtype=float)
+        measured = np.asarray(chrom["measured"], dtype=float)
+        rmse = float(np.sqrt(np.mean((predicted - measured) ** 2)))
+        program_end = float(info["result"]["simulation"]["program"].total_CV)
+        metric = {
+            "run_number": run_number,
+            "run_name": run_name,
+            "sample_points": int(len(measured)),
+            "measured_start_CV": float(reference.cv[0]),
+            "measured_end_CV": float(reference.cv[-1]),
+            "programmed_end_CV": program_end,
+            "uv_rmse_mAU": rmse,
+            "x_column": reference.x_column,
+            "x_unit": reference.x_unit,
+            "x_axis_assumption": reference.x_axis_assumption or "RUN_START",
+            "signal_column": reference.signal_column,
+            "source_path": str(Path(source).resolve()),
+        }
+        metrics.append(metric)
+        sections.append(
+            f"<h2>LSQ Run {html.escape(str(run_number))}: {html.escape(run_name)}</h2>"
+            f"<p><b>Measured UV:</b> {html.escape(metric['source_path'])}<br>"
+            f"<b>Axis:</b> {html.escape(reference.x_column)} [{html.escape(reference.x_unit)}], "
+            f"{html.escape(metric['x_axis_assumption'])}; "
+            f"<b>signal:</b> {html.escape(reference.signal_column)}<br>"
+            f"<b>Measured span:</b> {metric['measured_start_CV']:.6g}–{metric['measured_end_CV']:.6g} CV "
+            f"({metric['sample_points']} samples); <b>programmed end:</b> {program_end:.6g} CV; "
+            f"<b>UV RMSE before refinement:</b> {rmse:.6g} mAU.</p>"
+            + _chromatogram_fit_svg(config, info)
+        )
+    output_path = Path(output_html)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        '<!doctype html><meta charset="utf-8"><title>Pre-refinement UV alignment</title>'
+        '<style>body{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}'
+        'svg{display:block;width:100%;height:auto}h2{margin-top:2rem}</style>'
+        '<h1>Measured versus model UV before refinement</h1>'
+        '<p>These are the current model parameters and saved independent LSQ recipes. '
+        'No optimizer was run and no fitted parameters were changed. Measured UV is plotted '
+        'only at imported sample CVs; predicted UV spans the complete programmed run. '
+        'The selected detector-baseline policy is applied exactly as it is during refinement. '
+        'Species mass% constraints, if selected, are evaluated only when refinement runs.</p>'
+        + ''.join(sections), encoding="utf-8",
+    )
+    return {"report_html": str(output_path), "profiles": metrics}
 
 
 def _composition_residuals(

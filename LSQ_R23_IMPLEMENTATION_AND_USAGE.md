@@ -1,5 +1,13 @@
 # R23 — Independent least-squares process setup and weighted RMSE
 
+R24e adds a **Preview measured vs model UV** button before refinement. For
+each selected independent LSQ run, it reads the same attached UV and axis
+options as fitting, simulates the current model once, and opens a separate
+overlay of measured and predicted UV over the complete programmed recipe.
+The preview reports the measured and programmed CV spans and pre-fit UV RMSE.
+It does not run the optimizer or apply fitted parameters; **Open alignment
+preview** reopens the last report.
+
 ## Model basis
 
 Hahn et al., *Calibration-free inverse modeling of ion-exchange chromatography in industrial antibody purification*, **Engineering in Life Sciences** 16 (2016), pp. 107–113, equation (9), defines the nonlinear sum-of-squared chromatogram residuals:

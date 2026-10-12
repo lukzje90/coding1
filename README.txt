@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG AND mL LOADING (R24c)
+TDM – MODIFIED WANG, mL LOADING AND UV PREVIEW (R24e)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -22,6 +22,17 @@ CV and loaded capacity while keeping the entered mL fixed. The batch and LSQ
 run tables store independent values. Existing CV and capacity recipes keep
 their original meaning. Older saved run tables gain the new mL column when
 opened, without changing their selected load basis.
+The LSQ run summary calculates mL-based CV from the current column volume,
+including runs that have not been opened since the column volume changed.
+
+Before least-squares refinement, click "Preview measured vs model UV" in the
+Least-Squares Refinement tab. It opens a separate HTML overlay for every
+selected LSQ run, using that run's attached UV, axis units/origin, process
+recipe and current model values. The plot and baseline policy use the same
+calculation as the fit. Preview runs one simulation per selected run and does
+not optimize or change fitted parameters. It reports the measured CV span,
+programmed end CV and pre-fit UV RMSE so axis or recipe mismatch can be fixed
+before a long refinement. "Open alignment preview" reopens the last preview.
 
 CHROMATOGRAM CV RANGE UPDATE
 The chart spans the cumulative CV of every enabled process step. For example,

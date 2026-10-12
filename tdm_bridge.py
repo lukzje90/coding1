@@ -431,7 +431,7 @@ def main() -> int:
     try:
         shared_raw = build_shared_config_from_jmp()
         current_run_number = _run_number()
-        run_number = _lsq_target_run(current_run_number) if action in {"FIT_LSQ", "ATTACH_LSQ_CSV"} else current_run_number
+        run_number = _lsq_target_run(current_run_number) if action in {"FIT_LSQ", "PREVIEW_LSQ_ALIGNMENT", "ATTACH_LSQ_CSV"} else current_run_number
         batch_count = _batch_count()
         BATCH_COUNT_FILE.write_text(str(batch_count), encoding="utf-8")
         current_effective = _effective_run(shared_raw, run_number)
@@ -507,16 +507,16 @@ def main() -> int:
             _write_status(("RESULT_CURRENT: " if valid else "RESULT_STALE: ") + message)
             return 0
 
-        if action == "FIT_LSQ":
+        if action in {"FIT_LSQ", "PREVIEW_LSQ_ALIGNMENT"}:
             from tdm_least_squares import inspect_chromatogram_csv, run_global_least_squares_refinement
             profile_rows = _selected_lsq_profile_rows()
             if not profile_rows:
-                raise ValueError("Attach at least one chromatogram CSV to a saved run before fitting.")
+                raise ValueError("Attach at least one UV chromatogram to a selected LSQ run first.")
             if len(profile_rows) > MAX_LSQ_PROFILES:
                 run_list = ", ".join(str(n) for n, _row, _path in profile_rows)
                 raise ValueError(f"Global least-squares fitting supports at most {MAX_LSQ_PROFILES} attached chromatograms; currently attached to runs {run_list}. Clear extra CSV paths before fitting.")
             mode = _lsq_mode()
-            refs = _composition_references_from_jmp(current_effective) if mode == "CHROMATOGRAM_AND_COMPOSITION" else []
+            refs = _composition_references_from_jmp(current_effective) if action == "FIT_LSQ" and mode == "CHROMATOGRAM_AND_COMPOSITION" else []
             profiles = []
             lsq_rows = load_lsq_rows()
             for profile_run_number, row, source in profile_rows:
@@ -539,6 +539,22 @@ def main() -> int:
                 profiles.append(profile)
             if mode == "CHROMATOGRAM_AND_COMPOSITION" and refs and run_number not in {p["run_context"]["run_number"] for p in profiles}:
                 raise ValueError("Select an attached chromatogram profile before adding species-composition reference points.")
+            if action == "PREVIEW_LSQ_ALIGNMENT":
+                from tdm_least_squares import preview_lsq_alignment
+                preview = preview_lsq_alignment(profiles)
+                summary = "\n".join(
+                    f"LSQ Run {item['run_number']} — {item['run_name']}: "
+                    f"{item['sample_points']} UV samples, measured {item['measured_start_CV']:.5g}–"
+                    f"{item['measured_end_CV']:.5g} CV, programmed end {item['programmed_end_CV']:.5g} CV; "
+                    f"pre-fit UV RMSE {item['uv_rmse_mAU']:.5g} mAU"
+                    for item in preview["profiles"]
+                )
+                _write_status(
+                    f"LSQ_ALIGNMENT_READY: measured versus model UV for {len(preview['profiles'])} run(s).\n"
+                    f"{summary}\nReport: {preview['report_html']}\n"
+                    "No optimization was run and no fitted parameters were changed."
+                )
+                return 0
             unlocked_paths = _lsq_unlocked_paths_from_jmp()
             from tdm_least_squares import FIT_HISTORY_CSV, fit_parameter_specs
             fitted_paths = fit_parameter_specs(profiles[0]["config"], unlocked_paths=unlocked_paths)
