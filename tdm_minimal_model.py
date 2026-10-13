@@ -845,6 +845,21 @@ def _simulate_tdm_langmuir(config: dict[str, Any]) -> dict[str, Any]:
     n = len(rows)
     size = nx * n
     y0 = np.zeros(2 * size)
+    # Limited axial transport reaches two neighbouring cells. At a given
+    # cell, the competitive equilibrium makes every particle total affect
+    # each species' free concentration. Tell BDF this local structure so it
+    # need not form and factor a dense column-wide Jacobian.
+    sparsity = lil_matrix((2 * size, 2 * size), dtype=int)
+    for cell in range(nx):
+        for species in range(n):
+            index = cell * n + species
+            for neighbor in range(max(0, cell - 2), min(nx, cell + 3)):
+                sparsity[index, neighbor * n + species] = 1
+            sparsity[size + index, index] = 1
+            for competing in range(n):
+                particle_index = size + cell * n + competing
+                sparsity[index, particle_index] = 1
+                sparsity[size + index, particle_index] = 1
 
     def unpack(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Return bulk concentration and conserved particle total concentration."""
@@ -878,6 +893,7 @@ def _simulate_tdm_langmuir(config: dict[str, Any]) -> dict[str, Any]:
     solution = solve_ivp(
         rhs, (0.0, program.total_time_s), y0, method="BDF", rtol=1e-6, atol=1e-8,
         max_step=max(program.total_time_s / max(time_steps, 1), 1e-6), dense_output=True,
+        jac_sparsity=sparsity.tocsr(),
     )
     if not solution.success:
         raise RuntimeError("TDM+Competitive Langmuir integration failed: " + solution.message)
@@ -1089,6 +1105,23 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
     sl_cp = slice(block, 2*block)
     sl_qv = slice(2*block, 3*block)
     y0 = np.zeros(3*block)
+    # The adsorption law couples species only within the same axial cell;
+    # protein transport couples nearby bulk cells. This is the same physical
+    # state layout and local Jacobian structure used by TDM–Wang.
+    sparsity = lil_matrix((3 * block, 3 * block), dtype=int)
+    for cell in range(nx):
+        for species in range(n):
+            index = cell * n + species
+            for neighbor in range(max(0, cell - 2), min(nx, cell + 3)):
+                sparsity[index, neighbor * n + species] = 1
+            sparsity[index, block + index] = 1
+            sparsity[block + index, index] = 1
+            sparsity[block + index, block + index] = 1
+            sparsity[2 * block + index, block + index] = 1
+            for competing in range(n):
+                adsorbed_index = 2 * block + cell * n + competing
+                sparsity[block + index, adsorbed_index] = 1
+                sparsity[2 * block + index, adsorbed_index] = 1
 
     def unpack(y: np.ndarray):
         return (
@@ -1131,6 +1164,7 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
     solution = solve_ivp(
         rhs, (0.0, program.total_time_s), y0, method="BDF", rtol=2e-6, atol=1e-9,
         max_step=max(program.total_time_s / max(time_steps, 1), 1e-6), dense_output=True,
+        jac_sparsity=sparsity.tocsr(),
     )
     if not solution.success:
         raise RuntimeError("TDM+CPA integration failed: " + solution.message)
@@ -1201,6 +1235,16 @@ def _simulate_edm_langmuir(config: dict[str, Any]) -> dict[str, Any]:
     x_centres = (np.arange(nx) + 0.5) * dx
     n = len(rows)
     y0 = np.zeros(nx*n)
+    # Dense BDF is cheaper for a small EDM state. At larger meshes its local
+    # structure avoids the cost of a dense Jacobian. Competitive equilibrium
+    # couples species in each cell; the limited flux reaches two cells aside.
+    sparsity = None
+    if nx * n >= 100:
+        pattern = lil_matrix((nx * n, nx * n), dtype=int)
+        for cell in range(nx):
+            for neighbor in range(max(0, cell - 2), min(nx, cell + 3)):
+                pattern[cell*n:(cell + 1)*n, neighbor*n:(neighbor + 1)*n] = 1
+        sparsity = pattern.tocsr()
 
     def rhs(t: float, y: np.ndarray) -> np.ndarray:
         total = np.maximum(y.reshape(nx, n), 0.0)
@@ -1222,6 +1266,7 @@ def _simulate_edm_langmuir(config: dict[str, Any]) -> dict[str, Any]:
     solution = solve_ivp(
         rhs, (0.0, program.total_time_s), y0, method="BDF", rtol=1e-6, atol=1e-8,
         max_step=max(program.total_time_s / max(time_steps, 1), 1e-6), dense_output=True,
+        jac_sparsity=sparsity,
     )
     if not solution.success:
         raise RuntimeError("EDM+Competitive Langmuir integration failed: " + solution.message)
@@ -1293,9 +1338,7 @@ def _simulate_edm_cpa(config: dict[str, Any]) -> dict[str, Any]:
     n = len(comps)
     x_centres = (np.arange(nx) + 0.5) * dx
 
-    def env_at(t: float, cell: int) -> tuple[float, float]:
-        chemistry = mobile_phase.local(t)[cell]
-        return float(chemistry[0]), float(chemistry[1 if is_hic(config) else 2])
+    ionic_index = 1 if is_hic(config) else 2
 
     total = np.zeros((nx, n))  # c + F q, conserved by the EDM transport balance
     c = np.zeros_like(total)
@@ -1332,13 +1375,16 @@ def _simulate_edm_cpa(config: dict[str, Any]) -> dict[str, Any]:
             forcing[:, i] = _scalar_transport(c[:, i], inlet[i], u, D[i], dx)
         total = np.maximum(total + dt * forcing, 0.0)
         t += dt
+        # Buffer chemistry is independent of protein concentration. Fetch the
+        # entire column once per step instead of rebuilding it for every cell.
+        chemistry = mobile_phase.local(t)
         for cell in range(nx):
-            pH, ionic = env_at(t, cell)
+            pH = float(chemistry[cell, 0])
+            ionic = float(chemistry[cell, ionic_index])
             c[cell], q[cell] = cpa_model.equilibrium_from_total(total[cell], Fphase, pH, ionic)
         times.append(t)
         outs.append(np.maximum(c[-1].copy(), 0.0))
-        chemistry = mobile_phase.local(t)[-1]
-        pHs.append(chemistry[0]); Is.append(chemistry[2])
+        pHs.append(chemistry[-1, 0]); Is.append(chemistry[-1, 2])
 
     raw_t = np.asarray(times)
     raw_out = np.asarray(outs)

@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG, mL LOADING AND UV PREVIEW (R24e)
+TDM – MODIFIED WANG, mL LOADING AND UV PREVIEW (R24f)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -6,6 +6,13 @@ Journal of Chromatography A 1783 (2026) 467108, inside the existing TDM column
 transport model. The shared q0 and eta values, all eight values per protein,
 local pore salt and pH, and fitted parameter locks are passed to one solver.
 R24a uses a sparse kinetic-solver Jacobian to speed up larger TDM meshes.
+R24f also supplies the local Jacobian structure to TDM–CPA, TDM–Langmuir
+and larger EDM–Langmuir meshes. EDM–CPA now reads the same column chemistry
+once per time step instead of once per cell. Transport, adsorption, integration
+tolerances and reported time grids are unchanged. The independent buffer
+solver and the existing TDM–Wang sparse solver are unchanged. Comparisons
+with the earlier build confirm matching chromatograms and mass balances to
+numerical tolerance.
 The provided starting values are illustrative, not calibrated to a measured
 protein/resin pair. See WANG_IMPLEMENTATION_AND_USAGE.md for the equation,
 parameter mapping, units, fitting workflow, and model limits. Open the complete
