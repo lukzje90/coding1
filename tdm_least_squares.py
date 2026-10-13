@@ -689,7 +689,12 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
     """
     config = normalize_config(config)
     model = str(config["model"])
-    paths = [canonical_fit_parameter_path(p) for p in candidate_paths] if candidate_paths is not None else required_parameter_paths(config)
+    required_paths = required_parameter_paths(config)
+    active_paths = set(required_paths)
+    paths = [canonical_fit_parameter_path(p) for p in candidate_paths] if candidate_paths is not None else required_paths
+    # A caller may supply a broader catalog (or saved locks from a previous
+    # model). Never fit a parameter absent from the selected model's equations.
+    paths = [path for path in paths if path in active_paths]
     specs: list[FitParameter] = []
     labels = {
         "buffer_dispersion_mL": "Buffer mixer dispersion volume [mL]",
@@ -984,6 +989,8 @@ def preview_lsq_alignment(
         metric = {
             "run_number": run_number,
             "run_name": run_name,
+            "model_run_label": str(context.get("model_run_label") or f"Independent LSQ recipe Run {run_number}"),
+            "model_run_name": str(context.get("model_run_name") or run_name),
             "sample_points": int(len(measured)),
             "measured_start_CV": float(reference.cv[0]),
             "measured_end_CV": float(reference.cv[-1]),
@@ -998,6 +1005,8 @@ def preview_lsq_alignment(
         metrics.append(metric)
         sections.append(
             f"<h2>LSQ Run {html.escape(str(run_number))}: {html.escape(run_name)}</h2>"
+            f"<p><b>Model UV recipe:</b> {html.escape(metric['model_run_label'])} — "
+            f"{html.escape(metric['model_run_name'])}. The model was simulated from the saved recipe for this preview.</p>"
             f"<p><b>Measured UV:</b> {html.escape(metric['source_path'])}<br>"
             f"<b>Axis:</b> {html.escape(reference.x_column)} [{html.escape(reference.x_unit)}], "
             f"{html.escape(metric['x_axis_assumption'])}; "
@@ -1587,6 +1596,10 @@ def run_global_least_squares_refinement(
         context = dict(profile.get("run_context") or {})
         context.setdefault("run_number", index)
         context.setdefault("run_name", f"Profile {index}")
+        context.setdefault("model_run_source", "INDEPENDENT_LSQ")
+        context.setdefault("model_run_number", context["run_number"])
+        context.setdefault("model_run_name", context["run_name"])
+        context.setdefault("model_run_label", f"Independent LSQ recipe Run {context['model_run_number']}")
         context["chromatogram_csv"] = str(Path(source).resolve())
         paths = [path for path in required_parameter_paths(cfg)
                  if path not in {"column.volume_mL", "column.length_mm"} and not path.endswith(".mass_percent")]
@@ -1600,6 +1613,7 @@ def run_global_least_squares_refinement(
             "run_context": context,
             "weight": profile_weight,
             "x_origin": _validate_x_origin(profile.get("x_origin"), ref.x_unit),
+            "sheet_name": profile.get("sheet_name") or "auto",
         })
 
     if mode == MODE_CHROMATOGRAM_AND_COMPOSITION and not any(p["composition_references"] for p in normalized_profiles):
@@ -1839,7 +1853,7 @@ def run_global_least_squares_refinement(
 
     metric_rows: list[dict[str, Any]] = []
     with FIT_TRACE_CSV.open("w", encoding="utf-8", newline="") as fh:
-        trace_fields = ["Run_Number", "Run_Name", "Chromatogram_CSV", "CV", "Measured_Signal",
+        trace_fields = ["Run_Number", "Run_Name", "Model_Run", "Model_Run_Name", "Chromatogram_CSV", "CV", "Measured_Signal",
                         "Simulated_Total_Protein_g_L", "Predicted_Detector_Signal", "Residual",
                         "Normalized_Residual", "Sample_Weight", "Run_Weight", "Profile_Objective_Contribution"]
         writer = csv.DictWriter(fh, fieldnames=trace_fields)
@@ -1858,6 +1872,8 @@ def run_global_least_squares_refinement(
             metric = {
                 "run_number": int(context["run_number"]),
                 "run_name": str(context["run_name"]),
+                "model_run_label": str(context["model_run_label"]),
+                "model_run_name": str(context["model_run_name"]),
                 "chromatogram_csv": context["chromatogram_csv"],
                 "overlap_points": int(chrom["overlap_points"]),
                 "normalized_nrmse": normalized_nrmse,
@@ -1874,6 +1890,7 @@ def run_global_least_squares_refinement(
             ):
                 writer.writerow({
                     "Run_Number": metric["run_number"], "Run_Name": metric["run_name"],
+                    "Model_Run": metric["model_run_label"], "Model_Run_Name": metric["model_run_name"],
                     "Chromatogram_CSV": metric["chromatogram_csv"], "CV": float(cv),
                     "Measured_Signal": float(measured), "Simulated_Total_Protein_g_L": float(sim_total),
                     "Predicted_Detector_Signal": float(predicted), "Residual": float(residual_value),
@@ -1938,7 +1955,7 @@ def run_global_least_squares_refinement(
     ) or '<tr><td colspan="3">No parameters were unlocked; model values were evaluated without optimization.</td></tr>'
     profile_rows = "".join(
         "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
-            metric["run_number"], metric["run_name"], metric["overlap_points"],
+            metric["run_number"], metric["run_name"], metric["model_run_label"], metric["overlap_points"],
             f'{metric["normalized_nrmse"]:.6g}', f'{metric["raw_rmse"]:.6g}', f'{metric["weighted_rmse"]:.6g}', f'{metric["run_weight"]:.6g}',
             "—" if not math.isfinite(metric["r_squared"]) else f'{metric["r_squared"]:.6g}',
         )) + "</tr>"
@@ -1952,7 +1969,9 @@ def run_global_least_squares_refinement(
     profile_plots = []
     for profile, cfg, info in zip(normalized_profiles, fitted_configs, final_infos):
         plot = _chromatogram_fit_svg(cfg, info)
-        profile_plots.append(f'<h3>Run {profile["run_context"]["run_number"]}: {html.escape(profile["run_context"]["run_name"])}</h3>' + plot)
+        profile_plots.append(
+            f'<h3>Run {profile["run_context"]["run_number"]}: {html.escape(profile["run_context"]["run_name"])}'
+            f' vs {html.escape(profile["run_context"]["model_run_label"])}</h3>' + plot)
     overlays_html = "".join(profile_plots)
     improvement = _objective_improvement_percent(initial_obj, final_obj)
     history_plot = _objective_history_svg(history)
@@ -1964,11 +1983,11 @@ def run_global_least_squares_refinement(
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
 <b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Optimizer evaluations:</b> {eval_count}; <b>Unlocked parameters:</b> {len(specs)}.</p>
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor.</p>
-<table><thead><tr><th>Run</th><th>Profile</th><th>Overlap points</th><th>Normalized NRMSE</th><th>Signal RMSE</th><th>Weighted RMSE</th><th>Run weight</th><th>R²</th></tr></thead><tbody>{profile_rows}</tbody></table>
+<table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>Signal RMSE</th><th>Weighted RMSE</th><th>Run weight</th><th>R²</th></tr></thead><tbody>{profile_rows}</tbody></table>
 <h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is shown only at the imported sample CVs; only those samples contribute to the chromatogram objective.</p>{overlays_html}
 <h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Profile recipes used</h2>{recipe_details}
-<h2>Objective construction</h2><p>Equation 9 is the sum of squared predicted-minus-measured detector samples. RAW_SSE preserves it verbatim. NORMALIZED_MSE divides by each run's signal scale and sample count. WEIGHTED_RMSE is the square root of the run-weighted average of each profile's sample-weighted mean squared error, with independently adjustable positive run weights and optional nonnegative Excel/CSV Weight columns. Minimizing the square root is equivalent to minimizing its squared residual vector with bounded SciPy nonlinear least squares. Baseline estimation is opt-in; the default baseline is fixed. Each LSQ profile has its own independent process recipe (flow, feed, buffers, PLWs, elution and resolution). Only unlocked mechanistic parameters are shared and refined. Column geometry remains fixed.</p>
+<h2>Objective construction</h2><p>Equation 9 is the sum of squared predicted-minus-measured detector samples. RAW_SSE preserves it verbatim. NORMALIZED_MSE divides by each run's signal scale and sample count. WEIGHTED_RMSE is the square root of the run-weighted average of each profile's sample-weighted mean squared error, with independently adjustable positive run weights and optional nonnegative Excel/CSV Weight columns. Minimizing the square root is equivalent to minimizing its squared residual vector with bounded SciPy nonlinear least squares. Baseline estimation is opt-in; the default baseline is fixed. Each LSQ profile uses its selected saved model run recipe (independent LSQ or normal batch); that recipe's flow, feed, buffers, washes, elution and resolution remain fixed during refinement. Only unlocked mechanistic parameters are shared and refined. Column geometry remains fixed.</p>
 <h2>Objective improvement over time</h2><p>History file: <a href="{FIT_HISTORY_CSV.name}">{FIT_HISTORY_CSV.name}</a></p>{history_plot}
 <p>Files: {FIT_TRACE_CSV.name}, {FIT_RESULTS_CSV.name}, {FIT_COMPOSITION_CSV.name}, {FIT_SETTINGS_JSON.name}.</p>
 """, encoding="utf-8")

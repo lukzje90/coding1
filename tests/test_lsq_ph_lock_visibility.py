@@ -11,7 +11,8 @@ class LSQPHLockVisibilityTests(unittest.TestCase):
         _validate_jsl(jsl)
         span_code = jsl.split("ComputePHSpanForRuns = Function", 1)[1].split("UpdateUI = Function", 1)[0]
         self.assertIn("Num(lsqRunCount << Get Selected)", span_code)
-        self.assertIn("r = If(useSelectedLSQ, LSQSelectedRun(slot), slot);", span_code)
+        self.assertIn('runsTable = If(modelChoice == "Independent LSQ recipe", dtLSQRuns, dtBatchRuns);', span_code)
+        self.assertIn('r = If(modelChoice == "Independent LSQ recipe", LSQSelectedRun(slot), RunNumberFromLabel(modelChoice));', span_code)
         self.assertIn('Column(runsTable, "Load_Material_Chemistry_Mode")[r]', span_code)
         self.assertIn("fitPHSpan = ComputePHSpanForRuns(dtLSQRuns, 1);", jsl)
         self.assertIn("fitPHSpan = Max(fitPHSpan, batchPHSpan);", jsl)

@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG, mL LOADING AND UV PREVIEW (R24f)
+TDM – MODIFIED WANG, mL LOADING AND UV PREVIEW (R24g)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -34,12 +34,22 @@ including runs that have not been opened since the column volume changed.
 
 Before least-squares refinement, click "Preview measured vs model UV" in the
 Least-Squares Refinement tab. It opens a separate HTML overlay for every
-selected LSQ run, using that run's attached UV, axis units/origin, process
-recipe and current model values. The plot and baseline policy use the same
+selected LSQ run. In each run section, choose "Model run for UV comparison":
+the independent LSQ recipe or any saved normal batch Run 1–30. The measured
+UV file stays attached to its LSQ profile. Both preview and refinement read
+the current saved recipe for the chosen model run and reread the UV file each
+time, so changes to a normal run or its measured chromatogram are picked up.
+The plot and baseline policy use the same
 calculation as the fit. Preview runs one simulation per selected run and does
 not optimize or change fitted parameters. It reports the measured CV span,
 programmed end CV and pre-fit UV RMSE so axis or recipe mismatch can be fixed
-before a long refinement. "Open alignment preview" reopens the last preview.
+before a long refinement. The report names the model run and UV file for each
+profile. "Open alignment preview" reopens the last preview. Existing saved LSQ
+profiles retain their independent recipe choice; new profiles default to the
+corresponding normal batch run.
+Refinement intersects Unlocked controls with the selected model combination's
+required parameter list. Values or locks left from another model combination
+cannot be fitted or written back as improvements.
 
 CHROMATOGRAM CV RANGE UPDATE
 The chart spans the cumulative CV of every enabled process step. For example,

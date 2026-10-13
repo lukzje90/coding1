@@ -13,7 +13,7 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-10-13-R24F-SPARSE-LEGACY-SOLVERS"
+RESULT_GUARD_BUILD = "2026-10-13-R24G-LSQ-MODEL-RUN"
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
 BATCH_SUMMARY_CSV = PROJECT_DIR / "tdm_batch_summary.csv"
@@ -38,6 +38,8 @@ LABEL_TO_MODEL = {v: k for k, v in MODEL_LABELS.items()}
 MAX_IMPURITIES = 5
 MAX_RUNS = 30
 MAX_LSQ_PROFILES = 5
+LSQ_MODEL_SOURCE_INDEPENDENT = "INDEPENDENT_LSQ"
+LSQ_MODEL_SOURCE_BATCH = "NORMAL_BATCH"
 MAX_PLW_STEPS = 5
 MAX_ELUTION_STEPS = 5
 MAX_BUFFER_IONS = 4
@@ -1341,7 +1343,7 @@ def _migrate_row_salt_inputs(row: dict[str, Any]) -> dict[str, Any]:
 
 def batch_run_fields() -> list[str]:
     fields = [
-        "Run_Number", "Run_Name", "LSQ_Chromatogram_CSV", "LSQ_Weight", "LSQ_Sheet", "LSQ_X_Column", "LSQ_Signal_Column", "LSQ_X_Unit", "LSQ_X_Origin", "Load_Flow_mL_min", "Feed_Concentration_mg_mL",
+        "Run_Number", "Run_Name", "LSQ_Chromatogram_CSV", "LSQ_Weight", "LSQ_Sheet", "LSQ_X_Column", "LSQ_Signal_Column", "LSQ_X_Unit", "LSQ_X_Origin", "LSQ_Model_Source", "LSQ_Model_Run_Number", "Load_Flow_mL_min", "Feed_Concentration_mg_mL",
         "Load_Amount_Basis", "Load_CV", "Load_Volume_mL", "Load_Density_mg_mL_resin", "Load_Mode", "Load_Start_Percent_B", "Load_End_Percent_B",
         "Load_Chemistry_Control", "Load_Material_Chemistry_Mode", "Time_Steps", "Axial_Positions",
         "Load_Source", "Load_pH", "Load_Salt_M", "Load_Conductivity_mS_cm",
@@ -1378,6 +1380,9 @@ def default_batch_row(run_number: int) -> dict[str, Any]:
         "LSQ_Signal_Column": "",
         "LSQ_X_Unit": "AUTO",
         "LSQ_X_Origin": "RUN_START",
+        # Legacy LSQ tables without these columns keep their independent recipe.
+        "LSQ_Model_Source": LSQ_MODEL_SOURCE_INDEPENDENT,
+        "LSQ_Model_Run_Number": run_number,
         "Load_Flow_mL_min": 1.0,
         "Feed_Concentration_mg_mL": 1.0,
         "Load_Amount_Basis": "LOAD_VOLUME",
@@ -1556,10 +1561,10 @@ def save_batch_rows(rows: list[dict[str, Any]], path: Path | str = BATCH_RUNS_CS
 
 
 def ensure_lsq_runs_csv() -> Path:
-    """Own persisted LSQ process recipes, independent of the production batch.
+    """Own persisted LSQ process recipes and model-run selections.
 
-    Existing projects start from a *copy* of their first five batch recipes,
-    after which changing either table never mutates the other.
+    New projects start with a copy of their first five batch recipes; the
+    source selector decides which table supplies each profile's model run.
     """
     if not LSQ_RUNS_CSV.is_file():
         source_rows = load_batch_rows()
@@ -1569,6 +1574,10 @@ def ensure_lsq_runs_csv() -> Path:
             row["Run_Name"] = f"LSQ Run {i + 1}"
             row["LSQ_Chromatogram_CSV"] = ""  # No accidental use of stale references.
             row["LSQ_Weight"] = 1.0
+            # A new LSQ profile follows the current saved normal run by default.
+            # Existing independent LSQ tables retain their previous behavior.
+            row["LSQ_Model_Source"] = LSQ_MODEL_SOURCE_BATCH
+            row["LSQ_Model_Run_Number"] = i + 1
             initial.append(row)
         save_batch_rows(initial, LSQ_RUNS_CSV)
     return ensure_batch_runs_csv(LSQ_RUNS_CSV)

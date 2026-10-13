@@ -81,6 +81,8 @@ from tdm_minimal_io import (
     BATCH_SUMMARY_CSV,
     CONFIG_PATH,
     LABEL_TO_MODEL,
+    LSQ_MODEL_SOURCE_BATCH,
+    LSQ_MODEL_SOURCE_INDEPENDENT,
     MAX_LSQ_PROFILES,
     MAX_RUNS,
     MODEL_TDM_CPA,
@@ -254,9 +256,9 @@ def _selected_run_context(run_number: int) -> dict[str, Any]:
     }
 
 
-def _fit_run_context(config: dict[str, Any], run_number: int) -> dict[str, Any]:
-    rows = load_lsq_rows()
-    row = rows[run_number - 1]
+def _fit_run_context(config: dict[str, Any], run_number: int,
+                     row: dict[str, Any] | None = None) -> dict[str, Any]:
+    row = row if row is not None else load_lsq_rows()[run_number - 1]
     return {
         "run_number": run_number,
         "run_name": str(row.get("Run_Name") or f"Run {run_number}"),
@@ -266,6 +268,35 @@ def _fit_run_context(config: dict[str, Any], run_number: int) -> dict[str, Any]:
         "feed": config["feed"],
         "numerics": config["numerics"],
         "process": config["process"],
+    }
+
+
+def _lsq_model_run_config(shared: dict[str, Any], profile_number: int,
+                          lsq_row: dict[str, Any], batch_rows: list[dict[str, Any]]
+                          ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve the saved model recipe paired with one attached UV reference."""
+    source = str(lsq_row.get("LSQ_Model_Source") or LSQ_MODEL_SOURCE_INDEPENDENT).strip().upper()
+    if source == LSQ_MODEL_SOURCE_INDEPENDENT:
+        number, row = profile_number, lsq_row
+        label = "Independent LSQ recipe"
+    elif source == LSQ_MODEL_SOURCE_BATCH:
+        try:
+            value = float(lsq_row.get("LSQ_Model_Run_Number"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"LSQ Run {profile_number}: choose a normal batch model run.") from exc
+        if not math.isfinite(value) or value != int(value) or not 1 <= value <= MAX_RUNS:
+            raise ValueError(f"LSQ Run {profile_number}: normal batch model run must be 1–{MAX_RUNS}.")
+        number = int(value)
+        row = batch_rows[number - 1]
+        label = "Normal batch"
+    else:
+        raise ValueError(f"LSQ Run {profile_number}: unknown model run source {source!r}.")
+    config, _ = apply_batch_shared_parameters(shared, batch_row_to_run_config(row))
+    return config, {
+        "model_run_source": source,
+        "model_run_number": number,
+        "model_run_name": str(row.get("Run_Name") or f"Run {number}"),
+        "model_run_label": f"{label} Run {number}",
     }
 
 
@@ -450,17 +481,17 @@ def main() -> int:
             rows = load_lsq_rows()
             options = _lsq_reference_column_options(rows[run_number - 1])
             info = attach_chromatogram_csv(source, require_uv=True, **options)
-            run_cfg = batch_row_to_run_config(rows[run_number - 1])
-            profile_config, _ = apply_batch_shared_parameters(shared_raw, run_cfg)
+            profile_config, model_run = _lsq_model_run_config(
+                shared_raw, run_number, rows[run_number - 1], load_batch_rows())
             errors = validate_config(profile_config, strict=True)
             if errors:
-                raise ValueError(f"LSQ Run {run_number} process recipe must be complete before attaching:\n- " + "\n- ".join(errors))
+                raise ValueError(f"{model_run['model_run_label']} must be complete before attaching to LSQ Run {run_number}:\n- " + "\n- ".join(errors))
             reference = load_chromatogram_reference(info["source_path"], profile_config, require_uv=True, **options)
             program = _build_program(profile_config, np.zeros(max(1, len(active_components(profile_config)))))
             cv_min, cv_max = float(np.min(reference.cv)), float(np.max(reference.cv))
             if cv_min < -1e-9 or cv_max > program.total_CV + 1e-9:
                 raise ValueError(
-                    f"Measured X converts to {cv_min:.4g}–{cv_max:.4g} CV, outside LSQ Run {run_number}'s "
+                    f"Measured X converts to {cv_min:.4g}–{cv_max:.4g} CV, outside {model_run['model_run_label']}'s "
                     f"0–{program.total_CV:.4g} CV recipe. Check mL/CV units, column volume, and X=0 origin."
                 )
             rows[run_number - 1]["LSQ_Chromatogram_CSV"] = info["source_path"]
@@ -468,19 +499,20 @@ def main() -> int:
             run_name = load_lsq_rows()[run_number - 1].get("Run_Name") or f"LSQ Run {run_number}"
             x_warning = f"\nAxis assumption: {info['x_axis_assumption']}" if info.get("x_axis_assumption") else ""
             x_receipt = (
-                f"Measured mL divided by column volume ({shared_raw['column']['volume_mL']} mL) to align with solver CV."
+                f"Measured mL divided by column volume ({profile_config['column']['volume_mL']} mL) to align with solver CV."
                 if info["x_unit"] == "ML" else "Measured CV aligned directly with solver CV."
-                if info["x_unit"] == "CV" else f"Measured {info['x_unit']} converted to solver CV using the LSQ recipe."
+                if info["x_unit"] == "CV" else f"Measured {info['x_unit']} converted to solver CV using the selected model run."
             )
             if info["x_origin"] == "ELUTION_START":
                 x_receipt += " X=0 is the start of elution; load and wash CV are added."
             _write_status(
                 f"Chromatogram attached to LSQ profile Run {run_number} — {run_name}.\n"
+                f"Model comparison: {model_run['model_run_label']} — {model_run['model_run_name']}.\n"
                 f"Active model folder: {PROJECT_DIR}\n"
                 f"Selected chromatogram: {info['source_path']}\n"
                 f"X: {info['x_column']} ({info['x_unit']}, zero at {info['x_origin']}); Y: {info['signal_column']} (UV compared in mAU; AU-labelled values converted); points: {info['rows']}.\n"
                 f"Aligned measured range: {cv_min:.4g}–{cv_max:.4g} CV; saved recipe: 0–{program.total_CV:.4g} CV. {x_receipt}{x_warning}\n"
-                f"Independent process setup: {LSQ_RUNS_CSV}"
+                f"LSQ profile associations: {LSQ_RUNS_CSV}"
             )
             return 0
 
@@ -509,7 +541,11 @@ def main() -> int:
 
         if action in {"FIT_LSQ", "PREVIEW_LSQ_ALIGNMENT"}:
             from tdm_least_squares import inspect_chromatogram_csv, run_global_least_squares_refinement
-            profile_rows = _selected_lsq_profile_rows()
+            # One table snapshot keeps each run's recipe, UV path and column
+            # choices paired even if the source files are edited externally.
+            lsq_rows = load_lsq_rows()
+            batch_rows = load_batch_rows()
+            profile_rows = _selected_lsq_profile_rows(lsq_rows)
             if not profile_rows:
                 raise ValueError("Attach at least one UV chromatogram to a selected LSQ run first.")
             if len(profile_rows) > MAX_LSQ_PROFILES:
@@ -518,20 +554,20 @@ def main() -> int:
             mode = _lsq_mode()
             refs = _composition_references_from_jmp(current_effective) if action == "FIT_LSQ" and mode == "CHROMATOGRAM_AND_COMPOSITION" else []
             profiles = []
-            lsq_rows = load_lsq_rows()
             for profile_run_number, row, source in profile_rows:
-                run_cfg = batch_row_to_run_config(lsq_rows[profile_run_number - 1])
-                profile_config, _ = apply_batch_shared_parameters(shared_raw, run_cfg)
+                profile_config, model_run = _lsq_model_run_config(
+                    shared_raw, profile_run_number, row, batch_rows)
                 errors = validate_config(profile_config, strict=True)
                 if errors:
-                    raise ValueError(f"Least-squares profile Run {profile_run_number} must be complete:\n- " + "\n- ".join(errors))
+                    raise ValueError(f"LSQ Run {profile_run_number}'s {model_run['model_run_label']} must be complete:\n- " + "\n- ".join(errors))
                 options = _lsq_reference_column_options(row)
                 info = inspect_chromatogram_csv(source, require_uv=True, **options)
                 # inspect_chromatogram_csv() reports the normalized source as
                 # `path`; `source_path` is only returned by the attach helper.
                 source = info["path"]
-                context = _fit_run_context(profile_config, profile_run_number)
+                context = _fit_run_context(profile_config, profile_run_number, row)
                 context["chromatogram_csv"] = source
+                context.update(model_run)
                 profile = {"config": profile_config, "chromatogram_csv": source, "run_context": context,
                            "weight": row.get("LSQ_Weight") or 1.0, **options}
                 if mode == "CHROMATOGRAM_AND_COMPOSITION" and profile_run_number == run_number:
@@ -543,7 +579,7 @@ def main() -> int:
                 from tdm_least_squares import preview_lsq_alignment
                 preview = preview_lsq_alignment(profiles)
                 summary = "\n".join(
-                    f"LSQ Run {item['run_number']} — {item['run_name']}: "
+                    f"LSQ Run {item['run_number']} — {item['run_name']} vs {item['model_run_label']}: "
                     f"{item['sample_points']} UV samples, measured {item['measured_start_CV']:.5g}–"
                     f"{item['measured_end_CV']:.5g} CV, programmed end {item['programmed_end_CV']:.5g} CV; "
                     f"pre-fit UV RMSE {item['uv_rmse_mAU']:.5g} mAU"
@@ -575,7 +611,7 @@ def main() -> int:
                 fitted_shared = sanitize_config_for_selected_model(fit["fitted_config"])
                 save_config(fitted_shared, CONFIG_PATH)
             profile_summary = "\n".join(
-                f"LSQ Run {p['run_number']} — {p['run_name']}: {p['overlap_points']} points, weighted RMSE {p['weighted_rmse']:.6g}; run weight {p['run_weight']:.6g}"
+                f"LSQ Run {p['run_number']} — {p['run_name']} vs {p['model_run_label']}: {p['overlap_points']} points, weighted RMSE {p['weighted_rmse']:.6g}; run weight {p['run_weight']:.6g}"
                 for p in fit["profile_metrics"]
             )
             weighted_line = (f"Initial weighted RMSE: {fit['initial_weighted_rmse']:.7g}; final weighted RMSE: {fit['final_weighted_rmse']:.7g}\n"

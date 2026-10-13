@@ -22,6 +22,7 @@ from tdm_minimal_io import (
     required_parameter_paths, validate_config,
 )
 from tdm_minimal_model import _wang_kinetic_rate, simulate
+from verify_model import make_config
 
 
 def wang_config():
@@ -34,6 +35,54 @@ def wang_config():
 
 
 class ModifiedWangTests(unittest.TestCase):
+    def test_refinement_catalog_excludes_other_model_combinations(self):
+        mixed_paths = [
+            "tdm.bead_radius_um", "edm.total_bed_porosity",
+            "cpa.ligand_surface_density_umol_m2", "wang.q0_g_L",
+            "components[0].delta_ref", "components[0].qmax_g_L",
+            "components[0].wang_k_eq",
+        ]
+        expected = {
+            MODEL_TDM_CPA: {"tdm.bead_radius_um", "cpa.ligand_surface_density_umol_m2", "components[0].delta_ref"},
+            MODEL_EDM_CPA: {"edm.total_bed_porosity", "cpa.ligand_surface_density_umol_m2", "components[0].delta_ref"},
+            MODEL_TDM_LANGMUIR: {"tdm.bead_radius_um", "components[0].qmax_g_L"},
+            MODEL_EDM_LANGMUIR: {"edm.total_bed_porosity", "components[0].qmax_g_L"},
+            MODEL_TDM_WANG: {"tdm.bead_radius_um", "wang.q0_g_L", "components[0].wang_k_eq"},
+        }
+        for combination, active in expected.items():
+            cfg = wang_config() if combination == MODEL_TDM_WANG else make_config(combination, 0, multistep=False)
+            # Deliberately populate inactive fields: a saved model may still
+            # carry values and locks entered for a different combination.
+            cfg["tdm"]["bead_radius_um"] = cfg["tdm"]["bead_radius_um"] or 25.0
+            cfg["edm"]["total_bed_porosity"] = cfg["edm"]["total_bed_porosity"] or 0.75
+            cfg["cpa"]["ligand_surface_density_umol_m2"] = cfg["cpa"]["ligand_surface_density_umol_m2"] or 2.89
+            cfg["components"][0]["delta_ref"] = cfg["components"][0]["delta_ref"] or 0.012
+            cfg["components"][0]["qmax_g_L"] = cfg["components"][0]["qmax_g_L"] or 100.0
+            with self.subTest(model=combination):
+                specs = lsq.fit_parameter_specs(cfg, unlocked_paths=mixed_paths,
+                                                candidate_paths=mixed_paths)
+                self.assertEqual({spec.path for spec in specs}, active)
+
+        four_species = make_config(MODEL_TDM_CPA, 3, multistep=False)
+        mixed_species_paths = [f"components[{i}].{field}"
+                               for i in range(4)
+                               for field in ("delta_ref", "qmax_g_L", "wang_k_eq")]
+        for row in four_species["components"][:4]:
+            row["qmax_g_L"] = 100.0
+        specs = lsq.fit_parameter_specs(four_species, unlocked_paths=mixed_species_paths,
+                                        candidate_paths=mixed_species_paths)
+        self.assertEqual({spec.path for spec in specs},
+                         {f"components[{i}].delta_ref" for i in range(4)})
+
+    def test_explicit_lock_all_is_respected_after_switching_models(self):
+        cfg = load_config()
+        cfg["least_squares"]["unlocked_paths"] = []
+        jsl = build_jsl(cfg)
+        _validate_jsl(jsl)
+        self.assertIn('c1WangKeqFitLock = Combo Box({"Locked", "Unlocked"}, << Set(1)', jsl)
+        self.assertIn('c1QmaxFitLock = Combo Box({"Locked", "Unlocked"}, << Set(1)', jsl)
+        self.assertIn('c1DeltaFitLock = Combo Box({"Locked", "Unlocked"}, << Set(1)', jsl)
+
     def test_paper_kinetic_law_and_competitive_vacancy(self):
         cfg = wang_config()
         row = cfg["components"][0]
