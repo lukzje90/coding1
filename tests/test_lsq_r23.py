@@ -155,7 +155,14 @@ class RefinementTests(unittest.TestCase):
         cfg = config_for()
         paths = {spec.path for spec in ls.fit_parameter_lock_catalog(cfg)}
         self.assertIn("system.uv_dead_volume_mL", paths)
-        self.assertNotIn("system.conductivity_dead_volume_mL", paths)
+        self.assertIn("system.conductivity_dead_volume_mL", paths)
+        self.assertNotIn("system.conductivity_dead_volume_mL", {
+            spec.path for spec in ls.fit_parameter_specs(
+                cfg, unlocked_paths=["system.conductivity_dead_volume_mL"])})
+        self.assertIn("system.conductivity_dead_volume_mL", {
+            spec.path for spec in ls.fit_parameter_specs(
+                cfg, fit_conductivity=True,
+                unlocked_paths=["system.conductivity_dead_volume_mL"])})
         trace = simulate(cfg)["trace"]
         changed = copy.deepcopy(cfg)
         changed["system"]["conductivity_dead_volume_mL"] *= 2
@@ -169,7 +176,8 @@ class RefinementTests(unittest.TestCase):
         trace = simulate(true)["trace"]
         initial = copy.deepcopy(true)
         initial["conversion"]["uv_to_protein_mAU_L_g"] *= 0.75
-        paths = [spec.path for spec in ls.fit_parameter_lock_catalog(initial)]
+        paths = [spec.path for spec in ls.fit_parameter_specs(
+            initial, unlocked_paths=[p.path for p in ls.fit_parameter_lock_catalog(initial)])]
         self.assertEqual(len(paths), 10)
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)

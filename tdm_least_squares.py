@@ -58,6 +58,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 ATTACHED_CHROMATOGRAM_CSV = PROJECT_DIR / "least_squares_reference_chromatogram.csv"
 FIT_RESULTS_CSV = PROJECT_DIR / "least_squares_fit_results.csv"
 FIT_TRACE_CSV = PROJECT_DIR / "least_squares_fit_trace.csv"
+FIT_CONDUCTIVITY_CSV = PROJECT_DIR / "least_squares_fit_conductivity.csv"
 FIT_COMPOSITION_CSV = PROJECT_DIR / "least_squares_fit_composition.csv"
 FIT_REPORT_HTML = PROJECT_DIR / "least_squares_fit_report.html"
 LSQ_ALIGNMENT_HTML = PROJECT_DIR / "least_squares_alignment_preview.html"
@@ -86,6 +87,9 @@ class ChromatogramReference:
     x_axis_assumption: str | None = None
     point_weights: np.ndarray | None = None
     weight_column: str | None = None
+    conductivity_cv: np.ndarray | None = None
+    conductivity_signal: np.ndarray | None = None
+    conductivity_column: str | None = None
 
 
 @dataclass(frozen=True)
@@ -470,15 +474,50 @@ def _select_columns(fields: list[str], rows: list[dict[str, str]], *,
     return x, y, unit
 
 
+def _conductivity_column(fields: list[str], rows: list[dict[str, str]],
+                         requested: str | None, fit: bool) -> str | None:
+    if not fit:
+        return None
+    if requested:
+        matches = [field for field in fields if _norm_header(field) == _norm_header(requested)]
+        if not matches:
+            raise ValueError(f"Requested conductivity column {requested!r} does not exist. Available: {fields}")
+        field = matches[0]
+    else:
+        matches = [field for field in fields if "conductivity" in _norm_header(field)
+                   and _column_numeric_count(rows, field) >= 3]
+        if len(matches) != 1:
+            raise ValueError("Conductivity fitting requires one identifiable numeric conductivity column; enter its exact column heading for this run.")
+        field = matches[0]
+    if _column_numeric_count(rows, field) < 3:
+        raise ValueError(f"Conductivity column {field!r} needs at least three numeric samples.")
+    return field
+
+
+def _conductivity_scale(field: str) -> float:
+    name = field.casefold().replace("µ", "u").replace("μ", "u")
+    if re.search(r"(?<![a-z])us\s*/\s*cm(?![a-z])", name):
+        return 0.001
+    if re.search(r"(?<![a-z])s\s*/\s*m(?![a-z])", name):
+        return 10.0
+    # Instrument exports commonly name an already-calibrated mS/cm trace
+    # simply "Conductivity". Explicit column selection uses the same rule.
+    return 1.0
+
+
 def inspect_chromatogram_csv(path: Path | str, *, sheet_name: str | None = None,
                              x_column: str | None = None, signal_column: str | None = None,
                              x_unit: str | None = None, x_origin: str | None = None,
-                             require_uv: bool = False) -> dict[str, Any]:
+                             require_uv: bool = False, fit_conductivity: bool = False,
+                             conductivity_column: str | None = None) -> dict[str, Any]:
     p = _resolve_chromatogram_path(path)
     fields, rows = _read_numeric_rows(p, sheet_name=sheet_name)
     x_field, signal_field, unit = _select_columns(fields, rows, x_column=x_column, signal_column=signal_column, x_unit=x_unit)
     if require_uv:
         _uv_reference_scale(signal_field, signal_column)
+    cond_field = _conductivity_column(fields, rows, conductivity_column, fit_conductivity)
+    if cond_field == x_field or cond_field == signal_field:
+        raise ValueError("The conductivity column must differ from the X-axis and UV columns.")
     origin = _validate_x_origin(x_origin, unit)
     paired = (
         _column_numeric_count(rows, signal_field)
@@ -501,6 +540,7 @@ def inspect_chromatogram_csv(path: Path | str, *, sheet_name: str | None = None,
         "columns": fields,
         "x_axis_assumption": assumption,
         "weight_column": _weight_column(fields),
+        "conductivity_column": cond_field,
     }
 
 
@@ -564,11 +604,16 @@ def _elution_start_cv(config: dict[str, Any]) -> float:
 def load_chromatogram_reference(path: Path | str, config: dict[str, Any], *,
                                 sheet_name: str | None = None, x_column: str | None = None,
                                 signal_column: str | None = None, x_unit: str | None = None,
-                                x_origin: str | None = None, require_uv: bool = False) -> ChromatogramReference:
+                                x_origin: str | None = None, require_uv: bool = False,
+                                fit_conductivity: bool = False,
+                                conductivity_column: str | None = None) -> ChromatogramReference:
     p = _resolve_chromatogram_path(path)
     fields, rows = _read_numeric_rows(p, sheet_name=sheet_name)
     x_field, signal_field, unit = _select_columns(fields, rows, x_column=x_column, signal_column=signal_column, x_unit=x_unit)
     signal_scale = _uv_reference_scale(signal_field, signal_column) if require_uv else 1.0
+    cond_field = _conductivity_column(fields, rows, conductivity_column, fit_conductivity)
+    if cond_field == x_field or cond_field == signal_field:
+        raise ValueError("The conductivity column must differ from the X-axis and UV columns.")
     origin = _validate_x_origin(x_origin, unit)
     weights_field = _weight_column(fields)
     pairs: list[tuple[float, float, float]] = []
@@ -610,7 +655,38 @@ def load_chromatogram_reference(path: Path | str, config: dict[str, Any], *,
         assumption = "The numeric sample/point index is mapped uniformly across the selected profile's process duration."
     if not np.any(weights > 0):
         raise ValueError("All reference sample weights are zero; at least one must be positive.")
-    return ChromatogramReference(cv=cv, signal=y, x_column=display_x_field, signal_column=signal_field, x_unit=unit, source_path=str(p), x_axis_assumption=assumption, point_weights=weights, weight_column=weights_field)
+    cond_cv = cond_signal = None
+    if cond_field:
+        cond_pairs = []
+        for row_index, row in enumerate(rows):
+            raw_x = float(row_index) if x_field == SAMPLE_ORDER_FIELD else _parse_numeric_cell(row.get(x_field))
+            raw_cond = _parse_numeric_cell(row.get(cond_field))
+            if raw_x is not None and raw_cond is not None:
+                cond_pairs.append((raw_x, raw_cond * _conductivity_scale(cond_field)))
+        if len(cond_pairs) < 3:
+            raise ValueError("Conductivity fitting needs at least three paired numeric X/conductivity points.")
+        cond_arr = np.asarray(cond_pairs, dtype=float)
+        cond_arr = cond_arr[np.argsort(cond_arr[:, 0], kind="stable")]
+        if x_field == SAMPLE_ORDER_FIELD:
+            # Preserve each row's position in the full instrument export even
+            # when conductivity has gaps.
+            cond_cv = cond_arr[:, 0] / max(1, len(rows) - 1) * _build_program(
+                config, np.zeros(max(1, len(active_components(config))), dtype=float)).total_CV
+        elif unit == "INDEX":
+            # The conductivity channel may be sparse. Its index coordinates
+            # must use the UV channel's full reference index span.
+            span = float(x[-1] - x[0])
+            fraction = np.zeros(len(cond_arr), dtype=float) if span <= 0 else (cond_arr[:, 0] - x[0]) / span
+            cond_cv = fraction * _build_program(
+                config, np.zeros(max(1, len(active_components(config))), dtype=float)).total_CV
+        else:
+            cond_cv = _x_to_cv(cond_arr[:, 0], unit, config)
+        if origin == "ELUTION_START":
+            cond_cv = cond_cv + _elution_start_cv(config)
+        cond_signal = cond_arr[:, 1]
+        if not np.all(np.isfinite(cond_cv) & np.isfinite(cond_signal)):
+            raise ValueError("Conductivity reference contains non-finite converted values.")
+    return ChromatogramReference(cv=cv, signal=y, x_column=display_x_field, signal_column=signal_field, x_unit=unit, source_path=str(p), x_axis_assumption=assumption, point_weights=weights, weight_column=weights_field, conductivity_cv=cond_cv, conductivity_signal=cond_signal, conductivity_column=cond_field)
 
 
 def _reference_row_weight(row: dict[str, str], weight_field: str | None) -> float:
@@ -665,7 +741,9 @@ def _default_unlocked_parameter_paths(config: dict[str, Any], *, fit_uv_response
     config = normalize_config(config)
     model = str(config["model"])
     paths: set[str] = set()
-    for i, _row in enumerate(active_components(config)):
+    for i, row in enumerate(selected_components(config)):
+        if float(row.get("mass_percent") or 0) <= 0:
+            continue
         prefix = f"components[{i}]"
         if model == MODEL_TDM_WANG:
             paths.update({f"{prefix}.wang_k_eq", f"{prefix}.wang_beta1_per_M"})
@@ -682,6 +760,7 @@ def _default_unlocked_parameter_paths(config: dict[str, Any], *, fit_uv_response
 
 
 def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = True,
+                             fit_conductivity: bool = False,
                              candidate_paths: Iterable[str] | None = None) -> list[FitParameter]:
     """Build bounded specs for every required mechanistic input except column geometry.
 
@@ -744,11 +823,7 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
     for path in paths:
         if path in {"column.volume_mL", "column.length_mm"} or path.endswith(".mass_percent"):
             continue
-        # The residual currently uses UV absorbance (and optionally species
-        # composition). Conductivity detector dead volume only shifts the
-        # separately exported conductivity trace, so it is not identifiable
-        # from any least-squares observation in this interface.
-        if path == "system.conductivity_dead_volume_mL":
+        if path == "system.conductivity_dead_volume_mL" and not fit_conductivity:
             continue
         if not fit_uv_response and (path.endswith("uv_response_factor_mAU_L_g") or path == "conversion.uv_to_protein_mAU_L_g"):
             continue
@@ -774,7 +849,7 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
                             "wang_beta2_L_g": (-5.0, 5.0), "wang_beta3_per_pH": (-1.0, 1.0)}[field]
             specs.append(FitParameter(path, labels[field], "LINEAR", lower, upper,
                                       float(np.clip(value, lower, upper))))
-        elif field in {"buffer_dispersion_mL", "salt_dispersion_mm2_s", "uv_dead_volume_mL", "D_ax_mm2_s", "D_app_mm2_s", "salt_axial_dispersion_mm2_s"}:
+        elif field in {"buffer_dispersion_mL", "salt_dispersion_mm2_s", "uv_dead_volume_mL", "conductivity_dead_volume_mL", "D_ax_mm2_s", "D_app_mm2_s", "salt_axial_dispersion_mm2_s"}:
             upper = max(10.0, value * 20.0, float(config["column"]["volume_mL"]) * 5.0)
             specs.append(FitParameter(path, labels.get(field, field), "LINEAR", 0.0, upper,
                                       value))
@@ -796,15 +871,32 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
                 specs.append(_positive_log_spec(path, labels.get(field, field), value))
             except ValueError:
                 continue
-    return specs
+    return [FitParameter(spec.path, _report_parameter_label(config, spec.path, spec.label),
+                         spec.transform, spec.lower, spec.upper, spec.initial) for spec in specs]
+
+
+def _report_parameter_label(config: dict[str, Any], path: str, field_label: str | None = None) -> str:
+    match = re.fullmatch(r"components\[(\d+)\]\.([A-Za-z0-9_]+)", path)
+    if not match:
+        return field_label or path
+    index = int(match.group(1))
+    # Parameter paths address the saved component slots, whereas the solver's
+    # active list may omit a zero-mass impurity between populated slots.
+    species = config.get("components", [])
+    if index >= len(species):
+        return field_label or path
+    role = "Target protein" if index == 0 else f"Impurity {index}"
+    name = str(species[index].get("name") or role)
+    return f"{role} ({name}) — {field_label or match.group(2)}"
 
 
 def fit_parameter_lock_catalog(config: dict[str, Any]) -> list[FitParameter]:
     """Return all currently required mechanistic parameters that can be unlocked."""
-    return _all_fit_parameter_specs(config, fit_uv_response=True)
+    return _all_fit_parameter_specs(config, fit_uv_response=True, fit_conductivity=True)
 
 
 def fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = True,
+                        fit_conductivity: bool = False,
                         unlocked_paths: Iterable[str] | None = None,
                         candidate_paths: Iterable[str] | None = None) -> list[FitParameter]:
     """Return the model-backed parameters refined by least squares.
@@ -817,11 +909,12 @@ def fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = True,
     if unlocked_paths is not None:
         unlocked = set(canonical_fit_parameter_path(path) for path in unlocked_paths)
         candidates = _all_fit_parameter_specs(config, fit_uv_response=fit_uv_response,
+                                              fit_conductivity=fit_conductivity,
                                               candidate_paths=candidate_paths)
         return [spec for spec in candidates if spec.path in unlocked]
     persisted = config.get("least_squares", {}).get("unlocked_paths")
     unlocked = set(persisted) if persisted is not None else _default_unlocked_parameter_paths(config, fit_uv_response=fit_uv_response)
-    return [spec for spec in _all_fit_parameter_specs(config, fit_uv_response=fit_uv_response, candidate_paths=candidate_paths)
+    return [spec for spec in _all_fit_parameter_specs(config, fit_uv_response=fit_uv_response, fit_conductivity=fit_conductivity, candidate_paths=candidate_paths)
             if spec.path in unlocked]
 
 
@@ -969,6 +1062,34 @@ def _chromatogram_residuals(config: dict[str, Any], ref: ChromatogramReference, 
     return residual, info
 
 
+def _conductivity_residuals(config: dict[str, Any], ref: ChromatogramReference,
+                            trace: dict[str, Any], uv_info: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
+    if ref.conductivity_cv is None or ref.conductivity_signal is None:
+        raise ValueError("Conductivity fitting is enabled, but this run has no measured conductivity values.")
+    sim_cv = np.asarray(trace["CV"], dtype=float)
+    measured_cv = np.asarray(ref.conductivity_cv, dtype=float)
+    measured = np.asarray(ref.conductivity_signal, dtype=float)
+    tolerance = 1e-9 * max(1.0, float(sim_cv[-1]))
+    if np.any(measured_cv < sim_cv[0] - tolerance) or np.any(measured_cv > sim_cv[-1] + tolerance):
+        raise ValueError("Measured conductivity extends outside this run's simulated process recipe.")
+    predicted = np.interp(np.clip(measured_cv, sim_cv[0], sim_cv[-1]), sim_cv,
+                          np.asarray(trace["conductivity_mS_cm"], dtype=float))
+    difference = predicted - measured
+    span = float(np.max(measured) - np.min(measured))
+    scale = span if span > 1e-6 else max(float(np.max(np.abs(measured))), 1e-3)
+    objective = config["least_squares"]["objective"]
+    residual = difference / (scale * math.sqrt(len(difference)))
+    if objective == "RAW_SSE":
+        # One conductivity channel has approximately the same influence as
+        # one UV channel regardless of sampling rate or detector units.
+        residual *= max(1.0, float(uv_info["measured_signal_scale"])) * math.sqrt(len(uv_info["CV"]))
+    elif objective == "WEIGHTED_RMSE":
+        residual *= max(1.0, float(uv_info["measured_signal_scale"]))
+    return residual, {"CV": measured_cv, "measured": measured, "predicted": predicted,
+                      "scale_mS_cm": scale, "column": ref.conductivity_column,
+                      "rmse_mS_cm": float(np.sqrt(np.mean(difference ** 2)))}
+
+
 def _reference_display_series(cv: np.ndarray, signal: np.ndarray, total_cv: float,
                               pixel_columns: int = 744) -> tuple[np.ndarray, np.ndarray]:
     """Show one robust reference value per horizontal pixel without changing fit data.
@@ -1022,6 +1143,38 @@ def _chromatogram_fit_svg(config: dict[str, Any], info: dict[str, Any]) -> str:
     )
 
 
+def _conductivity_fit_svg(info: dict[str, Any]) -> str:
+    cond = info["conductivity"]
+    if not cond:
+        return ""
+    x = np.asarray(cond["CV"], dtype=float)
+    measured = np.asarray(cond["measured"], dtype=float)
+    predicted = np.asarray(cond["predicted"], dtype=float)
+    x_max = max(float(info["result"]["simulation"]["program"].total_CV), 1e-9)
+    low = float(min(np.min(measured), np.min(predicted)))
+    high = float(max(np.max(measured), np.max(predicted)))
+    pad = max((high - low) * 0.08, 0.01)
+    low -= pad
+    high += pad
+    def xy(xs: np.ndarray, ys: np.ndarray) -> str:
+        return " ".join(f"{56 + 770 * float(a) / x_max:.2f},{310 - 260 * (float(b) - low) / (high - low):.2f}"
+                        for a, b in zip(xs, ys))
+    disp_x, disp_y = _reference_display_series(x, measured, x_max)
+    return (f'<h4>Measured vs predicted conductivity — {html.escape(str(cond["column"]))}</h4>'
+            f'<p>Conductivity RMSE: {cond["rmse_mS_cm"]:.6g} mS/cm; '
+            f'{len(x)} measured samples used in refinement.</p>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 365" '
+            'role="img" aria-label="Measured and predicted conductivity by CV">'
+            '<rect width="900" height="365" fill="white"/>'
+            '<path d="M56 50V310H826" fill="none" stroke="#444"/>'
+            f'<polyline points="{xy(disp_x, disp_y)}" fill="none" stroke="#111" stroke-width="1.8"/>'
+            f'<polyline points="{xy(x, predicted)}" fill="none" stroke="#0878c6" stroke-width="1.8"/>'
+            '<text x="56" y="338" font-size="12">0 CV</text>'
+            f'<text x="826" y="338" text-anchor="end" font-size="12">{x_max:.4g} CV</text>'
+            '<text x="60" y="28" font-size="12" fill="#111">■ Measured</text>'
+            '<text x="180" y="28" font-size="12" fill="#0878c6">■ Predicted [mS/cm]</text></svg>')
+
+
 def preview_lsq_alignment(
     profiles: Iterable[dict[str, Any]], *, output_html: Path | str = LSQ_ALIGNMENT_HTML,
 ) -> dict[str, Any]:
@@ -1050,10 +1203,12 @@ def preview_lsq_alignment(
             source, config, sheet_name=profile.get("sheet_name"),
             x_column=profile.get("x_column"), signal_column=profile.get("signal_column"),
             x_unit=profile.get("x_unit"), x_origin=profile.get("x_origin"), require_uv=True,
+            fit_conductivity=bool(profile.get("fit_conductivity")),
+            conductivity_column=profile.get("conductivity_column"),
         )
         raw_comp_refs = profile.get("composition_references") or []
         comp_refs = validate_composition_references(config, raw_comp_refs) if raw_comp_refs else []
-        _residual, info = _objective_parts(config, reference, MODE_CHROMATOGRAM, [])
+        _residual, info = _objective_parts(config, reference, MODE_CHROMATOGRAM, [], bool(profile.get("fit_conductivity")))
         if comp_refs:
             _composition_residuals(config, comp_refs, info["result"]["trace"])
         chrom = info["chromatogram"]
@@ -1071,6 +1226,7 @@ def preview_lsq_alignment(
             "measured_end_CV": float(reference.cv[-1]),
             "programmed_end_CV": program_end,
             "uv_rmse_mAU": rmse,
+            "conductivity_rmse_mS_cm": info["conductivity"]["rmse_mS_cm"] if info["conductivity"] else None,
             "mass_percent_observations": sum(len(row["mass_percent"]) for row in comp_refs),
             "x_column": reference.x_column,
             "x_unit": reference.x_unit,
@@ -1090,7 +1246,11 @@ def preview_lsq_alignment(
             f"<b>Measured span:</b> {metric['measured_start_CV']:.6g}–{metric['measured_end_CV']:.6g} CV "
             f"({metric['sample_points']} samples); <b>programmed end:</b> {program_end:.6g} CV; "
             f"<b>UV RMSE before refinement:</b> {rmse:.6g} mAU.</p>"
+            + (f'<p><b>Measured conductivity:</b> {html.escape(str(reference.conductivity_column))}; '
+               f'<b>RMSE before refinement:</b> {info["conductivity"]["rmse_mS_cm"]:.6g} mS/cm.</p>'
+               if info["conductivity"] else "")
             + _chromatogram_fit_svg(config, info)
+            + (_conductivity_fit_svg(info) if info["conductivity"] else "")
             + ("<h3>Fraction mass% at midpoints</h3>"
                + _composition_profile_svg(config, comp_refs, info["result"]["trace"])
                + f"<p>{sum(len(row['mass_percent']) for row in comp_refs)} entered species observations. "
@@ -1251,9 +1411,14 @@ def _objective_parts(
     ref: ChromatogramReference,
     mode: str,
     composition_refs: list[dict[str, Any]],
+    fit_conductivity: bool = False,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     result = simulate(cfg)
     chrom_r, chrom_info = _chromatogram_residuals(cfg, ref, result["trace"])
+    cond_r = np.empty(0, dtype=float)
+    cond_info = None
+    if fit_conductivity:
+        cond_r, cond_info = _conductivity_residuals(cfg, ref, result["trace"], chrom_info)
     comp_r = np.empty(0, dtype=float)
     comp_rows: list[dict[str, Any]] = []
     if mode == MODE_CHROMATOGRAM_AND_COMPOSITION:
@@ -1267,11 +1432,13 @@ def _objective_parts(
             # A flat/near-zero UV file must not divide by numerical noise and
             # overwhelm genuine fraction observations in the combined fit.
             chrom_r = chrom_r * min(1.0, float(chrom_info["measured_signal_scale"]))
-    combined = np.concatenate([chrom_r, comp_r])
+    combined = np.concatenate([chrom_r, cond_r, comp_r])
     return combined, {
         "result": result,
         "chromatogram": chrom_info,
         "composition": comp_rows,
+        "conductivity": cond_info,
+        "conductivity_sse_normalized": float(np.sum(cond_r ** 2)),
         "chromatogram_sse_normalized": float(np.sum(chrom_r**2)),
         "chromatogram_raw_sse": float(np.sum((chrom_info["predicted_detector_signal"] - chrom_info["measured"])**2)),
         "composition_sse_normalized": float(np.sum(comp_r**2)) if len(comp_r) else 0.0,
@@ -1782,7 +1949,9 @@ def run_global_least_squares_refinement(
                                          signal_column=profile.get("signal_column"),
                                          x_unit=profile.get("x_unit"),
                                          x_origin=profile.get("x_origin"),
-                                         require_uv=True)
+                                         require_uv=True,
+                                         fit_conductivity=bool(profile.get("fit_conductivity")),
+                                         conductivity_column=profile.get("conductivity_column"))
         profile_weight = float(profile.get("weight", 1.0))
         if not math.isfinite(profile_weight) or profile_weight <= 0:
             raise ValueError(f"Global-fit profile {index}: run weight must be finite and > 0.")
@@ -1804,6 +1973,7 @@ def run_global_least_squares_refinement(
         normalized_profiles.append({
             "config": cfg,
             "reference": ref,
+            "fit_conductivity": bool(profile.get("fit_conductivity")),
             "composition_references": profile_refs,
             "run_context": context,
             "weight": profile_weight,
@@ -1857,6 +2027,7 @@ def run_global_least_squares_refinement(
         seed["least_squares"]["unlocked_paths"] = list(unlocked_paths)
     specs = fit_parameter_specs(
         seed,
+        fit_conductivity=any(p["fit_conductivity"] for p in normalized_profiles),
         unlocked_paths=unlocked_paths,
         candidate_paths=candidate_paths,
     )
@@ -1875,7 +2046,7 @@ def run_global_least_squares_refinement(
         residual_blocks = []
         infos = []
         for cfg, prof, comp_refs, normalized_weight in zip(configs, normalized_profiles, comp_refs_by_profile, run_weights):
-            r, info = _objective_parts(cfg, prof["reference"], mode, comp_refs)
+            r, info = _objective_parts(cfg, prof["reference"], mode, comp_refs, prof["fit_conductivity"])
             # WEIGHTED_RMSE: sum_r alpha_r * (sum_j w_rj e_rj² / sum_j w_rj).
             # Minimizing its square root is equivalent to minimizing its SSE
             # residual vector (SciPy's least_squares contract).
@@ -2017,7 +2188,7 @@ def run_global_least_squares_refinement(
                 xfit = (10.0 ** float(opt.x[specs.index(spec)]) if spec.transform == "LOG10"
                         else float(opt.x[specs.index(spec)]))
             writer.writerow({
-                "Parameter_Path": path, "Parameter": spec.label if spec else path,
+                "Parameter_Path": path, "Parameter": spec.label if spec else _report_parameter_label(seed, path),
                 "Initial_Value": initial_value, "Fitted_Value": fitted_value,
                 "Transform": spec.transform if spec else "", "Fit_State": fit_state,
                 "At_Lower_Bound": bool(spec and xfit is not None and abs(float(opt.x[specs.index(spec)]) - spec.lower) <= 1e-6 * max(1.0, abs(spec.lower))),
@@ -2076,7 +2247,8 @@ def run_global_least_squares_refinement(
                 "weighted_rmse": run_weighted_rmse,
                 "run_weight": profile["weight"],
                 "r_squared": r2,
-                "profile_objective": float(info["chromatogram_sse_normalized"] + info["composition_sse_normalized"]),
+                "conductivity_rmse_mS_cm": info["conductivity"]["rmse_mS_cm"] if info["conductivity"] else None,
+                "profile_objective": float(info["chromatogram_sse_normalized"] + info["conductivity_sse_normalized"] + info["composition_sse_normalized"]),
             }
             metric_rows.append(metric)
             for cv, measured, sim_total, predicted, residual_value, norm_value, sample_weight in zip(
@@ -2096,6 +2268,20 @@ def run_global_least_squares_refinement(
                 })
 
     composition_rows = []
+    conductivity_output_path = FIT_TRACE_CSV.with_name(FIT_CONDUCTIVITY_CSV.name)
+    with conductivity_output_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["Run_Number", "Run_Name", "Model_Run", "Conductivity_Column", "CV", "Measured_mS_cm", "Predicted_mS_cm", "Residual_mS_cm"])
+        writer.writeheader()
+        for profile, info in zip(normalized_profiles, final_infos):
+            cond = info["conductivity"]
+            if not cond:
+                continue
+            context = profile["run_context"]
+            for cv, measured, predicted in zip(cond["CV"], cond["measured"], cond["predicted"]):
+                writer.writerow({"Run_Number": context["run_number"], "Run_Name": context["run_name"],
+                                 "Model_Run": context["model_run_label"], "Conductivity_Column": cond["column"],
+                                 "CV": float(cv), "Measured_mS_cm": float(measured),
+                                 "Predicted_mS_cm": float(predicted), "Residual_mS_cm": float(predicted - measured)})
     with FIT_COMPOSITION_CSV.open("w", encoding="utf-8", newline="") as fh:
         fields = ["Run_Number", "Run_Name", "CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Residual_mass_percent"]
         writer = csv.DictWriter(fh, fieldnames=fields)
@@ -2116,16 +2302,18 @@ def run_global_least_squares_refinement(
         "mode": mode,
         "profile_count": n_profiles,
         "objective": first["least_squares"]["objective"],
-        "equation_9": "min_theta sum_runs sum_points (predicted_signal(theta_fixed, theta_unlocked) - measured_signal)^2",
+        "equation_9": "min_theta sum_runs sum_UV_points (predicted_UV - measured_UV)^2; enabled conductivity and mass% add separately scaled residual groups",
         "weighted_rmse_formula": "sqrt(sum_runs (run_weight/sum_run_weights) * sum_points(point_weight*residual^2)/sum_point_weights)",
         "optimizer": f"scipy.optimize.least_squares(method={_optimizer_method(x0, lo, hi)}, loss=linear, ftol=1e-4, xtol=1e-4, gtol=1e-7); bounded residual-vector least squares",
         "baseline_mode": first["least_squares"]["baseline_mode"],
-        "profile_weighting": "User run weights times within-run weighted MSE; sqrt gives weighted RMSE" if weighted_objective else "Equal normalized profile MSE" if normalized_objective else "Unweighted raw point SSE (equation 9); all selected measured points contribute",
+        "profile_weighting": "User run weights times within-run weighted MSE; sqrt gives weighted RMSE" if weighted_objective else "Equal normalized profile MSE" if normalized_objective else "Raw UV point SSE (equation 9), plus separately normalized conductivity and mass% when enabled",
         "profiles": [
             {
                 "run_context": p["run_context"],
                 "x_column": p["reference"].x_column,
                 "signal_column": p["reference"].signal_column,
+                "fit_conductivity": p["fit_conductivity"],
+                "conductivity_column": p["reference"].conductivity_column,
                 "x_unit": p["reference"].x_unit,
                 "x_origin": p["x_origin"],
                 "x_axis_assumption": p["reference"].x_axis_assumption,
@@ -2153,6 +2341,7 @@ def run_global_least_squares_refinement(
             metric["run_number"], metric["run_name"], metric["model_run_label"], metric["overlap_points"],
             f'{metric["normalized_nrmse"]:.6g}', f'{metric["raw_rmse"]:.6g}', f'{metric["weighted_rmse"]:.6g}', f'{metric["run_weight"]:.6g}',
             "—" if not math.isfinite(metric["r_squared"]) else f'{metric["r_squared"]:.6g}',
+            "—" if metric["conductivity_rmse_mS_cm"] is None else f'{metric["conductivity_rmse_mS_cm"]:.6g}',
         )) + "</tr>"
         for metric in metric_rows
     )
@@ -2164,6 +2353,8 @@ def run_global_least_squares_refinement(
     profile_plots = []
     for profile, cfg, info in zip(normalized_profiles, fitted_configs, final_infos):
         plot = _chromatogram_fit_svg(cfg, info)
+        if info["conductivity"]:
+            plot += _conductivity_fit_svg(info)
         refs = profile["composition_references"]
         if refs:
             plot += ("<h4>Fraction mass% at midpoints</h4>"
@@ -2182,14 +2373,14 @@ def run_global_least_squares_refinement(
 <p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
 <b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Optimizer evaluations:</b> {eval_count}; <b>Unlocked parameters:</b> {len(specs)}.</p>
-<h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor.</p>
-<table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>Signal RMSE</th><th>Weighted RMSE</th><th>Run weight</th><th>R²</th></tr></thead><tbody>{profile_rows}</tbody></table>
+<h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise UV equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor. Conductivity, when enabled for a run, adds measured detector residuals normalized by that run's conductivity signal scale and sample count; in RAW_SSE these are rescaled to the measured UV scale.</p>
+<table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>UV RMSE</th><th>Weighted UV RMSE</th><th>Run weight</th><th>UV R²</th><th>Conductivity RMSE [mS/cm]</th></tr></thead><tbody>{profile_rows}</tbody></table>
 <h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>{overlays_html}
 <h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Profile recipes used</h2>{recipe_details}
-<h2>Objective construction</h2><p>Equation 9 is the sum of squared predicted-minus-measured detector samples. RAW_SSE preserves the UV term verbatim. NORMALIZED_MSE divides each run's UV residuals by its signal scale and sqrt(sample count). Fraction mass% adds measured-minus-predicted residuals at entered midpoints only, divided by 100 and sqrt(the populated species-observation count). With RAW_SSE, the mass% group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the UV sample count); with NORMALIZED_MSE both groups are dimensionless with the same 1 mAU UV floor. The predicted fraction is 100 times that species' simulated concentration divided by the sum of modeled species concentrations. Blank cells add no residual; chart interpolation is display-only. WEIGHTED_RMSE applies to chromatogram-only fits. Baseline estimation is opt-in; the default baseline is fixed. Each selected run's process settings remain fixed during refinement. Only unlocked active-model parameters are shared and refined.</p>
+<h2>Objective construction</h2><p>Equation 9 is the sum of squared predicted-minus-measured UV detector samples. RAW_SSE preserves the UV term verbatim. NORMALIZED_MSE divides each run's UV residuals by its signal scale and sqrt(sample count). Enabled conductivity adds one residual per numeric measured point; these are divided by the measured conductivity scale and sqrt(conductivity point count), then expressed in comparable UV units for RAW_SSE. Fraction mass% adds measured-minus-predicted residuals at entered midpoints only, divided by 100 and sqrt(the populated species-observation count). With RAW_SSE, the mass% group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the UV sample count); with NORMALIZED_MSE both groups are dimensionless with the same 1 mAU UV floor. The predicted fraction is 100 times that species' simulated concentration divided by the sum of modeled species concentrations. Blank cells add no residual; chart interpolation is display-only. WEIGHTED_RMSE applies when fraction mass% is off. Baseline estimation is opt-in; the default baseline is fixed. Each selected run's process settings remain fixed during refinement. Only unlocked active-model parameters are shared and refined.</p>
 <h2>Objective improvement over time</h2><p>History file: <a href="{FIT_HISTORY_CSV.name}">{FIT_HISTORY_CSV.name}</a></p>{history_plot}
-<p>Files: {FIT_TRACE_CSV.name}, {FIT_RESULTS_CSV.name}, {FIT_COMPOSITION_CSV.name}, {FIT_SETTINGS_JSON.name}.</p>
+<p>Files: {FIT_TRACE_CSV.name}, {FIT_CONDUCTIVITY_CSV.name}, {FIT_RESULTS_CSV.name}, {FIT_COMPOSITION_CSV.name}, {FIT_SETTINGS_JSON.name}.</p>
 """, encoding="utf-8")
 
     return {
@@ -2210,6 +2401,7 @@ def run_global_least_squares_refinement(
         "fitted_config": fitted,
         "fit_results_csv": str(FIT_RESULTS_CSV),
         "fit_trace_csv": str(FIT_TRACE_CSV),
+        "fit_conductivity_csv": str(conductivity_output_path),
         "fit_composition_csv": str(FIT_COMPOSITION_CSV),
         "fit_report_html": str(FIT_REPORT_HTML),
         "fit_config_json": str(FIT_CONFIG_JSON),

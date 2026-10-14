@@ -5,19 +5,66 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import tdm_bridge
 
 from tdm_jmp import _validate_jsl, build_jsl
 from tdm_minimal_io import (
-    MODEL_EDM_LANGMUIR, MODEL_TDM_WANG, apply_batch_shared_parameters,
-    batch_row_to_run_config, default_batch_row, derived_input_summary,
+    MODEL_EDM_LANGMUIR, MODEL_TDM_CPA, MODEL_TDM_WANG,
+    LSQ_MODEL_SOURCE_BATCH, LSQ_MODEL_SOURCE_INDEPENDENT,
+    apply_batch_shared_parameters, batch_row_to_run_config,
+    batch_run_fields, batch_run_numeric_fields, batch_shared_parameter_snapshot,
+    default_batch_row, derived_input_summary,
     ensure_batch_runs_csv, load_batch_rows, load_config, normalize_config,
-    normalize_load_amount_basis, save_batch_rows, validate_operating_conditions,
+    normalize_load_amount_basis, sanitize_config_for_selected_model,
+    save_batch_rows, validate_operating_conditions,
 )
 from tdm_minimal_model import _build_program, simulate
 from verify_model import make_config
 
 
 class LoadVolumeMLTests(unittest.TestCase):
+    def test_independent_run_recipes_share_model_volume_and_parameters(self):
+        shared = make_config(MODEL_TDM_CPA, 1, multistep=False)
+        shared["column"]["volume_mL"] = 2.5
+        batch = [default_batch_row(i) for i in range(1, 31)]
+        batch[0].update(Load_Amount_Basis="VOLUME_ML", Load_Volume_mL=7.5,
+                        Load_CV=99, PLW_Count=0, Elution_Count=1, Elution1_CV=4)
+        batch[6].update(Load_Amount_Basis="VOLUME_ML", Load_Volume_mL=12.5,
+                        Load_CV=99, PLW_Count=0, Elution_Count=1, Elution1_CV=6)
+        lsq = [default_batch_row(i) for i in range(1, 31)]
+        lsq[1].update(LSQ_Model_Source=LSQ_MODEL_SOURCE_BATCH, LSQ_Model_Run_Number=7)
+        lsq[3].update(LSQ_Model_Source=LSQ_MODEL_SOURCE_INDEPENDENT,
+                      Load_Amount_Basis="VOLUME_ML", Load_Volume_mL=17.5,
+                      Load_CV=99, PLW_Count=0, Elution_Count=1, Elution1_CV=8)
+
+        normal, _ = apply_batch_shared_parameters(shared, batch_row_to_run_config(batch[0]))
+        fit2, source2 = tdm_bridge._lsq_model_run_config(shared, 2, lsq[1], batch)
+        fit4, source4 = tdm_bridge._lsq_model_run_config(shared, 4, lsq[3], batch)
+        self.assertEqual([source2["model_run_number"], source4["model_run_number"]], [7, 4])
+        self.assertEqual([normal["process"]["load_CV"], fit2["process"]["load_CV"],
+                          fit4["process"]["load_CV"]], [3.0, 5.0, 7.0])
+        self.assertEqual([_build_program(cfg, np.zeros(2)).total_CV
+                          for cfg in (normal, fit2, fit4)], [7.0, 11.0, 15.0])
+        expected_shared = batch_shared_parameter_snapshot(sanitize_config_for_selected_model(shared))
+        for cfg in (normal, fit2, fit4):
+            self.assertEqual(cfg["column"]["volume_mL"], 2.5)
+            self.assertEqual(batch_shared_parameter_snapshot(cfg), expected_shared)
+        shared["column"]["volume_mL"] = 5.0
+        changed = [apply_batch_shared_parameters(shared, batch_row_to_run_config(row))[0]
+                   for row in (batch[0], batch[6], lsq[3])]
+        self.assertEqual([cfg["process"]["load_CV"] for cfg in changed], [1.5, 2.5, 3.5])
+        self.assertTrue(all(cfg["column"]["volume_mL"] == 5.0 for cfg in changed))
+
+    def test_jmp_process_tables_type_every_field_before_saving(self):
+        jsl = build_jsl()
+        _validate_jsl(jsl)
+        numeric = set(batch_run_numeric_fields())
+        for field in batch_run_fields():
+            kind = "Numeric" if field in numeric else "Character"
+            for table in ("dtBatchRuns", "dtLSQRuns"):
+                self.assertIn(f'Column({table}, "{field}") << Data Type({kind});', jsl)
+        self.assertIn('Column(dtRuns, "Load_Salt_M")[currentRun] = loadSalt << Get;', jsl)
+
     def test_milliliters_are_authoritative_for_each_run_and_column_volume(self):
         shared = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
         shared["column"]["volume_mL"] = 2.0

@@ -18,6 +18,7 @@ from tdm_minimal_io import (
     BATCH_GALLERY_HTML,
     BATCH_RUNS_CSV,
     LSQ_MASS_CSV,
+    LSQ_MASS_FIELDS,
     LSQ_RUNS_CSV,
     BATCH_SUMMARY_CSV,
     CONFIG_PATH,
@@ -30,6 +31,8 @@ from tdm_minimal_io import (
     MAX_LSQ_FRACTIONS,
     MAX_PLW_STEPS,
     MAX_RUNS,
+    batch_run_fields,
+    batch_run_numeric_fields,
     MODEL_EDM_CPA,
     MODEL_EDM_LANGMUIR,
     MODEL_LABELS,
@@ -396,6 +399,15 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         b, s, v = _lsq_reference_panel(k)
         ref_bodies.append(b); ref_sends.extend(s); ref_vis.append(v)
     mass_save_rows, mass_load_rows = [], []
+    mass_numeric_columns = "\n".join(
+        f'Column(dtLSQMass, {_q(field)}) << Data Type(Numeric);'
+        for field in LSQ_MASS_FIELDS if field not in {"Enabled", "Unit"}
+    )
+    numeric_process_fields = set(batch_run_numeric_fields())
+    process_column_types = "\n".join(
+        f'Column({table}, {_q(field)}) << Data Type({"Numeric" if field in numeric_process_fields else "Character"});'
+        for field in batch_run_fields() for table in ("dtBatchRuns", "dtLSQRuns")
+    )
     for k in range(1, MAX_LSQ_FRACTIONS + 1):
         mass_save_rows.extend([
             f'Column(dtLSQMass, "Start")[massRow + {k - 1}] = lsqR{k}Start << Get;',
@@ -437,9 +449,9 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         ("uv_dead_volume_mL", "uvDeadVolume", "System dead volume to UV [mL]"),
         ("conductivity_dead_volume_mL", "condDeadVolume", "System dead volume to conductivity [mL]"),
     ):
-        # Conductivity detector delay changes only the exported conductivity
-        # trace; the LSQ observations here are UV and optional species mass%.
-        fit_path = None if field == "conductivity_dead_volume_mL" else "system." + field
+        # Conductivity detector delay is eligible only when a selected LSQ
+        # profile has measured conductivity enabled.
+        fit_path = "system." + field
         system_rows.append(_nrow(label, var, sys[field], 360, fit_path=fit_path,
                                 fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths))
         sends.append(f'Python Send({var} << Get, Python Name("tdm_ui_system_{field}"));')
@@ -481,11 +493,13 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
             H List Box(Text Box("X units", << Set Width(180)), lsqXUnit{slot} = Combo Box({{"AUTO", "CV", "ML", "MIN", "S", "H", "INDEX"}}, << Set(1), << Set Width(150))),
             H List Box(Text Box("X = 0 at", << Set Width(180)), lsqXOrigin{slot} = Combo Box({{"RUN_START", "ELUTION_START"}}, << Set(1), << Set Width(170))),
             H List Box(Text Box("Use this run's fraction mass%", << Set Width(180)), lsqMassEnabled{slot} = Combo Box({{"Off", "On"}}, << Set(1), << Set Width(100), << Set Function(Function({{this}}, If(!isLoading, UpdateLSQRunSummary()))))),
+            H List Box(Text Box("Fit measured conductivity", << Set Width(180)), lsqConductivityFit{slot} = Combo Box({{"Off", "On"}}, << Set(1), << Set Width(100))),
             H List Box(Button Box("Attach Excel / CSV", AttachLSQCSV({slot})), Button Box("Edit process recipe", SwitchProcessScope(1, RunNumberFromLabel(lsqRunSlot{slot} << Get Selected)); mainTabs << Set(1))),
             Outline Box("Optional columns and weight", << Close(1), V List Box(
                 H List Box(Text Box("Excel worksheet", << Set Width(180)), lsqSheet{slot} = Text Edit Box("", << Set Width(380))),
                 H List Box(Text Box("X column", << Set Width(180)), lsqXColumn{slot} = Text Edit Box("", << Set Width(380))),
                 H List Box(Text Box("UV mAU column", << Set Width(180)), lsqSignalColumn{slot} = Text Edit Box("", << Set Width(380))),
+                H List Box(Text Box("Conductivity column [mS/cm]", << Set Width(180)), lsqConductivityColumn{slot} = Text Edit Box("", << Set Width(380))),
                 H List Box(Text Box("Run weight (default 1)", << Set Width(180)), lsqWeight{slot} = Number Edit Box(1, 9, << Set Width(100)))
             ))
         ))''')
@@ -502,6 +516,8 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         ("LSQSheetText", "lsqSheet", "Get Text"),
         ("LSQXColumnText", "lsqXColumn", "Get Text"),
         ("LSQSignalColumnText", "lsqSignalColumn", "Get Text"),
+        ("LSQConductivityFitSelected", "lsqConductivityFit", "Get Selected"),
+        ("LSQConductivityColumnText", "lsqConductivityColumn", "Get Text"),
         ("LSQUnitSelected", "lsqXUnit", "Get Selected"),
         ("LSQOriginSelected", "lsqXOrigin", "Get Selected"),
         ("LSQMassEnabledSelected", "lsqMassEnabled", "Get Selected"),
@@ -533,6 +549,8 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         lsqSheet{i} << Set Text(sheet);
         lsqXColumn{i} << Set Text(xcolumn);
         lsqSignalColumn{i} << Set Text(signal);
+        lsqConductivityFit{i} << Set(condFitIndex);
+        lsqConductivityColumn{i} << Set Text(condColumn);
         lsqXUnit{i} << Set(unitIndex);
         lsqXOrigin{i} << Set(originIndex);
         lsqMassEnabled{i} << Set(massEnabledIndex);
@@ -747,20 +765,18 @@ batchSummary = {_path(BATCH_SUMMARY_CSV)};
 lsqApplyFile = {_path(LSQ_APPLY_JSL)};
 lsqReport = {_path(LSQ_REPORT_HTML)};
 lsqPreviewReport = {_path(LSQ_ALIGNMENT_HTML)};
-currentRun = 1; copiedRun = 0; isLoading = 0; isLSQSetup = 0; lsqMassEditorRun = 1;
+currentRun = 1; copiedRun = 0; isLoading = 1; isLSQSetup = 0; lsqMassEditorRun = 1;
 dtBatchRuns = Open(batchRunsFile, Invisible);
 dtLSQRuns = Open(lsqRunsFile, Invisible);
 dtLSQMass = Open(lsqMassFile, Invisible);
 dtRuns = dtBatchRuns; activeRunsFile = batchRunsFile;
-// Preserve user-entered paths and worksheet/column names even when a new CSV has empty cells.
-Column(dtLSQRuns, "LSQ_Chromatogram_CSV") << Data Type(Character);
-Column(dtLSQRuns, "LSQ_Sheet") << Data Type(Character);
-Column(dtLSQRuns, "LSQ_X_Column") << Data Type(Character);
-Column(dtLSQRuns, "LSQ_Signal_Column") << Data Type(Character);
-Column(dtLSQRuns, "LSQ_X_Unit") << Data Type(Character);
-Column(dtLSQRuns, "LSQ_X_Origin") << Data Type(Character);
-Column(dtLSQRuns, "LSQ_Model_Source") << Data Type(Character);
-
+// Both run tables use the same explicit CSV schema. Empty salt and ion cells
+// must be numeric, while blank chromatogram paths and names stay character.
+{process_column_types}
+// Empty fraction columns can otherwise import as character on a new setup.
+Column(dtLSQMass, "Enabled") << Data Type(Character);
+Column(dtLSQMass, "Unit") << Data Type(Character);
+{mass_numeric_columns}
 SetModeCombo = Function({{box, txt}}, {{}},
     If(Uppercase(txt) == "LINEAR", box << Set(2), Uppercase(txt) == "STEP", box << Set(3), box << Set(1));
 );
@@ -878,7 +894,7 @@ LoadRun = Function({{n}}, {{}},
 );
 
 {lsq_control_dispatch}
-LSQLoadControls = Function({{slot, path, w, sheet, xcolumn, signal, unitIndex, originIndex, modelIndex, massEnabledIndex}}, {{}},
+LSQLoadControls = Function({{slot, path, w, sheet, xcolumn, signal, unitIndex, originIndex, modelIndex, massEnabledIndex, condFitIndex, condColumn}}, {{}},
 {lsq_load_controls}
 );
 
@@ -920,6 +936,8 @@ SaveLSQReference = Function({{slot}}, {{r, w, modelChoice, massRow}},
     Column(dtLSQRuns, "LSQ_Sheet")[r] = Trim(Char(LSQSheetText(slot)));
     Column(dtLSQRuns, "LSQ_X_Column")[r] = Trim(Char(LSQXColumnText(slot)));
     Column(dtLSQRuns, "LSQ_Signal_Column")[r] = Trim(Char(LSQSignalColumnText(slot)));
+    Column(dtLSQRuns, "LSQ_Conductivity_Fit")[r] = LSQConductivityFitSelected(slot);
+    Column(dtLSQRuns, "LSQ_Conductivity_Column")[r] = Trim(Char(LSQConductivityColumnText(slot)));
     Column(dtLSQRuns, "LSQ_X_Unit")[r] = LSQUnitSelected(slot);
     Column(dtLSQRuns, "LSQ_X_Origin")[r] = LSQOriginSelected(slot);
     modelChoice = LSQModelRunSelected(slot);
@@ -930,7 +948,7 @@ SaveLSQReference = Function({{slot}}, {{r, w, modelChoice, massRow}},
     dtLSQRuns << Save(lsqRunsFile);
     dtLSQMass << Save(lsqMassFile);
 );
-LoadLSQReference = Function({{slot, r}}, {{w, path, unit, origin, sheet, xcolumn, signal, modelSource, modelNumber, modelIndex, massEnabled}},
+LoadLSQReference = Function({{slot, r}}, {{w, path, unit, origin, sheet, xcolumn, signal, modelSource, modelNumber, modelIndex, massEnabled, condFit, condColumn}},
     If(Is Missing(Num(r)), r = slot);
     r = Max(1, Min({MAX_LSQ_PROFILES}, Num(r)));
     path = Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r];
@@ -939,6 +957,8 @@ LoadLSQReference = Function({{slot, r}}, {{w, path, unit, origin, sheet, xcolumn
     sheet = Column(dtLSQRuns, "LSQ_Sheet")[r];
     xcolumn = Column(dtLSQRuns, "LSQ_X_Column")[r];
     signal = Column(dtLSQRuns, "LSQ_Signal_Column")[r];
+    condFit = Uppercase(Char(Column(dtLSQRuns, "LSQ_Conductivity_Fit")[r]));
+    condColumn = Column(dtLSQRuns, "LSQ_Conductivity_Column")[r];
     unit = Uppercase(Char(Column(dtLSQRuns, "LSQ_X_Unit")[r]));
     origin = Uppercase(Char(Column(dtLSQRuns, "LSQ_X_Origin")[r]));
     modelSource = Uppercase(Char(Column(dtLSQRuns, "LSQ_Model_Source")[r]));
@@ -950,7 +970,8 @@ LoadLSQReference = Function({{slot, r}}, {{w, path, unit, origin, sheet, xcolumn
         If(Is Missing(sheet), "", Char(sheet)), If(Is Missing(xcolumn), "", Char(xcolumn)),
         If(Is Missing(signal), "", Char(signal)),
         If(unit == "CV", 2, unit == "ML", 3, unit == "MIN", 4, unit == "S", 5, unit == "H", 6, unit == "INDEX", 7, 1),
-        If(origin == "ELUTION_START", 2, 1), modelIndex, If(massEnabled == "ON", 2, 1));
+        If(origin == "ELUTION_START", 2, 1), modelIndex, If(massEnabled == "ON", 2, 1),
+        If(condFit == "ON", 2, 1), If(Is Missing(condColumn), "", Char(condColumn)));
 );
 SaveAllLSQReferences = Function({{}}, {{i, j, n, ri}},
     n = Num(lsqRunCount << Get Selected);
@@ -1229,7 +1250,7 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
         Wait(0.01)
     );
     If(actionText == "PREVIEW_LSQ_ALIGNMENT",
-        lsqStatusText << Set Text("Previewing measured and model UV plus entered fraction mass%. One fresh simulation runs for each chosen model run; no optimization is performed.");
+        lsqStatusText << Set Text("Previewing measured and model UV, enabled conductivity, and entered fraction mass%. One fresh simulation runs for each chosen model run; no optimization is performed.");
         Wait(0.01)
     );
     If(actionText == "CHECK_RESULT_CURRENT", Save Text File(statusFile, "CHECK_RESULT_CURRENT pending"));
@@ -1243,7 +1264,7 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
 
 OpenAlignmentPreview = Function({{}}, {{}},
     If(File Exists(lsqPreviewReport), Web(lsqPreviewReport),
-        lsqStatusText << Set Text("No alignment preview is available yet. Attach UV chromatograms and click Preview UV and fraction mass%.")
+        lsqStatusText << Set Text("No alignment preview is available yet. Attach UV chromatograms and click Preview UV, conductivity and mass%.")
     );
 );
 
@@ -1439,9 +1460,9 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
             )),
             "Least-Squares Refinement",
             V Scroll Box(Size(850, 690), V List Box(
-                H List Box(Text Box("Number of runs to fit [1–{MAX_LSQ_PROFILES}]", << Set Width(240)), lsqRunCount = Combo Box({lsq_run_count_items}, << Set({len(saved_selection)}), << Set Width(100), << Set Function(Function({{this}}, UpdateUI(); UpdateLSQRunSummary())))),
+                H List Box(Text Box("Number of runs to fit [1–{MAX_LSQ_PROFILES}]", << Set Width(240)), lsqRunCount = Combo Box({lsq_run_count_items}, << Set({len(saved_selection)}), << Set Width(100), << Set Function(Function({{this}}, If(!isLoading, UpdateUI(); UpdateLSQRunSummary()))))),
                 lsqProfilesStatus = Text Box("", << Set Wrap(740)),
-                Text Box("Attach one measured CV/mL versus UV chromatogram in each run section. Choose whether its model UV comes from the independent LSQ recipe or a normal saved batch run. Preview and refinement both re-simulate the latest saved recipe and reread the measured file. UV values in AU are converted to mAU; select the signal column if its heading is generic.", << Set Wrap(760)),
+                Text Box("Attach one measured CV/mL versus UV chromatogram in each run section. You may also fit a conductivity column from that file by turning on Fit measured conductivity for the run. Choose whether its model trace comes from the independent LSQ recipe or a normal saved batch run. Preview and refinement re-simulate the saved recipe and reread the measured file. UV values in AU are converted to mAU; choose a column when its heading is generic.", << Set Wrap(760)),
                 {', '.join(lsq_run_sections)},
                 Outline Box("Fit settings", V List Box(
                     H List Box(Text Box("Refinement mode", << Set Width(200)), lsqModeBox = Combo Box({{"Normal least-squares: chromatogram only", "Least-squares: chromatogram + species mass% by fraction"}}, << Set Width(390), << Set Function(Function({{this}}, UpdateUI())))),
@@ -1455,7 +1476,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     ))
                 )),
                 H List Box(
-                    Button Box("Preview UV and fraction mass%", SendAndRun("PREVIEW_LSQ_ALIGNMENT")),
+                    Button Box("Preview UV, conductivity and mass%", SendAndRun("PREVIEW_LSQ_ALIGNMENT")),
                     Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ"))
                 ),
                 H List Box(Button Box("Open alignment preview", OpenAlignmentPreview()), Button Box("Open fit report", OpenFitReport())),

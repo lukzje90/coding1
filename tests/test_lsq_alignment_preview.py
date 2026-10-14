@@ -239,7 +239,7 @@ class AlignmentPreviewTests(unittest.TestCase):
     def test_jmp_has_a_separate_preview_action_and_report(self):
         jsl = build_jsl(load_config())
         _validate_jsl(jsl)
-        self.assertIn('Button Box("Preview UV and fraction mass%", SendAndRun("PREVIEW_LSQ_ALIGNMENT"))', jsl)
+        self.assertIn('Button Box("Preview UV, conductivity and mass%", SendAndRun("PREVIEW_LSQ_ALIGNMENT"))', jsl)
         self.assertIn('Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ"))', jsl)
         self.assertIn('If(actionText == "PREVIEW_LSQ_ALIGNMENT" & Contains(statusValue, "LSQ_ALIGNMENT_READY:")', jsl)
         self.assertIn('Button Box("Open alignment preview", OpenAlignmentPreview())', jsl)

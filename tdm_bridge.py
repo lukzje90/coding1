@@ -302,12 +302,14 @@ def _lsq_model_run_config(shared: dict[str, Any], profile_number: int,
     }
 
 
-def _lsq_reference_column_options(row: dict[str, Any]) -> dict[str, str | None]:
+def _lsq_reference_column_options(row: dict[str, Any]) -> dict[str, Any]:
     """Column choices are independent for every LSQ process recipe."""
     return {
         "sheet_name": str(row.get("LSQ_Sheet") or "").strip() or None,
         "x_column": str(row.get("LSQ_X_Column") or "").strip() or None,
         "signal_column": str(row.get("LSQ_Signal_Column") or "").strip() or None,
+        "fit_conductivity": str(row.get("LSQ_Conductivity_Fit") or "Off").strip().upper() == "ON",
+        "conductivity_column": str(row.get("LSQ_Conductivity_Column") or "").strip() or None,
         "x_unit": str(row.get("LSQ_X_Unit") or "AUTO").strip() or "AUTO",
         "x_origin": str(row.get("LSQ_X_Origin") or "RUN_START").strip() or "RUN_START",
     }
@@ -558,7 +560,7 @@ def main() -> int:
                 f"Model comparison: {model_run['model_run_label']} — {model_run['model_run_name']}.\n"
                 f"Active model folder: {PROJECT_DIR}\n"
                 f"Selected chromatogram: {info['source_path']}\n"
-                f"X: {info['x_column']} ({info['x_unit']}, zero at {info['x_origin']}); Y: {info['signal_column']} (UV compared in mAU; AU-labelled values converted); points: {info['rows']}.\n"
+                f"X: {info['x_column']} ({info['x_unit']}, zero at {info['x_origin']}); Y: {info['signal_column']} (UV compared in mAU; AU-labelled values converted); points: {info['rows']}; conductivity: {info['conductivity_column'] or 'Off'}.\n"
                 f"Aligned measured range: {cv_min:.4g}–{cv_max:.4g} CV; saved recipe: 0–{program.total_CV:.4g} CV. {x_receipt}{x_warning}\n"
                 f"LSQ profile associations: {LSQ_RUNS_CSV}"
             )
@@ -640,17 +642,20 @@ def main() -> int:
                     f"{item['measured_end_CV']:.5g} CV, programmed end {item['programmed_end_CV']:.5g} CV; "
                     f"pre-fit UV RMSE {item['uv_rmse_mAU']:.5g} mAU; "
                     f"{item['mass_percent_observations']} fraction mass% observations"
+                    + (f"; conductivity RMSE {item['conductivity_rmse_mS_cm']:.5g} mS/cm"
+                       if item.get("conductivity_rmse_mS_cm") is not None else "")
                     for item in preview["profiles"]
                 )
                 _write_status(
-                    f"LSQ_ALIGNMENT_READY: measured versus model UV and entered fraction mass% for {len(preview['profiles'])} run(s).\n"
+                    f"LSQ_ALIGNMENT_READY: measured versus model UV, enabled conductivity and entered fraction mass% for {len(preview['profiles'])} run(s).\n"
                     f"{summary}\nReport: {preview['report_html']}\n"
                     "No optimization was run and no fitted parameters were changed."
                 )
                 return 0
             unlocked_paths = _lsq_unlocked_paths_from_jmp()
             from tdm_least_squares import FIT_HISTORY_CSV, fit_parameter_specs
-            fitted_paths = fit_parameter_specs(profiles[0]["config"], unlocked_paths=unlocked_paths)
+            fitted_paths = fit_parameter_specs(profiles[0]["config"], unlocked_paths=unlocked_paths,
+                                               fit_conductivity=any(p["fit_conductivity"] for p in profiles))
             _write_status(
                 f"Least-squares refinement running: {len(profiles)} profile(s), "
                 f"{len(fitted_paths)} unlocked parameters, "
@@ -669,6 +674,8 @@ def main() -> int:
                 save_config(fitted_shared, CONFIG_PATH)
             profile_summary = "\n".join(
                 f"LSQ Run {p['run_number']} — {p['run_name']} vs {p['model_run_label']}: {p['overlap_points']} points, weighted RMSE {p['weighted_rmse']:.6g}; run weight {p['run_weight']:.6g}"
+                + (f"; conductivity RMSE {p['conductivity_rmse_mS_cm']:.6g} mS/cm"
+                   if p.get("conductivity_rmse_mS_cm") is not None else "")
                 for p in fit["profile_metrics"]
             )
             weighted_line = (f"Initial weighted RMSE: {fit['initial_weighted_rmse']:.7g}; final weighted RMSE: {fit['final_weighted_rmse']:.7g}\n"

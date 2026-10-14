@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG, mL LOADING AND FRACTION MASS% (R24j)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24k)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -31,8 +31,13 @@ their original meaning. Older saved run tables gain the new mL column when
 opened, without changing their selected load basis.
 The LSQ run summary calculates mL-based CV from the current column volume,
 including runs that have not been opened since the column volume changed.
+Each normal and independent LSQ run keeps its own load, wash, elution and
+buffer recipe. All runs use the column volume and mechanistic parameters in
+Model Parameters. JMP imports both process tables' numeric fields explicitly,
+including blank salt and ion cells, so editing a run cannot assign a number
+to a character column.
 
-Before least-squares refinement, click "Preview UV and fraction mass%" in the
+Before least-squares refinement, click "Preview UV, conductivity and mass%" in the
 Least-Squares Refinement tab. It opens a separate HTML overlay for every
 selected LSQ run. In each run section, choose "Model run for UV comparison":
 the independent LSQ recipe or any saved normal batch Run 1–30. The measured
@@ -45,8 +50,9 @@ not optimize or change fitted parameters. It reports the measured CV span,
 programmed end CV and pre-fit UV RMSE so axis or recipe mismatch can be fixed
 before a long refinement. The report names the model run and UV file for each
 profile. "Open alignment preview" reopens the last preview. Existing saved LSQ
-profiles retain their independent recipe choice; new profiles default to the
-corresponding normal batch run.
+profiles retain their independent recipe choice. If no LSQ run table exists,
+the newly generated first ten profiles default to the corresponding normal
+batch runs.
 For display, dense measured UV samples sharing a chart pixel column are shown
 at their median value so repeated strokes do not look like a filled black
 peak. Every imported UV sample remains in the least-squares calculation and
@@ -55,7 +61,25 @@ Refinement intersects Unlocked controls with the selected model combination's
 required parameter list. Values or locks left from another model combination
 cannot be fitted or written back as improvements.
 
-FRACTION MASS% REFINEMENT (R24j)
+CONDUCTIVITY REFINEMENT (OPTIONAL)
+Each selected LSQ run has a separate "Fit measured conductivity" switch, Off
+by default. Turn it On when that run's attached UV CSV or Excel worksheet also
+contains conductivity. If there is exactly one numeric column headed
+"Conductivity", it is found automatically; otherwise enter its column heading
+under Optional columns and weight. Values are interpreted as mS/cm by default;
+headings containing µS/cm or S/m are converted to mS/cm. The same X-axis,
+units and run-start origin selected for UV are used for conductivity. Preview
+shows measured versus predicted conductivity and its RMSE for enabled runs.
+The fit adds one residual per numeric conductivity sample, scaled by that
+run's measured conductivity range and sample count so detector units and
+sampling density do not overwhelm UV. Fraction mass% remains an independent
+explicit mode. The conductivity dead-volume parameter can be unlocked and
+fitted when at least one run has conductivity enabled; it is omitted from
+UV-only fits. The fit report and least_squares_fit_conductivity.csv include
+the selected run number and conductivity comparison. Results CSV and HTML
+label every species parameter with its target/impurity number and name.
+
+FRACTION MASS% REFINEMENT (R24k)
 Choose 1–10 LSQ runs, with each run's own measured UV and independent or
 normal-batch model recipe. In mass% mode, set "Use this run's fraction mass%"
 to On in every run section that has fraction data. This lets you choose any
@@ -64,6 +88,8 @@ runs contribute UV alone. Choose "Edit mass% for LSQ run" to enter up to 30
 fractions for that particular run, then switch to another run to enter its
 different fractions. The values, row count, and units are saved by LSQ run
 number in tdm_lsq_fraction_mass.csv and restored when you switch the editor.
+JMP explicitly imports the fraction fields as numeric columns so a new blank
+mass% table remains editable before any values have been entered.
 Choose CV or mL for each run, then enter
 each fraction's start and end from run start. The midpoint is calculated;
 mL midpoints are divided by column volume to align with the solver CV axis.

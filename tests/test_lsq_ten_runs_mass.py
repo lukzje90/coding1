@@ -11,7 +11,8 @@ import tdm_least_squares as lsq
 from tdm_jmp import build_jsl, _validate_jsl
 from tdm_minimal_io import (
     MODEL_EDM_LANGMUIR, default_batch_row, ensure_lsq_mass_csv,
-    load_lsq_mass_rows, LSQ_MODEL_SOURCE_BATCH, LSQ_MODEL_SOURCE_INDEPENDENT,
+    load_lsq_mass_rows, LSQ_MASS_FIELDS, LSQ_MODEL_SOURCE_BATCH,
+    LSQ_MODEL_SOURCE_INDEPENDENT,
 )
 from tdm_minimal_model import simulate
 from verify_model import make_config
@@ -26,8 +27,15 @@ class TenRunMassTests(unittest.TestCase):
         self.assertIn('lsqMassEnabled10 = Combo Box', jsl)
         self.assertIn('SaveLSQMassReference(lsqMassEditorRun)', jsl)
         self.assertIn('lsqLoadedRuns = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}', jsl)
+        self.assertLess(jsl.index('isLoading = 1; isLSQSetup = 0'),
+                        jsl.index('modelWindow = New Window'))
+        self.assertIn('lsqRunCount = Combo Box({"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}', jsl)
+        self.assertIn('If(!isLoading, UpdateUI(); UpdateLSQRunSummary())', jsl)
         self.assertIn('massRow = (r - 1) * 30 + 1', jsl)
         self.assertIn('Column(dtLSQMass, "Enabled")[massRow] = LSQMassEnabledSelected(slot)', jsl)
+        for field in LSQ_MASS_FIELDS:
+            kind = "Character" if field in {"Enabled", "Unit"} else "Numeric"
+            self.assertIn(f'Column(dtLSQMass, "{field}") << Data Type({kind});', jsl)
         self.assertIn('lsqR30C6Mass << Set(Num(Column(dtLSQMass, "Impurity5_mass_percent")[massRow + 29]))', jsl)
         self.assertEqual(jsl.count('Column(dtLSQMass, "Start")[massRow +'), 60)
         ui = {"tdm_ui_lsq_run_count": 10}

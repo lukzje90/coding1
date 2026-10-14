@@ -1345,7 +1345,7 @@ def _migrate_row_salt_inputs(row: dict[str, Any]) -> dict[str, Any]:
 
 def batch_run_fields() -> list[str]:
     fields = [
-        "Run_Number", "Run_Name", "LSQ_Chromatogram_CSV", "LSQ_Weight", "LSQ_Sheet", "LSQ_X_Column", "LSQ_Signal_Column", "LSQ_X_Unit", "LSQ_X_Origin", "LSQ_Model_Source", "LSQ_Model_Run_Number", "Load_Flow_mL_min", "Feed_Concentration_mg_mL",
+        "Run_Number", "Run_Name", "LSQ_Chromatogram_CSV", "LSQ_Weight", "LSQ_Sheet", "LSQ_X_Column", "LSQ_Signal_Column", "LSQ_Conductivity_Fit", "LSQ_Conductivity_Column", "LSQ_X_Unit", "LSQ_X_Origin", "LSQ_Model_Source", "LSQ_Model_Run_Number", "Load_Flow_mL_min", "Feed_Concentration_mg_mL",
         "Load_Amount_Basis", "Load_CV", "Load_Volume_mL", "Load_Density_mg_mL_resin", "Load_Mode", "Load_Start_Percent_B", "Load_End_Percent_B",
         "Load_Chemistry_Control", "Load_Material_Chemistry_Mode", "Time_Steps", "Axial_Positions",
         "Load_Source", "Load_pH", "Load_Salt_M", "Load_Conductivity_mS_cm",
@@ -1380,6 +1380,8 @@ def default_batch_row(run_number: int) -> dict[str, Any]:
         "LSQ_Sheet": "",
         "LSQ_X_Column": "",
         "LSQ_Signal_Column": "",
+        "LSQ_Conductivity_Fit": "Off",
+        "LSQ_Conductivity_Column": "",
         "LSQ_X_Unit": "AUTO",
         "LSQ_X_Origin": "RUN_START",
         # Legacy LSQ tables without these columns keep their independent recipe.
@@ -1439,6 +1441,21 @@ def default_batch_row(run_number: int) -> dict[str, Any]:
             f"Elution{i}_Start_Salt_Input_Mode": "CONDUCTIVITY", f"Elution{i}_End_Salt_Input_Mode": "CONDUCTIVITY",
         })
     return row
+
+
+def batch_run_numeric_fields() -> tuple[str, ...]:
+    """Numeric CSV columns, including optional salt/ion inputs blank by default.
+
+    JMP may infer an all-empty CSV column as character. Keep the two process
+    tables' types identical before any Number Edit Box writes a missing or
+    numeric value into them.
+    """
+    defaults = default_batch_row(1)
+    return tuple(
+        field for field in batch_run_fields()
+        if isinstance(defaults[field], (int, float))
+        or field.endswith(("_Salt_M", "_Concentration_M", "_Valency"))
+    )
 
 
 def ensure_batch_runs_csv(path: Path | str = BATCH_RUNS_CSV) -> Path:

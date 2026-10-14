@@ -1,6 +1,6 @@
 # R23 — Independent least-squares process setup and weighted RMSE
 
-R24j supports 1–10 selected LSQ profiles. Each attached UV profile chooses its
+R24k supports 1–10 selected LSQ profiles. Each attached UV profile chooses its
 independent LSQ recipe or any
 saved normal batch run (1–30) as its model run. **Preview UV and fraction mass%**
 and refinement both read the chosen run's latest saved recipe and the attached
