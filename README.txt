@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG, mL LOADING AND UV PREVIEW (R24g)
+TDM – MODIFIED WANG, mL LOADING AND FRACTION MASS% (R24h)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -32,7 +32,7 @@ opened, without changing their selected load basis.
 The LSQ run summary calculates mL-based CV from the current column volume,
 including runs that have not been opened since the column volume changed.
 
-Before least-squares refinement, click "Preview measured vs model UV" in the
+Before least-squares refinement, click "Preview UV and fraction mass%" in the
 Least-Squares Refinement tab. It opens a separate HTML overlay for every
 selected LSQ run. In each run section, choose "Model run for UV comparison":
 the independent LSQ recipe or any saved normal batch Run 1–30. The measured
@@ -47,9 +47,36 @@ before a long refinement. The report names the model run and UV file for each
 profile. "Open alignment preview" reopens the last preview. Existing saved LSQ
 profiles retain their independent recipe choice; new profiles default to the
 corresponding normal batch run.
+For display, dense measured UV samples sharing a chart pixel column are shown
+at their median value so repeated strokes do not look like a filled black
+peak. Every imported UV sample remains in the least-squares calculation and
+the fit trace CSV.
 Refinement intersects Unlocked controls with the selected model combination's
 required parameter list. Values or locks left from another model combination
 cannot be fitted or written back as improvements.
+
+FRACTION MASS% REFINEMENT (R24h)
+Choose "Least-squares: chromatogram + species mass% by fraction" to enter up
+to 30 fractions for the selected LSQ profile. Choose CV or mL, then enter
+each fraction's start and end from run start. The midpoint is calculated;
+mL midpoints are divided by column volume to align with the solver CV axis.
+Enter target and up to five impurity mass% values. Leave a cell blank when
+that species was not measured in a fraction; enter 0 for a measured zero.
+Blank cells create visible gaps, and only populated midpoint values enter
+the least-squares objective. A shape-preserving smooth line connects adjacent
+populated fractions for display, without creating extra fit points. The
+preview and final report show entered and predicted species lines, with the
+model line limited to measured segments. The target measured line is solid,
+measured impurity lines are dotted. The model target is dashed and model
+impurities use lighter dotted lines.
+Measured values are compared with
+100 x species concentration / total modeled-species concentration. Partial
+rows are allowed; a full row that does not total 100% may have an irreducible
+residual because the model normalizes its selected species to 100%.
+RAW_SSE keeps its UV term in mAU squared and scales the mass% block using the
+measured UV range (minimum 1 mAU) and sample count so mass% observations can
+affect the fit. NORMALIZED_MSE gives UV and mass% dimensionless group
+contributions, also using a 1 mAU floor for a flat UV trace.
 
 CHROMATOGRAM CV RANGE UPDATE
 The chart spans the cumulative CV of every enabled process step. For example,

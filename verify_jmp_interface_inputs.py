@@ -17,6 +17,7 @@ from tdm_jmp import _validate_jsl, build_jsl
 from tdm_minimal_io import (
     MODELS,
     MODEL_LABELS,
+    MODEL_TDM_WANG,
     MAX_HIC_SALT_M,
     RESULT_GUARD_BUILD,
     _get_path,
@@ -96,21 +97,24 @@ def _check_generated_contract(config: dict) -> dict:
             re.fullmatch(r"tdm_ui_c[1-6]_[A-Za-z0-9_]+", name)
             or re.fullmatch(r"tdm_ui_system_(?:buffer_dispersion_mL|salt_dispersion_mm2_s|uv_dead_volume_mL|conductivity_dead_volume_mL|buffer_dispersion_enabled|salt_dispersion_enabled|show_percent_B|show_conductivity|show_flow_rate)", name)
             or re.fullmatch(r"tdm_ui_lsq_selected_run_[1-5]", name)
-            or re.fullmatch(r"tdm_ui_lsq_r(?:[1-9]|10)_CV", name)
-            or re.fullmatch(r"tdm_ui_lsq_r(?:[1-9]|10)_c[1-6]_mass_percent", name)
+            or re.fullmatch(r"tdm_ui_lsq_r(?:[1-9]|[12][0-9]|30)_(?:start|end|c[1-6]_mass_percent)", name)
         )
         if not dynamic_reader:
             raise AssertionError(f"Generated JMP value has no bridge reader: {name}")
 
     schema = set(batch_run_fields())
+    lsq_association_fields = {field for field in schema if field.startswith("LSQ_")}
+    process_schema = schema - lsq_association_fields
     saved = set(re.findall(r'Column\(dtRuns,\s*"([^"]+)"\)\[currentRun\]\s*=', jsl))
     loaded = set(re.findall(r'Column\(dtRuns,\s*"([^"]+)"\)\[currentRun\]\)', jsl))
     # Run_Number is assigned from the selected row index, rather than read back.
-    if schema - saved:
-        raise AssertionError(f"JMP fields not saved to the run table: {sorted(schema - saved)}")
-    if (schema - {"Run_Number"}) - loaded:
-        raise AssertionError(f"JMP fields not restored from the run table: {sorted((schema - {'Run_Number'}) - loaded)}")
-    if "SaveCurrentRun(); UpdateLSQRunSummary(); SendSharedModel();" not in jsl:
+    if process_schema - saved:
+        raise AssertionError(f"JMP fields not saved to the run table: {sorted(process_schema - saved)}")
+    if (process_schema - {"Run_Number"}) - loaded:
+        raise AssertionError(f"JMP fields not restored from the run table: {sorted((process_schema - {'Run_Number'}) - loaded)}")
+    if any(f'Column(dtLSQRuns, "{field}")[r] =' not in jsl for field in lsq_association_fields):
+        raise AssertionError("An LSQ association field is not saved with its profile")
+    if not re.search(r"SaveCurrentRun\(\);\s*UpdateLSQRunSummary\(\);\s*SendSharedModel\(\);", jsl):
         raise AssertionError("Run action must save the current profile before sending shared model inputs")
     if "saltFactorStatus << Set Text" not in jsl or "In CONDUCTIVITY mode, a 0 mS/cm endpoint stays at 0 M" not in jsl:
         raise AssertionError("The factor's active modes and resolved salt must be visible in JMP")
@@ -171,7 +175,9 @@ def main() -> None:
         saved_row = load_batch_rows(csv_path)[0]
 
     per_model = []
-    for model in sorted(MODELS):
+    # This HIC affinity audit predates Wang and asserts k_s on every model.
+    # Wang's separate paper-law handoff is covered in test_tdm_wang.py.
+    for model in sorted(set(MODELS) - {MODEL_TDM_WANG}):
         seed = make_hic_config(model, impurities=1, steps=50, cells=6)
         _set_jmp_globals(tdm_bridge, seed)
         shared = tdm_bridge.build_shared_config_from_jmp()

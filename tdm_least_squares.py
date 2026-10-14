@@ -6,7 +6,7 @@ Two objective modes are intentionally supported:
 1. CHROMATOGRAM: ordinary point-by-point least-squares against an attached raw
    chromatogram CSV.
 2. CHROMATOGRAM_AND_COMPOSITION: the same chromatogram objective plus
-   species mass-percent observations at user-specified column volumes (CV).
+   sparse species mass-percent observations at fraction midpoints (CV or mL).
 
 UV predictions use the target and species response factors; only eligible
 unlocked factors are refined. Fit entry points require a UV reference in mAU
@@ -32,6 +32,7 @@ from types import SimpleNamespace
 from typing import Any, Iterable
 
 import numpy as np
+from scipy.interpolate import PchipInterpolator
 from scipy.optimize import least_squares
 
 from tdm_minimal_io import (
@@ -69,7 +70,7 @@ FIT_IMPROVED_TXT = PROJECT_DIR / "least_squares_improved_parameters.txt"
 MODE_CHROMATOGRAM = "CHROMATOGRAM"
 MODE_CHROMATOGRAM_AND_COMPOSITION = "CHROMATOGRAM_AND_COMPOSITION"
 SUPPORTED_MODES = {MODE_CHROMATOGRAM, MODE_CHROMATOGRAM_AND_COMPOSITION}
-MAX_COMPOSITION_POINTS = 10
+MAX_COMPOSITION_POINTS = 30
 SAMPLE_ORDER_FIELD = "__sample_order__"
 
 
@@ -849,28 +850,65 @@ def validate_composition_references(
 ) -> list[dict[str, Any]]:
     names = [str(r["name"]) for r in active_components(config)]
     out: list[dict[str, Any]] = []
+    previous_cv = -math.inf
+    previous_index = 0
     for k, row in enumerate(references, start=1):
         try:
-            cv = float(row.get("CV"))
-        except Exception:
-            raise ValueError(f"Composition reference {k}: CV is required and must be numeric.")
-        if not math.isfinite(cv) or cv < 0:
-            raise ValueError(f"Composition reference {k}: CV must be finite and >= 0.")
-        values: list[float] = []
-        for name in names:
+            fraction_index = int(row.get("fraction_index", k))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Fraction {k}: row number must be a positive integer.") from exc
+        if fraction_index <= previous_index:
+            raise ValueError(f"Fraction {k}: row numbers must increase.")
+        previous_index = fraction_index
+        mass_values = row.get("mass_percent") or {}
+        if not isinstance(mass_values, dict):
+            raise ValueError(f"Fraction {k}: species mass% values must be named columns.")
+        unknown_names = set(mass_values) - set(names)
+        if unknown_names:
+            raise ValueError(f"Fraction {k}: unknown species {', '.join(sorted(unknown_names))}.")
+        unit = str(row.get("x_unit") or "CV").strip().upper()
+        if unit not in {"CV", "ML"}:
+            raise ValueError(f"Fraction {k}: axis unit must be CV or mL.")
+        legacy_point = "CV" in row and "start" not in row and "end" not in row
+        if legacy_point:
             try:
-                value = float(row["mass_percent"][name])
-            except Exception:
-                raise ValueError(f"Composition reference {k}: mass% for {name} is required.")
+                cv = float(row["CV"])
+            except (TypeError, ValueError, KeyError) as exc:
+                raise ValueError(f"Composition reference {k}: CV is required and must be numeric.") from exc
+            start = end = cv
+        else:
+            try:
+                start = float(row["start"])
+                end = float(row["end"])
+            except (TypeError, ValueError, KeyError) as exc:
+                raise ValueError(f"Fraction {k}: enter both start and end in {unit}.") from exc
+            if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+                raise ValueError(f"Fraction {k}: start must be >= 0 and end must be greater than start.")
+            column_volume = float(config["column"]["volume_mL"])
+            cv = (start + end) / (2.0 * column_volume) if unit == "ML" else (start + end) / 2.0
+        if not math.isfinite(cv) or cv < 0:
+            raise ValueError(f"Fraction {k}: midpoint CV must be finite and >= 0.")
+        if cv <= previous_cv:
+            raise ValueError(f"Fraction {k}: fraction midpoints must increase in row order.")
+        previous_cv = cv
+        measured: dict[str, float] = {}
+        for name in names:
+            raw = mass_values.get(name)
+            if raw is None or str(raw).strip() == "":
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Fraction {k}: mass% for {name} must be numeric or blank.") from exc
             if not math.isfinite(value) or value < 0 or value > 100:
-                raise ValueError(f"Composition reference {k}: mass% for {name} must be between 0 and 100.")
-            values.append(value)
-        total = sum(values)
-        if abs(total - 100.0) > 0.05:
-            raise ValueError(f"Composition reference {k}: species mass% must sum to 100 (current total {total:g}).")
-        out.append({"CV": cv, "mass_percent": dict(zip(names, values))})
-    if not out:
-        raise ValueError("At least one composition reference CV is required for the chromatogram + mass% option.")
+                raise ValueError(f"Fraction {k}: mass% for {name} must be between 0 and 100.")
+            measured[name] = value
+        out.append({"CV": cv, "fraction_index": fraction_index,
+                    "start": start, "end": end, "x_unit": unit,
+                    "legacy_point": legacy_point,
+                    "mass_percent": measured})
+    if not any(ref["mass_percent"] for ref in out):
+        raise ValueError("Enter at least one target or impurity mass% observation for the chromatogram + mass% option.")
     return out
 
 
@@ -930,16 +968,48 @@ def _chromatogram_residuals(config: dict[str, Any], ref: ChromatogramReference, 
     return residual, info
 
 
+def _reference_display_series(cv: np.ndarray, signal: np.ndarray, total_cv: float,
+                              pixel_columns: int = 744) -> tuple[np.ndarray, np.ndarray]:
+    """Show one robust reference value per horizontal pixel without changing fit data.
+
+    Drawing thousands of raw samples into a few SVG pixels repeatedly paints
+    nearly vertical black strokes, which can look like a filled peak. The full
+    unbinned reference remains in the least-squares residual and trace CSV.
+    """
+    x = np.asarray(cv, dtype=float)
+    y = np.asarray(signal, dtype=float)
+    if len(x) != len(y):
+        raise ValueError("Reference plot coordinates and UV values must be paired.")
+    if not len(x):
+        return x, y
+    if not math.isfinite(total_cv) or total_cv <= 0:
+        raise ValueError("The plotted run must have a positive finite CV span.")
+    finite = np.isfinite(x) & np.isfinite(y)
+    x, y = x[finite], y[finite]
+    if not len(x):
+        return x, y
+    order = np.argsort(x, kind="stable")
+    x, y = x[order], y[order]
+    columns = np.clip(np.floor(x / total_cv * pixel_columns).astype(int), 0, pixel_columns - 1)
+    boundaries = np.r_[0, np.flatnonzero(np.diff(columns)) + 1, len(columns)]
+    return (
+        np.array([np.median(x[a:b]) for a, b in zip(boundaries[:-1], boundaries[1:])]),
+        np.array([np.median(y[a:b]) for a, b in zip(boundaries[:-1], boundaries[1:])]),
+    )
+
+
 def _chromatogram_fit_svg(config: dict[str, Any], info: dict[str, Any]) -> str:
     """Show the entire programmed run without extending measured UV samples."""
     chrom = info["chromatogram"]
     trace = info["result"]["trace"]
     program = info["result"]["simulation"]["program"]
+    display_cv, display_signal = _reference_display_series(
+        chrom["CV"], chrom["measured"], float(program.total_CV))
     return _svg_plot(
         trace["CV"],
-        [("Measured UV", chrom["measured"]),
+        [("Measured UV", display_signal),
          ("Predicted UV", np.asarray(trace["uv_mAU"]) + chrom["baseline"])],
-        series_x=[chrom["CV"], trace["CV"]],
+        series_x=[display_cv, trace["CV"]],
         stages=_stage_receipt(config, program), total_cv=program.total_CV,
         percent_B=trace["programmed_percent_B"],
         column_percent_B=trace["column_percent_B"],
@@ -980,7 +1050,11 @@ def preview_lsq_alignment(
             x_column=profile.get("x_column"), signal_column=profile.get("signal_column"),
             x_unit=profile.get("x_unit"), x_origin=profile.get("x_origin"), require_uv=True,
         )
+        raw_comp_refs = profile.get("composition_references") or []
+        comp_refs = validate_composition_references(config, raw_comp_refs) if raw_comp_refs else []
         _residual, info = _objective_parts(config, reference, MODE_CHROMATOGRAM, [])
+        if comp_refs:
+            _composition_residuals(config, comp_refs, info["result"]["trace"])
         chrom = info["chromatogram"]
         predicted = np.asarray(chrom["predicted_detector_signal"], dtype=float)
         measured = np.asarray(chrom["measured"], dtype=float)
@@ -996,6 +1070,7 @@ def preview_lsq_alignment(
             "measured_end_CV": float(reference.cv[-1]),
             "programmed_end_CV": program_end,
             "uv_rmse_mAU": rmse,
+            "mass_percent_observations": sum(len(row["mass_percent"]) for row in comp_refs),
             "x_column": reference.x_column,
             "x_unit": reference.x_unit,
             "x_axis_assumption": reference.x_axis_assumption or "RUN_START",
@@ -1015,6 +1090,11 @@ def preview_lsq_alignment(
             f"({metric['sample_points']} samples); <b>programmed end:</b> {program_end:.6g} CV; "
             f"<b>UV RMSE before refinement:</b> {rmse:.6g} mAU.</p>"
             + _chromatogram_fit_svg(config, info)
+            + ("<h3>Fraction mass% at midpoints</h3>"
+               + _composition_profile_svg(config, comp_refs, info["result"]["trace"])
+               + f"<p>{sum(len(row['mass_percent']) for row in comp_refs)} entered species observations. "
+                 "Only populated midpoint cells contribute to refinement; smooth curves are display-only.</p>"
+               if comp_refs else "")
         )
     output_path = Path(output_html)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1023,14 +1103,23 @@ def preview_lsq_alignment(
         '<style>body{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}'
         'svg{display:block;width:100%;height:auto}h2{margin-top:2rem}</style>'
         '<h1>Measured versus model UV before refinement</h1>'
-        '<p>These are the current model parameters and saved independent LSQ recipes. '
-        'No optimizer was run and no fitted parameters were changed. Measured UV is plotted '
-        'only at imported sample CVs; predicted UV spans the complete programmed run. '
+        '<p>These are the current model parameters and selected saved model-run recipes. '
+        'No optimizer was run and no fitted parameters were changed. Measured UV is displayed '
+        'as the median imported sample in each chart pixel column to prevent dark overdraw; '
+        'every imported sample still enters the least-squares calculation. Predicted UV spans the complete programmed run. '
         'The selected detector-baseline policy is applied exactly as it is during refinement. '
-        'Species mass% constraints, if selected, are evaluated only when refinement runs.</p>'
+        'If fraction mass% is entered, the preview shows midpoint observations and current model predictions. No fitting occurs in blank cells or between points.</p>'
         + ''.join(sections), encoding="utf-8",
     )
     return {"report_html": str(output_path), "profiles": metrics}
+
+
+def _predicted_mass_percent_at_cv(sim_cv: np.ndarray, comp: np.ndarray,
+                                  cv: float, species_count: int) -> np.ndarray:
+    concentrations = np.array([np.interp(cv, sim_cv, comp[:, i])
+                               for i in range(species_count)], dtype=float)
+    total = float(np.sum(concentrations))
+    return 100.0 * concentrations / total if total > 1e-12 else np.zeros(species_count)
 
 
 def _composition_residuals(
@@ -1044,25 +1133,116 @@ def _composition_residuals(
     rows: list[dict[str, Any]] = []
     residuals: list[float] = []
     for ref in references:
+        if not ref["mass_percent"]:
+            continue
         cv = float(ref["CV"])
         if cv < float(np.min(sim_cv)) - 1e-12 or cv > float(np.max(sim_cv)) + 1e-12:
             raise ValueError(f"Composition reference at CV {cv:g} lies outside the simulated CV range.")
-        values = np.array([np.interp(cv, sim_cv, comp[:, i]) for i in range(len(names))], dtype=float)
-        total = float(np.sum(values))
-        if total <= 1e-12:
-            predicted = np.zeros(len(names))
-        else:
-            predicted = 100.0 * values / total
+        predicted = _predicted_mass_percent_at_cv(sim_cv, comp, cv, len(names))
         for i, name in enumerate(names):
+            if name not in ref["mass_percent"]:
+                continue
             measured = float(ref["mass_percent"][name])
             pred = float(predicted[i])
             residuals.append((measured - pred) / 100.0)
-            rows.append({"CV": cv, "Protein_Species": name, "Measured_mass_percent": measured, "Simulated_mass_percent": pred})
+            rows.append({"CV": cv, "Fraction": ref["fraction_index"],
+                         "Fraction_Start": ref["start"], "Fraction_End": ref["end"],
+                         "Fraction_Unit": ref["x_unit"], "Protein_Species": name,
+                         "Measured_mass_percent": measured, "Simulated_mass_percent": pred})
     if residuals:
         arr = np.asarray(residuals, dtype=float) / math.sqrt(len(residuals))
     else:
         arr = np.empty(0, dtype=float)
     return arr, rows
+
+
+def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, Any]],
+                             trace: dict[str, Any]) -> str:
+    """Plot midpoint observations and model fractions without bridging data gaps.
+
+    The smooth observed curve is display-only. The least-squares residual uses
+    each entered midpoint exactly once; missing species cells add no residual.
+    """
+    names = [str(row["name"]) for row in active_components(config)]
+    colors = ("#0878c6", "#e87722", "#149447", "#dc3545", "#8a63b7", "#9b6a42")
+    sim_cv = np.asarray(trace["CV"], dtype=float)
+    comp = np.asarray(trace["component_g_L"], dtype=float)
+    show_ml = all(ref["x_unit"] == "ML" for ref in references)
+    x_factor = float(config["column"]["volume_mL"]) if show_ml else 1.0
+    x_min = 0.0
+    x_max = max(float(sim_cv[-1]), max(float(ref["CV"]) for ref in references), 1e-6) * x_factor
+    left, top, width, height = 75.0, 30.0, 680.0, 345.0
+    px = lambda cv: left + width * (float(cv) * x_factor - x_min) / (x_max - x_min)
+    py = lambda pct: top + height * (2.0 - math.log10(max(float(pct), 0.01))) / 4.0
+
+    def contiguous(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        if int(b["fraction_index"]) != int(a["fraction_index"]) + 1:
+            return False
+        if a.get("legacy_point") or b.get("legacy_point"):
+            return True
+        if a["x_unit"] != b["x_unit"]:
+            return False
+        return float(b["start"]) <= float(a["end"]) + 1e-6 * max(1.0, float(a["end"]))
+
+    def path(points: list[tuple[float, float]]) -> str:
+        return " ".join(("M" if i == 0 else "L") + f"{px(cv):.2f},{py(value):.2f}"
+                        for i, (cv, value) in enumerate(points))
+
+    svg = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" '
+           'role="img" aria-label="Fraction midpoint mass percent compared with model; missing values leave gaps">',
+           '<rect width="960" height="440" fill="white"/>']
+    for tick in (0.01, 0.1, 1.0, 10.0, 100.0):
+        y = py(tick)
+        svg.append(f'<line x1="{left}" y1="{y:.2f}" x2="{left+width}" y2="{y:.2f}" stroke="#e2e6ea"/>')
+        svg.append(f'<text x="{left-12}" y="{y+4:.2f}" text-anchor="end" font-size="12">{tick:g}</text>')
+    for i in range(6):
+        display_value = x_min + (x_max - x_min) * i / 5
+        x = left + width * i / 5
+        svg.append(f'<line x1="{x:.2f}" y1="{top}" x2="{x:.2f}" y2="{top+height}" stroke="#edf0f2"/>')
+        svg.append(f'<text x="{x:.2f}" y="{top+height+20}" text-anchor="middle" font-size="12">{display_value:.3g}</text>')
+    x_label = "mL" if show_ml else "CV"
+    svg.append(f'<text x="{left+width/2}" y="425" text-anchor="middle" font-size="14">Fraction midpoint [{x_label} from run start]</text>')
+    svg.append('<text x="18" y="203" transform="rotate(-90 18 203)" text-anchor="middle" font-size="14">Mass% (log scale; zero at floor)</text>')
+
+    for species_index, name in enumerate(names):
+        color = colors[species_index]
+        observed = [ref for ref in references if name in ref["mass_percent"]]
+        groups: list[list[dict[str, Any]]] = []
+        for ref in observed:
+            if not groups or not contiguous(groups[-1][-1], ref):
+                groups.append([])
+            groups[-1].append(ref)
+        for group in groups:
+            if len(group) > 1:
+                xs = np.asarray([float(ref["CV"]) for ref in group])
+                ys = np.asarray([float(ref["mass_percent"][name]) for ref in group])
+                smooth_x = np.linspace(xs[0], xs[-1], max(24, 14 * (len(group) - 1)))
+                smooth_y = np.clip(PchipInterpolator(xs, ys)(smooth_x), 0.0, 100.0)
+                measured_style = ' stroke-dasharray="2 4"' if species_index else ''
+                svg.append(f'<path d="{path(list(zip(smooth_x, smooth_y)))}" fill="none" stroke="{color}" stroke-width="2.3"{measured_style}/>')
+                model_x = np.unique(np.concatenate(([xs[0]], sim_cv[(sim_cv > xs[0]) & (sim_cv < xs[-1])], [xs[-1]])))
+                model_y = [_predicted_mass_percent_at_cv(sim_cv, comp, float(cv), len(names))[species_index]
+                           for cv in model_x]
+                model_pattern = "1 6" if species_index else "6 4"
+                model_opacity = ".6" if species_index else ".85"
+                svg.append(f'<path d="{path(list(zip(model_x, model_y)))}" fill="none" stroke="{color}" stroke-width="1.8" stroke-dasharray="{model_pattern}" opacity="{model_opacity}"/>')
+            for ref in group:
+                cv = float(ref["CV"])
+                measured = float(ref["mass_percent"][name])
+                predicted = float(_predicted_mass_percent_at_cv(sim_cv, comp, cv, len(names))[species_index])
+                svg.append(f'<circle cx="{px(cv):.2f}" cy="{py(measured):.2f}" r="3.4" fill="{color}"/>')
+                svg.append(f'<circle cx="{px(cv):.2f}" cy="{py(predicted):.2f}" r="3" fill="white" stroke="{color}" stroke-width="1.5"/>')
+        legend_y = 55 + species_index * 25
+        legend_style = ' stroke-dasharray="2 4"' if species_index else ''
+        svg.append(f'<line x1="790" y1="{legend_y}" x2="813" y2="{legend_y}" stroke="{color}" stroke-width="3"{legend_style}/>')
+        svg.append(f'<text x="820" y="{legend_y+4}" font-size="12">{html.escape(name)}</text>')
+    svg.append('<text x="790" y="245" font-size="12">Solid: measured target</text>')
+    svg.append('<text x="790" y="264" font-size="12">Dotted: measured impurities</text>')
+    svg.append('<text x="790" y="283" font-size="12">Dashed: model target</text>')
+    svg.append('<text x="790" y="302" font-size="12">Faint dots: model impurities</text>')
+    svg.append('<text x="790" y="321" font-size="12">Blank: no fit or line</text>')
+    svg.append('</svg>')
+    return "".join(svg)
 
 
 def _objective_parts(
@@ -1077,6 +1257,15 @@ def _objective_parts(
     comp_rows: list[dict[str, Any]] = []
     if mode == MODE_CHROMATOGRAM_AND_COMPOSITION:
         comp_r, comp_rows = _composition_residuals(cfg, composition_refs, result["trace"])
+        if cfg["least_squares"]["objective"] == "RAW_SSE":
+            # Keep the literal UV SSE, but express the dimensionless mass%
+            # group in comparable UV units. Without this, mAU residuals can
+            # drown out every fraction observation by orders of magnitude.
+            comp_r = comp_r * max(1.0, float(chrom_info["measured_signal_scale"])) * math.sqrt(len(chrom_r))
+        elif cfg["least_squares"]["objective"] == "NORMALIZED_MSE":
+            # A flat/near-zero UV file must not divide by numerical noise and
+            # overwhelm genuine fraction observations in the combined fit.
+            chrom_r = chrom_r * min(1.0, float(chrom_info["measured_signal_scale"]))
     combined = np.concatenate([chrom_r, comp_r])
     return combined, {
         "result": result,
@@ -1409,7 +1598,7 @@ def run_least_squares_refinement(
             writer.writerow({"CV": cv, "Measured_Signal": ym, "Simulated_Total_Protein_g_L": ys, "Scaled_Simulated_Signal": yp, "Residual": float(yp)-float(ym)})
 
     with fit_composition_path.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["CV", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Residual_mass_percent"]
+        fields = ["CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Residual_mass_percent"]
         writer = csv.DictWriter(fh, fieldnames=fields); writer.writeheader()
         for row in final_info["composition"]:
             r = dict(row)
@@ -1446,8 +1635,8 @@ def run_least_squares_refinement(
         for spec in specs
     )
     comp_note = (
-        f"<p><b>Composition constraints:</b> {len(comp_refs)} CV points, {len(final_info['composition'])} species observations. "
-        f"Normalised composition SSE = {final_info['composition_sse_normalized']:.6g}.</p>"
+        f"<p><b>Composition constraints:</b> {len(comp_refs)} fraction midpoints, {len(final_info['composition'])} populated species observations. "
+        f"Composition objective contribution = {final_info['composition_sse_normalized']:.6g}.</p>"
         if mode == MODE_CHROMATOGRAM_AND_COMPOSITION else
         "<p><b>Composition constraints:</b> not used in this refinement.</p>"
     )
@@ -1466,6 +1655,10 @@ def run_least_squares_refinement(
     improvement_percent = _objective_improvement_percent(initial_obj, final_obj)
     history_plot = _objective_history_svg(history)
     chromatogram_plot = _chromatogram_fit_svg(fitted, final_info)
+    composition_plot = ("<h2>Fraction mass% profiles</h2>"
+                        + _composition_profile_svg(fitted, comp_refs, final_info["result"]["trace"])
+                        + "<p>Solid target and dotted impurity curves connect adjacent entered midpoints without overshoot. Model target is dashed; model impurities use lighter dots. Model lines appear only where corresponding measured segments exist. Blank cells create gaps and add no residual.</p>"
+                        if comp_refs else "")
     uv_identifiability_note = (
         "<p>Impurity UV factors are estimated from the composite detector trace. When peaks overlap, their factors can be correlated with each other and with adsorption parameters; species-resolved UV data or composition constraints improve identifiability.</p>"
         if any(spec.path.endswith("uv_response_factor_mAU_L_g") for spec in specs) else
@@ -1486,14 +1679,15 @@ Converged flag: {bool(opt.success)}; accepted/applied to active model: {accepted
 <b>Improvement:</b> {improvement_percent:.4g}%<br><b>Final chromatogram objective ({html.escape(config['least_squares']['objective'])}):</b> {final_info['chromatogram_sse_normalized']:.7g}</p>
 {comp_note}
 <h2>Measured and predicted chromatogram</h2>
-<p>The predicted UV and process overlays span the full programmed run. Measured UV is shown only at the imported sample CVs; only those samples contribute to the chromatogram objective.</p>
+<p>The predicted UV and process overlays span the full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>
 {chromatogram_plot}
+{composition_plot}
 <h2>Refined mechanistic parameters</h2>
 <table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Objective construction</h2>
 <p>The chromatogram residual is point-by-point least squares (Hahn et al., equation 9). RAW_SSE is the default. No baseline is inferred unless INITIAL_MEDIAN is explicitly selected; otherwise the fixed detector baseline is used. The predicted UV signal is the sum of each species concentration multiplied by its own response factor; the target uses the shared Model Parameters factor and each impurity uses its component-specific factor. UV references labelled AU are converted to mAU. Optional NORMALIZED_MSE divides residuals by the measured signal scale and sqrt(N). RAW_SSE compares UV values directly.</p>
 {uv_identifiability_note}
-<p>When composition constraints are selected, simulated species mass% is evaluated at each entered CV as 100 × c_i / sum(c_j). Those residuals are divided by 100 and sqrt(Ncomposition), giving the composition block equal group-level footing with the chromatogram block.</p>
+<p>When fraction mass% is selected, simulated species mass% is evaluated at each populated fraction midpoint as 100 × c_i / sum(c_j). Each entered species value contributes one residual, divided by 100 and sqrt(the number of populated cells). With RAW_SSE, that residual group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the number of UV samples); with NORMALIZED_MSE both groups stay dimensionless with a 1 mAU UV normalization floor. Blank cells add no residual and break the display line; curve interpolation does not add fit points.</p>
 <p>Only unlocked eligible mechanistic and instrument parameters listed above are refined. Locked values, column geometry and each recipe remain fixed. The optimizer result was saved to <code>{html.escape(fit_config_path.name)}</code>. It is copied to the active model <code>{html.escape(CONFIG_PATH.name)}</code> only when the total objective is not worse than the starting objective.</p>
 <h2>Objective improvement over time</h2>
 <p>The plot and CSV show every objective evaluation, elapsed seconds, best-so-far objective, improvement relative to the initial objective, and any numerical-penalty status. Lower objective is better. <a href="{html.escape(fit_history_path.name)}">Open objective history CSV</a>.</p>
@@ -1902,7 +2096,7 @@ def run_global_least_squares_refinement(
 
     composition_rows = []
     with FIT_COMPOSITION_CSV.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["Run_Number", "Run_Name", "CV", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Residual_mass_percent"]
+        fields = ["Run_Number", "Run_Name", "CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Residual_mass_percent"]
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
         for profile, info in zip(normalized_profiles, final_infos):
@@ -1969,6 +2163,11 @@ def run_global_least_squares_refinement(
     profile_plots = []
     for profile, cfg, info in zip(normalized_profiles, fitted_configs, final_infos):
         plot = _chromatogram_fit_svg(cfg, info)
+        refs = profile["composition_references"]
+        if refs:
+            plot += ("<h4>Fraction mass% at midpoints</h4>"
+                     + _composition_profile_svg(cfg, refs, info["result"]["trace"])
+                     + "<p>Only populated species cells at fraction midpoints contribute mass% residuals. The measured target is solid, measured impurities are dotted, model target is dashed, and model impurities use lighter dots. Blank cells leave gaps; smooth lines are for display.</p>")
         profile_plots.append(
             f'<h3>Run {profile["run_context"]["run_number"]}: {html.escape(profile["run_context"]["run_name"])}'
             f' vs {html.escape(profile["run_context"]["model_run_label"])}</h3>' + plot)
@@ -1984,10 +2183,10 @@ def run_global_least_squares_refinement(
 <b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Optimizer evaluations:</b> {eval_count}; <b>Unlocked parameters:</b> {len(specs)}.</p>
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor.</p>
 <table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>Signal RMSE</th><th>Weighted RMSE</th><th>Run weight</th><th>R²</th></tr></thead><tbody>{profile_rows}</tbody></table>
-<h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is shown only at the imported sample CVs; only those samples contribute to the chromatogram objective.</p>{overlays_html}
+<h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>{overlays_html}
 <h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Profile recipes used</h2>{recipe_details}
-<h2>Objective construction</h2><p>Equation 9 is the sum of squared predicted-minus-measured detector samples. RAW_SSE preserves it verbatim. NORMALIZED_MSE divides by each run's signal scale and sample count. WEIGHTED_RMSE is the square root of the run-weighted average of each profile's sample-weighted mean squared error, with independently adjustable positive run weights and optional nonnegative Excel/CSV Weight columns. Minimizing the square root is equivalent to minimizing its squared residual vector with bounded SciPy nonlinear least squares. Baseline estimation is opt-in; the default baseline is fixed. Each LSQ profile uses its selected saved model run recipe (independent LSQ or normal batch); that recipe's flow, feed, buffers, washes, elution and resolution remain fixed during refinement. Only unlocked mechanistic parameters are shared and refined. Column geometry remains fixed.</p>
+<h2>Objective construction</h2><p>Equation 9 is the sum of squared predicted-minus-measured detector samples. RAW_SSE preserves the UV term verbatim. NORMALIZED_MSE divides each run's UV residuals by its signal scale and sqrt(sample count). Fraction mass% adds measured-minus-predicted residuals at entered midpoints only, divided by 100 and sqrt(the populated species-observation count). With RAW_SSE, the mass% group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the UV sample count); with NORMALIZED_MSE both groups are dimensionless with the same 1 mAU UV floor. The predicted fraction is 100 times that species' simulated concentration divided by the sum of modeled species concentrations. Blank cells add no residual; chart interpolation is display-only. WEIGHTED_RMSE applies to chromatogram-only fits. Baseline estimation is opt-in; the default baseline is fixed. Each selected run's process settings remain fixed during refinement. Only unlocked active-model parameters are shared and refined.</p>
 <h2>Objective improvement over time</h2><p>History file: <a href="{FIT_HISTORY_CSV.name}">{FIT_HISTORY_CSV.name}</a></p>{history_plot}
 <p>Files: {FIT_TRACE_CSV.name}, {FIT_RESULTS_CSV.name}, {FIT_COMPOSITION_CSV.name}, {FIT_SETTINGS_JSON.name}.</p>
 """, encoding="utf-8")

@@ -84,6 +84,7 @@ from tdm_minimal_io import (
     LSQ_MODEL_SOURCE_BATCH,
     LSQ_MODEL_SOURCE_INDEPENDENT,
     MAX_LSQ_PROFILES,
+    MAX_LSQ_FRACTIONS,
     MAX_RUNS,
     MODEL_TDM_CPA,
     MODEL_TDM_WANG,
@@ -387,13 +388,18 @@ def _lsq_mode() -> str:
 
 def _composition_references_from_jmp(config: dict[str, Any]) -> list[dict[str, Any]]:
     count_raw = _num("tdm_ui_lsq_reference_count")
-    count = min(max(int(count_raw) if count_raw is not None else 0, 0), 10)
+    count = min(max(int(count_raw) if count_raw is not None else 0, 0), MAX_LSQ_FRACTIONS)
     names = [str(r["name"]) for r in active_components(config)]
+    unit = str(globals().get("tdm_ui_lsq_fraction_unit") or "CV").strip().upper()
     refs: list[dict[str, Any]] = []
     for k in range(1, count + 1):
-        cv = _num(f"tdm_ui_lsq_r{k}_CV")
+        start = _num(f"tdm_ui_lsq_r{k}_start")
+        end = _num(f"tdm_ui_lsq_r{k}_end")
         mass = {name: _num(f"tdm_ui_lsq_r{k}_c{i}_mass_percent") for i, name in enumerate(names, start=1)}
-        refs.append({"CV": cv, "mass_percent": mass})
+        if start is None and end is None and all(value is None for value in mass.values()):
+            continue
+        refs.append({"fraction_index": k, "start": start, "end": end,
+                     "x_unit": unit, "mass_percent": mass})
     return refs
 
 
@@ -552,7 +558,11 @@ def main() -> int:
                 run_list = ", ".join(str(n) for n, _row, _path in profile_rows)
                 raise ValueError(f"Global least-squares fitting supports at most {MAX_LSQ_PROFILES} attached chromatograms; currently attached to runs {run_list}. Clear extra CSV paths before fitting.")
             mode = _lsq_mode()
-            refs = _composition_references_from_jmp(current_effective) if action == "FIT_LSQ" and mode == "CHROMATOGRAM_AND_COMPOSITION" else []
+            refs = _composition_references_from_jmp(current_effective) if mode == "CHROMATOGRAM_AND_COMPOSITION" else []
+            if mode == "CHROMATOGRAM_AND_COMPOSITION" and not any(
+                any(value is not None for value in ref["mass_percent"].values()) for ref in refs
+            ):
+                raise ValueError("Enter at least one target or impurity mass% in the fraction table before preview or refinement.")
             profiles = []
             for profile_run_number, row, source in profile_rows:
                 profile_config, model_run = _lsq_model_run_config(
@@ -582,11 +592,12 @@ def main() -> int:
                     f"LSQ Run {item['run_number']} — {item['run_name']} vs {item['model_run_label']}: "
                     f"{item['sample_points']} UV samples, measured {item['measured_start_CV']:.5g}–"
                     f"{item['measured_end_CV']:.5g} CV, programmed end {item['programmed_end_CV']:.5g} CV; "
-                    f"pre-fit UV RMSE {item['uv_rmse_mAU']:.5g} mAU"
+                    f"pre-fit UV RMSE {item['uv_rmse_mAU']:.5g} mAU; "
+                    f"{item['mass_percent_observations']} fraction mass% observations"
                     for item in preview["profiles"]
                 )
                 _write_status(
-                    f"LSQ_ALIGNMENT_READY: measured versus model UV for {len(preview['profiles'])} run(s).\n"
+                    f"LSQ_ALIGNMENT_READY: measured versus model UV and entered fraction mass% for {len(preview['profiles'])} run(s).\n"
                     f"{summary}\nReport: {preview['report_html']}\n"
                     "No optimization was run and no fitted parameters were changed."
                 )

@@ -1,13 +1,34 @@
 # R23 — Independent least-squares process setup and weighted RMSE
 
-R24g lets each attached UV profile choose the independent LSQ recipe or any
-saved normal batch run (1–30) as its model run. **Preview measured vs model UV**
+R24h lets each attached UV profile choose the independent LSQ recipe or any
+saved normal batch run (1–30) as its model run. **Preview UV and fraction mass%**
 and refinement both read the chosen run's latest saved recipe and the attached
 UV file when started. The preview simulates the current model once and opens a separate
 overlay of measured and predicted UV over the complete programmed recipe.
 The preview reports the measured and programmed CV spans and pre-fit UV RMSE.
 It does not run the optimizer or apply fitted parameters; **Open alignment
 preview** reopens the last report.
+Dense reference UV samples are displayed at one median value per chart pixel
+column to avoid a dark overdraw region. The solver and fit trace CSV retain
+every raw sample.
+
+For mass% fitting, select **Least-squares: chromatogram + species mass% by
+fraction** and enter up to 30 fraction start/end ranges in CV or mL. The
+midpoint is the observation position. A blank target/impurity cell leaves that
+species out of the objective at that fraction and breaks its line in the plot;
+zero is a measured value. The graph uses shape-preserving interpolation only
+to display adjacent observations. The optimizer compares the entered midpoint
+mass% directly with `100 × simulated species concentration / sum of modeled
+species concentrations` at that midpoint. mL coordinates use the selected
+model's column volume. The alignment preview shows a solid measured target
+line, dotted measured impurity lines, a dashed model target and lighter dotted
+model impurities, with gaps where that species has no input. UV remains a
+required observation, and this optional
+mass% mode uses RAW_SSE or NORMALIZED_MSE rather than WEIGHTED_RMSE.
+RAW_SSE retains the literal UV sum of squares while scaling the mass% group
+to comparable UV units from the measured UV range (at least 1 mAU) and sample
+count; NORMALIZED_MSE uses dimensionless groups for both, also flooring the
+UV normalization at 1 mAU when the trace is nearly flat.
 
 ## Model basis
 

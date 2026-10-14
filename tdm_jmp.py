@@ -26,6 +26,7 @@ from tdm_minimal_io import (
     MAX_BUFFER_IONS,
     MAX_IMPURITIES,
     MAX_LSQ_PROFILES,
+    MAX_LSQ_FRACTIONS,
     MAX_PLW_STEPS,
     MAX_RUNS,
     MODEL_EDM_CPA,
@@ -52,7 +53,7 @@ LSQ_APPLY_JSL = PROJECT_DIR / "least_squares_apply_to_ui.jsl"
 LSQ_REPORT_HTML = PROJECT_DIR / "least_squares_fit_report.html"
 LSQ_ALIGNMENT_HTML = PROJECT_DIR / "least_squares_alignment_preview.html"
 LSQ_HISTORY_CSV = PROJECT_DIR / "least_squares_objective_history.csv"
-MAX_LSQ_REFERENCE_POINTS = 10
+MAX_LSQ_REFERENCE_POINTS = MAX_LSQ_FRACTIONS
 
 
 def _q(value: Any) -> str:
@@ -285,18 +286,22 @@ def _step_panel(prefix: str, i: int, title: str) -> str:
 
 
 def _lsq_reference_panel(k: int) -> tuple[str, list[str], str]:
-    rows, sends, vis = [], [f'Python Send(lsqR{k}CV << Get, Python Name({_q(f"tdm_ui_lsq_r{k}_CV")}));'], []
+    rows, sends, vis = [], [
+        f'Python Send(lsqR{k}Start << Get, Python Name({_q(f"tdm_ui_lsq_r{k}_start")}));',
+        f'Python Send(lsqR{k}End << Get, Python Name({_q(f"tdm_ui_lsq_r{k}_end")}));',
+    ], []
     for i in range(1, 2 + MAX_IMPURITIES):
-        row = f"lsqR{k}C{i}Row"
+        row = f"lsqR{k}C{i}Cell"
         box = f"lsqR{k}C{i}Mass"
-        label = "Target protein mass%" if i == 1 else f"Impurity {i-1} mass%"
-        rows.append(f'{row} = H List Box(Text Box({_q(label)}, << Set Width(215)), {box} = Number Edit Box(., 8, << Set Width(92)))')
+        rows.append(f'{row} = V List Box({box} = Number Edit Box(., 8, << Set Width(78)))')
         sends.append(f'Python Send({box} << Get, Python Name({_q(f"tdm_ui_lsq_r{k}_c{i}_mass_percent")}));')
         vis.append(f'{row} << Visibility(If({1 if i == 1 else f"impurityCount >= {i-1}"}, "Visible", "Collapse"));')
-    body = f'''lsqRef{k}Panel = Outline Box("Composition reference {k}", V List Box(
-        H List Box(Text Box("Reference CV", << Set Width(215)), lsqR{k}CV = Number Edit Box(., 8, << Set Width(92))),
+    body = f'''lsqRef{k}Panel = H List Box(
+        Text Box("{k}", << Set Width(35)),
+        lsqR{k}Start = Number Edit Box(., 8, << Set Width(85)),
+        lsqR{k}End = Number Edit Box(., 8, << Set Width(85)),
         {', '.join(rows)}
-    ))'''
+    )'''
     visibility = f'lsqRef{k}Panel << Visibility(If(lsqUsesComposition & lsqRefCount >= {k}, "Visible", "Collapse"));' + ''.join(vis)
     return body, sends, visibility
 
@@ -428,6 +433,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'Python Send(lsqBaselineMode << Get Selected, Python Name("tdm_ui_lsq_baseline_mode"));',
         'Python Send(lsqBaseline << Get, Python Name("tdm_ui_lsq_detector_baseline"));',
         'Python Send(lsqMaxEvaluations << Get, Python Name("tdm_ui_lsq_max_nfev"));',
+        'Python Send(lsqFractionUnit << Get Selected, Python Name("tdm_ui_lsq_fraction_unit"));',
     ]
     lsq_run_sections = []
     lsq_selection_visibility = []
@@ -1166,7 +1172,7 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
         Wait(0.01)
     );
     If(actionText == "PREVIEW_LSQ_ALIGNMENT",
-        lsqStatusText << Set Text("Previewing measured and model UV. One fresh simulation runs for each chosen model run; no optimization is performed.");
+        lsqStatusText << Set Text("Previewing measured and model UV plus entered fraction mass%. One fresh simulation runs for each chosen model run; no optimization is performed.");
         Wait(0.01)
     );
     If(actionText == "CHECK_RESULT_CURRENT", Save Text File(statusFile, "CHECK_RESULT_CURRENT pending"));
@@ -1180,7 +1186,7 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
 
 OpenAlignmentPreview = Function({{}}, {{}},
     If(File Exists(lsqPreviewReport), Web(lsqPreviewReport),
-        lsqStatusText << Set Text("No alignment preview is available yet. Attach UV chromatograms and click Preview measured vs model UV.")
+        lsqStatusText << Set Text("No alignment preview is available yet. Attach UV chromatograms and click Preview UV and fraction mass%.")
     );
 );
 
@@ -1381,7 +1387,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                 Text Box("Attach one measured CV/mL versus UV chromatogram in each run section. Choose whether its model UV comes from the independent LSQ recipe or a normal saved batch run. Preview and refinement both re-simulate the latest saved recipe and reread the measured file. UV values in AU are converted to mAU; select the signal column if its heading is generic.", << Set Wrap(760)),
                 {', '.join(lsq_run_sections)},
                 Outline Box("Fit settings", V List Box(
-                    H List Box(Text Box("Refinement mode", << Set Width(200)), lsqModeBox = Combo Box({{"Normal least-squares: chromatogram only", "Least-squares: chromatogram + species mass% at CV"}}, << Set Width(340), << Set Function(Function({{this}}, UpdateUI())))),
+                    H List Box(Text Box("Refinement mode", << Set Width(200)), lsqModeBox = Combo Box({{"Normal least-squares: chromatogram only", "Least-squares: chromatogram + species mass% by fraction"}}, << Set Width(390), << Set Function(Function({{this}}, UpdateUI())))),
                     lsqTargetRunRow = H List Box(Text Box("Species reference run", << Set Width(200)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(140))),
                     H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
                     Text Box("Leave objective and weights alone for ordinary pointwise least-squares. The optimizer keeps the best improvement and stops when the objective, gradient, or parameter step converges. Each unlocked parameter adds another column solve per numerical Jacobian for every selected run. Progress is saved to least_squares_objective_history.csv. Set individual parameter locks on Model Parameters.", << Set Wrap(740)),
@@ -1393,14 +1399,15 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     ))
                 )),
                 H List Box(
-                    Button Box("Preview measured vs model UV", SendAndRun("PREVIEW_LSQ_ALIGNMENT")),
+                    Button Box("Preview UV and fraction mass%", SendAndRun("PREVIEW_LSQ_ALIGNMENT")),
                     Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ"))
                 ),
                 H List Box(Button Box("Open alignment preview", OpenAlignmentPreview()), Button Box("Open fit report", OpenFitReport())),
                 lsqStatusText = Text Box("", << Set Wrap(760), << Set Height(130)),
                 lsqCompositionPanel = Outline Box("Species mass% reference points", V List Box(
-                    Text Box("Enter the expected species mass% at one or more CV positions. Only the target + selected impurities are shown. Each reference CV must sum to 100%.", << Set Wrap(740)),
-                    H List Box(Text Box("Reference CV count [1-10]", << Set Width(240)), lsqReferenceCountBox = Combo Box({ref_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI())))),
+                    Text Box("Enter fraction start and end in CV or mL from run start. The midpoint is compared with model species mass%. Leave a species cell blank for no fit there; blank cells break that species' plotted line. Values of 0 are measured zeros.", << Set Wrap(740)),
+                    H List Box(Text Box("Fraction rows [1-30]", << Set Width(240)), lsqReferenceCountBox = Combo Box({ref_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI()))), Text Box("Fraction axis"), lsqFractionUnit = Combo Box({{"CV", "mL"}}, << Set(1), << Set Width(90))),
+                    H List Box(Text Box("#", << Set Width(35)), Text Box("Start", << Set Width(85)), Text Box("End", << Set Width(85)), Text Box("Target %", << Set Width(78)), Text Box("Imp 1 %", << Set Width(78)), Text Box("Imp 2 %", << Set Width(78)), Text Box("Imp 3 %", << Set Width(78)), Text Box("Imp 4 %", << Set Width(78)), Text Box("Imp 5 %", << Set Width(78))),
                     {', '.join(ref_bodies)}
                 ))
             )),
@@ -1458,7 +1465,7 @@ def _validate_jsl(jsl: str) -> None:
     required = [
         "Post-load washes [0-5]", "Elution steps [0-5]", "Runs in batch",
         "Run saved batch", "Model combination", "Number of impurities [0-5]",
-        "Normal least-squares: chromatogram only", "species mass% at CV",
+        "Normal least-squares: chromatogram only", "species mass% by fraction",
         "Feed composition mass% of total protein", "UV → protein response factor",
         "Conductivity → salt factor", "Number of time steps", "Number of axial positions", "Number Edit Box", "tdm_batch_runs.csv",
         "Chemistry control", "Start / set-point Buffer B [%]", "End Buffer B [%]",
@@ -1505,7 +1512,7 @@ def _validate_jsl(jsl: str) -> None:
                 raise ValueError(f"Removed template construct leaked into UI: {forbidden}")
     selected_text_controls = [
         "modelBox", "impurityCountBox", "plwCountBox", "elutionCountBox", "loadSource", "loadMaterialMode",
-        "lsqModeBox", "lsqReferenceCountBox", "lsqTargetRunSelector",
+        "lsqModeBox", "lsqReferenceCountBox", "lsqFractionUnit", "lsqTargetRunSelector",
     ]
     for control in selected_text_controls:
         if f"{control} << Get Selected" not in jsl:

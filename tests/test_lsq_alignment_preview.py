@@ -30,6 +30,29 @@ def _write_uv(path: Path, x, uv, x_header: str):
 
 
 class AlignmentPreviewTests(unittest.TestCase):
+    def test_dense_reference_plot_is_robust_but_fit_uses_every_raw_sample(self):
+        raw_cv = np.linspace(0.0, 1.0, 5001)
+        raw_uv = np.exp(-0.5 * ((raw_cv - 0.6) / 0.03) ** 2)
+        repeated_cv = np.full(301, 0.65)
+        repeated_uv = np.full(301, float(np.interp(0.65, raw_cv, raw_uv)))
+        repeated_uv[:10] = 100.0  # export artifacts must not paint a solid black bar
+        cv = np.r_[raw_cv, repeated_cv]
+        uv = np.r_[raw_uv, repeated_uv]
+        display_cv, display_uv = lsq._reference_display_series(cv, uv, 1.0)
+        self.assertLessEqual(len(display_cv), 744)
+        self.assertTrue(np.all(np.diff(display_cv) > 0))
+        self.assertAlmostEqual(float(np.max(display_uv)), 1.0, delta=0.01)
+        self.assertAlmostEqual(float(display_uv[np.argmin(abs(display_cv - 0.65))]),
+                               float(np.interp(0.65, raw_cv, raw_uv)), delta=0.01)
+
+        reference = lsq.ChromatogramReference(cv, uv, "CV", "UV 280 [mAU]", "CV", "test.csv")
+        trace = {"CV": raw_cv, "total_g_L": np.zeros_like(raw_cv), "uv_mAU": raw_uv}
+        residual, fit_info = lsq._chromatogram_residuals(
+            make_config(MODEL_EDM_LANGMUIR, 0, multistep=False), reference, trace)
+        self.assertEqual(len(residual), len(cv))
+        self.assertEqual(fit_info["overlap_points"], len(cv))
+        self.assertGreater(float(np.max(abs(residual))), 90.0)
+
     def test_new_lsq_table_tracks_normal_runs_but_legacy_table_keeps_independent_recipe(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -215,7 +238,7 @@ class AlignmentPreviewTests(unittest.TestCase):
     def test_jmp_has_a_separate_preview_action_and_report(self):
         jsl = build_jsl(load_config())
         _validate_jsl(jsl)
-        self.assertIn('Button Box("Preview measured vs model UV", SendAndRun("PREVIEW_LSQ_ALIGNMENT"))', jsl)
+        self.assertIn('Button Box("Preview UV and fraction mass%", SendAndRun("PREVIEW_LSQ_ALIGNMENT"))', jsl)
         self.assertIn('Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ"))', jsl)
         self.assertIn('If(actionText == "PREVIEW_LSQ_ALIGNMENT" & Contains(statusValue, "LSQ_ALIGNMENT_READY:")', jsl)
         self.assertIn('Button Box("Open alignment preview", OpenAlignmentPreview())', jsl)
@@ -244,7 +267,7 @@ class AlignmentPreviewTests(unittest.TestCase):
             with patch.dict(tdm_bridge.__dict__, {
                 "tdm_ui_action": "PREVIEW_LSQ_ALIGNMENT", "tdm_ui_lsq_target_run": 1,
                 "tdm_ui_lsq_run_count": 1, "tdm_ui_lsq_selected_run_1": 1,
-                "tdm_ui_lsq_mode": "Least-squares: chromatogram + species mass% at CV",
+                "tdm_ui_lsq_mode": "Normal least-squares: chromatogram only",
             }), patch.object(tdm_bridge, "build_shared_config_from_jmp", return_value=shared), \
                  patch.object(tdm_bridge, "_effective_run", return_value=shared), \
                  patch.object(tdm_bridge, "_selected_lsq_profile_rows", return_value=[(1, row, str(source))]), \
