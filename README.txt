@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG, mL LOADING AND FRACTION MASS% (R24i)
+TDM – MODIFIED WANG, mL LOADING AND FRACTION MASS% (R24j)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -55,9 +55,16 @@ Refinement intersects Unlocked controls with the selected model combination's
 required parameter list. Values or locks left from another model combination
 cannot be fitted or written back as improvements.
 
-FRACTION MASS% REFINEMENT (R24h)
-Choose "Least-squares: chromatogram + species mass% by fraction" to enter up
-to 30 fractions for the selected LSQ profile. Choose CV or mL, then enter
+FRACTION MASS% REFINEMENT (R24j)
+Choose 1–10 LSQ runs, with each run's own measured UV and independent or
+normal-batch model recipe. In mass% mode, set "Use this run's fraction mass%"
+to On in every run section that has fraction data. This lets you choose any
+number of mass% runs from 1 to the selected LSQ run count; other selected
+runs contribute UV alone. Choose "Edit mass% for LSQ run" to enter up to 30
+fractions for that particular run, then switch to another run to enter its
+different fractions. The values, row count, and units are saved by LSQ run
+number in tdm_lsq_fraction_mass.csv and restored when you switch the editor.
+Choose CV or mL for each run, then enter
 each fraction's start and end from run start. The midpoint is calculated;
 mL midpoints are divided by column volume to align with the solver CV axis.
 The fraction table uses compact numeric cells so Start, End, Target, and all
@@ -90,7 +97,8 @@ even when imported UV measurements cover only part of it. The objective
 still uses only the measured UV samples, plus mass% when explicitly selected.
 
 Extract this entire ZIP to a new folder. To retain an existing setup, copy
-tdm_inputs.json, tdm_batch_runs.csv, tdm_lsq_process_runs.csv and
+tdm_inputs.json, tdm_batch_runs.csv, tdm_lsq_process_runs.csv,
+tdm_lsq_fraction_mass.csv (if present) and
 tdm_batch_count.txt from your old folder into the new one. Close the old JMP
 setup window and launch 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl from the new
 folder. Run the selected model again to regenerate the chromatogram for
@@ -109,7 +117,7 @@ all parameters unlocked. For a diagnostic fit, edit the separate LSQ recipe to
 use fewer time steps/cells; check the final result at full resolution.
 
 LSQ CHROMATOGRAM IMPORT UPDATE
-JMP startup fix: the five LSQ run controls are now read by their own named
+JMP startup fix: the LSQ run controls are read by their own named
 display boxes. The run-loader always receives both a slot and a run number.
 Replace tdm_jmp.py in an existing coding1 folder and restart the JMP launcher
 to apply this interface fix while keeping your saved run tables and inputs.
@@ -121,7 +129,7 @@ by the column volume and the resulting CV is aligned with the saved LSQ
 process recipe. See LSQ_R23_IMPLEMENTATION_AND_USAGE.md for the workflow.
 
 R23 UPDATE — INDEPENDENT LEAST-SQUARES PROCESS SETUP + WEIGHTED RMSE
-See LSQ_R23_IMPLEMENTATION_AND_USAGE.md for the new 1–5 LSQ run setups, Excel chromatogram attachments, run/point weighting, objective equations, solver locks and improved parameter outputs.
+See LSQ_R23_IMPLEMENTATION_AND_USAGE.md for the 1–10 LSQ run setups, Excel chromatogram attachments, run/point weighting, objective equations, solver locks and improved parameter outputs.
 
 TDM22 R22 - PAPER LANGMUIR EQUILIBRIUM AND %B/SALT RECEIPT
 ======================================
@@ -331,7 +339,7 @@ increases loaded mass. At fixed load capacity, load CV = capacity / feed
 concentration. Total protein mass [g] = concentration [mg/mL] * volume [mL]
 / 1000. The existing Feed_Concentration_mg_mL CSV column is preserved.
 
-Saved lock states (including all locked) and selected 1-5 run lists are now
+Saved lock states (including all locked) and selected 1–10 run lists are now
 preserved through normalization and file reload. R14 testing found that the
 previous defaults merge could discard those optional saved fields.
 
@@ -446,13 +454,13 @@ The column mass balance uses the undelayed outlet, not the delayed detector
 trace. A finite run can end with protein still in the column or detector line;
 include sufficient low-salt flush when comparing full experimental traces.
 
-Least-squares refinement: 1-5 selected runs
+Least-squares refinement: 1–10 selected runs
 ------------------------------------------
 1. Save each experimental recipe in its own run, with its actual load, flow,
    feed, Buffer A/B, PLW, elution, column geometry and numerical resolution.
 2. Attach the appropriate chromatogram CSV to each saved run.
-3. Choose Number of runs to refine [1-5], then choose exactly those saved runs
-   in the Fit run selectors. Any of the 30 saved runs can be selected. A run
+3. Choose Number of runs to refine [1–10], then choose exactly those LSQ runs
+   in the Fit run selectors. Any of the 10 LSQ profile runs can be selected. A run
    cannot be selected twice. Other attached chromatograms are excluded.
 4. Set Locked/Unlocked beside the eligible numeric fields. Lock all / Unlock
    all applies to both component AND global/instrument controls. Lock states
@@ -499,8 +507,9 @@ losing measured points. Time axes are converted using the saved variable-flow
 recipe. Common CSV encodings, delimiters and instrument metadata are supported.
 A signal-only file uses an explicitly reported sample-order x-axis assumption.
 
-Optional species mass% constraints can be assigned to a selected profile at
-specified CVs; other profiles may have chromatogram data alone. These are
+Optional species mass% constraints can be assigned independently to any
+selected LSQ run at fraction midpoints in CV or mL; other profiles may have
+chromatogram data alone. These are
 additional normalized composition residuals, not part of the raw UV Eq. 9.
 With overlapping peaks, multiple parameters can remain correlated; one shared
 fit against several recipes does not guarantee parameter identifiability.
@@ -528,7 +537,7 @@ synthetic HIC chromatograms. R13 physics tests include constant high-salt holds,
 low-salt loading, high-to-low gradients, mass conservation, species-specific
 UV, variable flow, independent detector volumes, physical/display toggles,
 literal Eq. 9, reference coverage/replicates, all global locks, selected
-1-5 profiles, actual nonlinear refinement in all four combinations, a shared
+1–10 profiles, actual nonlinear refinement in all four combinations, a shared
 five-profile refinement, and a fit starting at zero UV dead volume.
 An already-matching fit preserves the original floating-point parameter values
 exactly instead of changing them through a transform-and-inverse round trip.

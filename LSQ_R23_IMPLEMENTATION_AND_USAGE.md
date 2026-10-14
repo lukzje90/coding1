@@ -1,6 +1,7 @@
 # R23 — Independent least-squares process setup and weighted RMSE
 
-R24h lets each attached UV profile choose the independent LSQ recipe or any
+R24j supports 1–10 selected LSQ profiles. Each attached UV profile chooses its
+independent LSQ recipe or any
 saved normal batch run (1–30) as its model run. **Preview UV and fraction mass%**
 and refinement both read the chosen run's latest saved recipe and the attached
 UV file when started. The preview simulates the current model once and opens a separate
@@ -13,7 +14,11 @@ column to avoid a dark overdraw region. The solver and fit trace CSV retain
 every raw sample.
 
 For mass% fitting, select **Least-squares: chromatogram + species mass% by
-fraction** and enter up to 30 fraction start/end ranges in CV or mL. The
+fraction**. Set **Use this run's fraction mass%** to On in each selected run
+that has mass data, then choose **Edit mass% for LSQ run** to enter that run's
+up to 30 fraction start/end ranges in CV or mL. Each LSQ run has its own
+saved row count, units and species values in `tdm_lsq_fraction_mass.csv`.
+Only enabled selected runs contribute mass%; the others contribute UV alone. The
 midpoint is the observation position. A blank target/impurity cell leaves that
 species out of the objective at that fraction and breaks its line in the plot;
 zero is a measured value. The graph uses shape-preserving interpolation only
@@ -56,7 +61,7 @@ During a fit, `least_squares_objective_history.csv` gains one row for each actua
 ## JMP workflow
 
 1. Unzip the whole project and start it using `00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl` as before. Python dependencies: `pip install -r requirements.txt`.
-2. Click **Edit LSQ process setup** at the top of the window or **Edit process recipe** in a run section. The existing **Process Setup** editor now edits a **separate LSQ process table** (`tdm_lsq_process_runs.csv`). The screen identifies which scope is active. Edit LSQ runs 1–5 separately: buffer chemistry, load flow and amount, load feed chemistry, post-load washes, elution gradient/steps and numerical resolution. Click **Save current process recipe**. **Edit normal batch setup** returns to the original independent batch table (`tdm_batch_runs.csv`). Changes to either process table never rewrite the other table.
+2. Click **Edit LSQ process setup** at the top of the window or **Edit process recipe** in a run section. The existing **Process Setup** editor now edits a **separate LSQ process table** (`tdm_lsq_process_runs.csv`). The screen identifies which scope is active. Edit LSQ runs 1–10 separately: buffer chemistry, load flow and amount, load feed chemistry, post-load washes, elution gradient/steps and numerical resolution. Click **Save current process recipe**. **Edit normal batch setup** returns to the original independent batch table (`tdm_batch_runs.csv`). Changes to either process table never rewrite the other table.
 3. Under **Least-Squares Refinement**, first choose **Number of runs to fit**. The tab immediately shows that many run sections. In each section, select the LSQ profile that owns the measured file, then set **Model run for UV comparison** to its independent LSQ recipe or the saved normal batch Run 1–30 you want to compare. Attach an **Excel `.xlsx`/`.xlsm` or `.csv`** file with measured **CV or mL versus UV absorbance in mAU**. The file path, model-run choice and axis choices are stored with that LSQ profile. Choose **X units = CV** for column volumes or **ML** for collected millilitres; `AUTO` recognizes common headings such as `CV`, `Volume (mL)`, and `UV 280 [mAU]`. The mL axis is divided by the shared column volume; mAU values are compared directly with the predicted detector mAU. The selected normal run's saved recipe is re-simulated, so edits are reflected after you save that normal run. The actual measured file is reread at every preview and refinement. Existing LSQ tables retain their independent recipe selection when upgraded.
    Choose **X = 0 at RUN_START** if the data include loading and washes. For a conference chromatogram whose x-axis restarts at the beginning of elution, choose **ELUTION_START**; the saved load and wash CV are then added to the measured CV. This origin option applies to CV/mL axes. An incorrect origin can make peaks appear early even when the solver and detector values are otherwise correct. Click **Attach / validate** and read the axis receipt before fitting.
    **Optional columns and weight** lets you name an Excel worksheet and exact X and UV headings when auto-detection is ambiguous, or assign a run weight. If the UV heading is generic (such as `Signal`), select that column explicitly; known non-UV channels and unselected ambiguous channels are rejected. Leave weight at 1 for ordinary fitting. Set X units explicitly when overriding the X column. A `Weight` column supplies optional per-point weights.

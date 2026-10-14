@@ -96,6 +96,7 @@ from tdm_minimal_io import (
     blank_config,
     load_batch_rows,
     load_lsq_rows,
+    load_lsq_mass_rows,
     normalize_config,
     canonical_fit_parameter_path,
     required_parameter_values,
@@ -334,7 +335,7 @@ def _attached_lsq_profile_rows(rows: list[dict[str, Any]] | None = None) -> list
 def _selected_lsq_run_numbers() -> list[int]:
     count = _num("tdm_ui_lsq_run_count")
     if count is None or count != int(count) or not 1 <= count <= MAX_LSQ_PROFILES:
-        raise ValueError("Select an integer number of least-squares runs from 1 to 5.")
+        raise ValueError(f"Select an integer number of least-squares runs from 1 to {MAX_LSQ_PROFILES}.")
     selected = []
     for slot in range(1, int(count) + 1):
         number = _num(f"tdm_ui_lsq_selected_run_{slot}")
@@ -403,6 +404,42 @@ def _composition_references_from_jmp(config: dict[str, Any]) -> list[dict[str, A
     return refs
 
 
+def _composition_references_for_run(config: dict[str, Any], run_number: int,
+                                    mass_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Read only this LSQ profile's saved fraction observations."""
+    if not 1 <= run_number <= MAX_LSQ_PROFILES:
+        raise ValueError(f"LSQ mass% run must be 1–{MAX_LSQ_PROFILES}.")
+    start_index = (run_number - 1) * MAX_LSQ_FRACTIONS
+    own_rows = mass_rows[start_index:start_index + MAX_LSQ_FRACTIONS]
+    if len(own_rows) != MAX_LSQ_FRACTIONS or any(
+        float(row["Run_Number"]) != run_number or float(row["Fraction_Row"]) != index
+        for index, row in enumerate(own_rows, start=1)
+    ):
+        raise ValueError(f"LSQ Run {run_number}: fraction mass% table has incorrect run/row associations.")
+    try:
+        count_value = float(own_rows[0]["Fraction_Count"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"LSQ Run {run_number}: choose a fraction row count from 1–{MAX_LSQ_FRACTIONS}.") from exc
+    if not math.isfinite(count_value) or count_value != int(count_value) or not 1 <= count_value <= MAX_LSQ_FRACTIONS:
+        raise ValueError(f"LSQ Run {run_number}: fraction row count must be 1–{MAX_LSQ_FRACTIONS}.")
+    count = int(count_value)
+    unit = str(own_rows[0]["Unit"] or "CV").strip().upper()
+    names = [str(row["name"]) for row in active_components(config)]
+    def entered(value: Any) -> str:
+        text = str(value or "").strip()
+        return "" if text in {".", ""} else text
+    references = []
+    for index, row in enumerate(own_rows[:count], start=1):
+        mass = {name: entered(row["Target_mass_percent" if species == 1 else f"Impurity{species - 1}_mass_percent"])
+                for species, name in enumerate(names, start=1)}
+        start, end = entered(row["Start"]), entered(row["End"])
+        if not any((start, end, *mass.values())):
+            continue
+        references.append({"fraction_index": index, "start": start,
+                           "end": end, "x_unit": unit, "mass_percent": mass})
+    return references
+
+
 def _save_batch_summary_to_root(batch_info: dict[str, Any]) -> None:
     src = Path(batch_info["summary_csv"])
     if src.is_file():
@@ -468,7 +505,12 @@ def main() -> int:
     try:
         shared_raw = build_shared_config_from_jmp()
         current_run_number = _run_number()
-        run_number = _lsq_target_run(current_run_number) if action in {"FIT_LSQ", "PREVIEW_LSQ_ALIGNMENT", "ATTACH_LSQ_CSV"} else current_run_number
+        if action in {"FIT_LSQ", "PREVIEW_LSQ_ALIGNMENT"} and _num("tdm_ui_lsq_run_count") is not None:
+            run_number = _selected_lsq_run_numbers()[0]
+        elif action == "ATTACH_LSQ_CSV":
+            run_number = _lsq_target_run(current_run_number)
+        else:
+            run_number = current_run_number
         batch_count = _batch_count()
         BATCH_COUNT_FILE.write_text(str(batch_count), encoding="utf-8")
         current_effective = _effective_run(shared_raw, run_number)
@@ -558,11 +600,8 @@ def main() -> int:
                 run_list = ", ".join(str(n) for n, _row, _path in profile_rows)
                 raise ValueError(f"Global least-squares fitting supports at most {MAX_LSQ_PROFILES} attached chromatograms; currently attached to runs {run_list}. Clear extra CSV paths before fitting.")
             mode = _lsq_mode()
-            refs = _composition_references_from_jmp(current_effective) if mode == "CHROMATOGRAM_AND_COMPOSITION" else []
-            if mode == "CHROMATOGRAM_AND_COMPOSITION" and not any(
-                any(value is not None for value in ref["mass_percent"].values()) for ref in refs
-            ):
-                raise ValueError("Enter at least one target or impurity mass% in the fraction table before preview or refinement.")
+            mass_rows = load_lsq_mass_rows() if mode == "CHROMATOGRAM_AND_COMPOSITION" else []
+            enabled_mass_runs = []
             profiles = []
             for profile_run_number, row, source in profile_rows:
                 profile_config, model_run = _lsq_model_run_config(
@@ -580,11 +619,18 @@ def main() -> int:
                 context.update(model_run)
                 profile = {"config": profile_config, "chromatogram_csv": source, "run_context": context,
                            "weight": row.get("LSQ_Weight") or 1.0, **options}
-                if mode == "CHROMATOGRAM_AND_COMPOSITION" and profile_run_number == run_number:
-                    profile["composition_references"] = refs
+                if mode == "CHROMATOGRAM_AND_COMPOSITION":
+                    head = mass_rows[(profile_run_number - 1) * MAX_LSQ_FRACTIONS]
+                    enabled = str(head["Enabled"] or "Off").strip().upper() == "ON"
+                    if enabled:
+                        refs = _composition_references_for_run(profile_config, profile_run_number, mass_rows)
+                        if not any(any(str(value or "").strip() for value in ref["mass_percent"].values()) for ref in refs):
+                            raise ValueError(f"LSQ Run {profile_run_number}: mass% is enabled but no fraction species values were entered.")
+                        profile["composition_references"] = refs
+                        enabled_mass_runs.append(profile_run_number)
                 profiles.append(profile)
-            if mode == "CHROMATOGRAM_AND_COMPOSITION" and refs and run_number not in {p["run_context"]["run_number"] for p in profiles}:
-                raise ValueError("Select an attached chromatogram profile before adding species-composition reference points.")
+            if mode == "CHROMATOGRAM_AND_COMPOSITION" and not enabled_mass_runs:
+                raise ValueError("Turn on fraction mass% for at least one selected LSQ run and enter its observations.")
             if action == "PREVIEW_LSQ_ALIGNMENT":
                 from tdm_least_squares import preview_lsq_alignment
                 preview = preview_lsq_alignment(profiles)

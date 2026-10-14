@@ -11,7 +11,7 @@ import numpy as np
 import tdm_bridge
 import tdm_least_squares as lsq
 from tdm_jmp import build_jsl, _validate_jsl
-from tdm_minimal_io import MODEL_EDM_LANGMUIR, default_batch_row
+from tdm_minimal_io import MODEL_EDM_LANGMUIR, default_batch_row, load_lsq_mass_rows
 from tdm_minimal_model import simulate
 from verify_model import make_config
 
@@ -32,17 +32,16 @@ class FractionMassTests(unittest.TestCase):
             row["LSQ_Chromatogram_CSV"] = str(uv)
             report = root / "preview.html"
             actual_preview = lsq.preview_lsq_alignment
+            mass_rows = load_lsq_mass_rows(root / "mass.csv")
+            mass_rows[0].update(Enabled="On", Fraction_Count="4", Unit="CV")
             ui = {"tdm_ui_action": "PREVIEW_LSQ_ALIGNMENT", "tdm_ui_lsq_target_run": 1,
                   "tdm_ui_lsq_run_count": 1, "tdm_ui_lsq_selected_run_1": 1,
-                  "tdm_ui_lsq_mode": "Least-squares: chromatogram + species mass% by fraction",
-                  "tdm_ui_lsq_reference_count": 4, "tdm_ui_lsq_fraction_unit": "CV"}
+                  "tdm_ui_lsq_mode": "Least-squares: chromatogram + species mass% by fraction"}
             for i, (lo, hi) in enumerate(((0.20, 0.22), (0.22, 0.24),
                                           (0.24, 0.26), (0.26, 0.28)), 1):
-                ui[f"tdm_ui_lsq_r{i}_start"] = lo
-                ui[f"tdm_ui_lsq_r{i}_end"] = hi
+                mass_rows[i - 1].update(Start=str(lo), End=str(hi))
                 if i != 3:
-                    ui[f"tdm_ui_lsq_r{i}_c1_mass_percent"] = 60.0
-                    ui[f"tdm_ui_lsq_r{i}_c2_mass_percent"] = 40.0
+                    mass_rows[i - 1].update(Target_mass_percent="60", Impurity1_mass_percent="40")
             receipt = {"model_run_source": "INDEPENDENT_LSQ", "model_run_number": 1,
                        "model_run_name": "Run 1", "model_run_label": "Independent LSQ recipe Run 1"}
             with patch.dict(tdm_bridge.__dict__, ui), \
@@ -50,6 +49,7 @@ class FractionMassTests(unittest.TestCase):
                  patch.object(tdm_bridge, "_effective_run", return_value=cfg), \
                  patch.object(tdm_bridge, "_selected_lsq_profile_rows", return_value=[(1, row, str(uv))]), \
                  patch.object(tdm_bridge, "load_lsq_rows", return_value=[row]), \
+                 patch.object(tdm_bridge, "load_lsq_mass_rows", return_value=mass_rows), \
                  patch.object(tdm_bridge, "load_batch_rows", return_value=[row]), \
                  patch.object(tdm_bridge, "_lsq_model_run_config", return_value=(cfg, receipt)), \
                  patch.object(tdm_bridge, "BATCH_COUNT_FILE", root / "count.txt"), \
@@ -128,8 +128,8 @@ class FractionMassTests(unittest.TestCase):
     def test_jmp_fraction_inputs_and_real_refinement(self):
         jsl = build_jsl()
         _validate_jsl(jsl)
-        self.assertIn('lsqFractionUnit << Get Selected, Python Name("tdm_ui_lsq_fraction_unit")', jsl)
-        self.assertIn('lsqR30End << Get, Python Name("tdm_ui_lsq_r30_end")', jsl)
+        self.assertIn('Column(dtLSQMass, "Unit")[massRow] = lsqFractionUnit << Get Selected', jsl)
+        self.assertIn('Column(dtLSQMass, "End")[massRow + 29] = lsqR30End << Get', jsl)
 
         true = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
         true["numerics"].update(time_steps=50, axial_positions=6)

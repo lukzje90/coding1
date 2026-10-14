@@ -42,6 +42,7 @@ from tdm_minimal_io import (
     MODEL_TDM_CPA,
     MODEL_TDM_LANGMUIR,
     MODEL_TDM_WANG,
+    MAX_LSQ_PROFILES,
     active_components,
     canonical_fit_parameter_path,
     normalize_config,
@@ -1030,8 +1031,8 @@ def preview_lsq_alignment(
     refinement, but performs one simulation per run and no optimization.
     """
     profiles = list(profiles)
-    if not 1 <= len(profiles) <= 5:
-        raise ValueError("Alignment preview requires 1–5 selected LSQ runs.")
+    if not 1 <= len(profiles) <= MAX_LSQ_PROFILES:
+        raise ValueError(f"Alignment preview requires 1–{MAX_LSQ_PROFILES} selected LSQ runs.")
     sections: list[str] = []
     metrics: list[dict[str, Any]] = []
     for index, profile in enumerate(profiles, start=1):
@@ -1747,15 +1748,15 @@ def run_global_least_squares_refinement(
     unlocked_paths: Iterable[str] | None = None,
     max_nfev: int = 60,
 ) -> dict[str, Any]:
-    """Fit one shared mechanistic parameter vector against 1–5 run profiles.
+    """Fit one shared mechanistic parameter vector against selected run profiles.
 
     Each profile carries its own fixed recipe and CSV/Excel workbook. By default the point
     residuals are concatenated without scaling: their squared norm is equation
     9 summed across runs. NORMALIZED_MSE is an explicit optional weighting.
     """
     profiles = list(profiles)
-    if not 1 <= len(profiles) <= 5:
-        raise ValueError("Global least-squares fitting requires 1–5 attached chromatogram profiles.")
+    if not 1 <= len(profiles) <= MAX_LSQ_PROFILES:
+        raise ValueError(f"Global least-squares fitting requires 1–{MAX_LSQ_PROFILES} attached chromatogram profiles.")
     mode = str(mode or "").strip().upper()
     if mode not in SUPPORTED_MODES:
         raise ValueError("Least-squares mode must be CHROMATOGRAM or CHROMATOGRAM_AND_COMPOSITION.")

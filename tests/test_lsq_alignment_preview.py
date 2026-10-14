@@ -58,12 +58,13 @@ class AlignmentPreviewTests(unittest.TestCase):
             root = Path(directory)
             new_table = root / "new_lsq.csv"
             with patch.object(io, "LSQ_RUNS_CSV", new_table), \
-                 patch.object(io, "load_batch_rows", return_value=[default_batch_row(i) for i in range(1, 6)]):
+                 patch.object(io, "load_batch_rows", return_value=[default_batch_row(i) for i in range(1, 31)]):
                 io.ensure_lsq_runs_csv()
             with new_table.open(newline="", encoding="utf-8") as stream:
                 rows = list(csv.DictReader(stream))
             self.assertEqual(rows[0]["LSQ_Model_Source"], LSQ_MODEL_SOURCE_BATCH)
             self.assertEqual(rows[4]["LSQ_Model_Run_Number"], "5")
+            self.assertEqual(rows[9]["LSQ_Model_Run_Number"], "10")
 
             legacy_table = root / "legacy_lsq.csv"
             legacy_fields = [name for name in io.batch_run_fields()
@@ -242,7 +243,7 @@ class AlignmentPreviewTests(unittest.TestCase):
         self.assertIn('Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ"))', jsl)
         self.assertIn('If(actionText == "PREVIEW_LSQ_ALIGNMENT" & Contains(statusValue, "LSQ_ALIGNMENT_READY:")', jsl)
         self.assertIn('Button Box("Open alignment preview", OpenAlignmentPreview())', jsl)
-        self.assertEqual(jsl.count('Text Box("Model run for UV comparison"'), 5)
+        self.assertEqual(jsl.count('Text Box("Model run for UV comparison"'), 10)
         self.assertIn('Column(dtLSQRuns, "LSQ_Model_Source")[r] = If(modelChoice', jsl)
         self.assertIn('Column(dtLSQRuns, "LSQ_Model_Run_Number")[r] = If(modelChoice', jsl)
         self.assertIn('modelChoice = LSQModelRunSelected(slot);', jsl)

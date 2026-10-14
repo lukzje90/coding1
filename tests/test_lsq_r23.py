@@ -261,10 +261,10 @@ class RefinementTests(unittest.TestCase):
         for expected in ["dtLSQRuns", "SwitchProcessScope", "lsqWeight",
                          "WEIGHTED_RMSE", "lsqRunsFile", "activeRunsFile",
                          "lsqSheet", "lsqXColumn", "lsqSignalColumn", "lsqXUnit", "lsqXOrigin",
-                         "Number of runs to fit [1–5]", "Fit settings", "SaveAllLSQReferences"]:
+                         "Number of runs to fit [1–10]", "Fit settings", "SaveAllLSQReferences"]:
             self.assertIn(expected, jsl)
-        self.assertLess(jsl.index("Number of runs to fit [1–5]"), jsl.index("Run section 1"))
-        self.assertLess(jsl.index("Run section 5"), jsl.index('Outline Box("Fit settings"'))
+        self.assertLess(jsl.index("Number of runs to fit [1–10]"), jsl.index("Run section 1"))
+        self.assertLess(jsl.index("Run section 10"), jsl.index('Outline Box("Fit settings"'))
         self.assertIn('Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(LSQPathText(slot)))', jsl)
         self.assertIn('Column(dtLSQRuns, "LSQ_X_Origin")[r] = LSQOriginSelected(slot)', jsl)
         self.assertIn('Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot]', jsl)
@@ -277,7 +277,7 @@ class RefinementTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "display boxes cannot"):
             _validate_jsl(jsl.replace("LSQSelectedRun(lsqInitSlot)",
                                       "lsqRunBoxes[lsqInitSlot] << Get Selected"))
-        for slot in range(1, 6):
+        for slot in range(1, 11):
             with self.subTest(slot=slot):
                 self.assertIn(f'lsqRunSlot{slot}Row << Visibility(If(Num(lsqRunCount << Get Selected) >= {slot}', jsl)
                 self.assertIn(f'Button Box("Attach Excel / CSV", AttachLSQCSV({slot}))', jsl)
@@ -444,8 +444,8 @@ class RefinementTests(unittest.TestCase):
                 ls.run_global_least_squares_refinement([{
                     "config": config_for(), "chromatogram_csv": file, "weight": 0,
                 }], unlocked_paths=[])
-            with self.assertRaisesRegex(ValueError, "1–5"):
-                ls.run_global_least_squares_refinement([{}] * 6)
+            with self.assertRaisesRegex(ValueError, "1–10"):
+                ls.run_global_least_squares_refinement([{}] * 11)
 
 
 if __name__ == "__main__":

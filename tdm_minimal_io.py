@@ -16,6 +16,7 @@ LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
 RESULT_GUARD_BUILD = "2026-10-14-R24H-FRACTION-MASS-LSQ"
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
+LSQ_MASS_CSV = PROJECT_DIR / "tdm_lsq_fraction_mass.csv"
 BATCH_SUMMARY_CSV = PROJECT_DIR / "tdm_batch_summary.csv"
 BATCH_GALLERY_HTML = PROJECT_DIR / "tdm_batch_gallery.html"
 BATCH_COUNT_FILE = PROJECT_DIR / "tdm_batch_count.txt"
@@ -37,7 +38,7 @@ LABEL_TO_MODEL = {v: k for k, v in MODEL_LABELS.items()}
 
 MAX_IMPURITIES = 5
 MAX_RUNS = 30
-MAX_LSQ_PROFILES = 5
+MAX_LSQ_PROFILES = 10
 MAX_LSQ_FRACTIONS = 30
 LSQ_MODEL_SOURCE_INDEPENDENT = "INDEPENDENT_LSQ"
 LSQ_MODEL_SOURCE_BATCH = "NORMAL_BATCH"
@@ -1564,7 +1565,7 @@ def save_batch_rows(rows: list[dict[str, Any]], path: Path | str = BATCH_RUNS_CS
 def ensure_lsq_runs_csv() -> Path:
     """Own persisted LSQ process recipes and model-run selections.
 
-    New projects start with a copy of their first five batch recipes; the
+    New projects start with a copy of their first ten batch recipes; the
     source selector decides which table supplies each profile's model run.
     """
     if not LSQ_RUNS_CSV.is_file():
@@ -1590,6 +1591,65 @@ def load_lsq_rows() -> list[dict[str, str]]:
 
 def save_lsq_rows(rows: list[dict[str, Any]]) -> Path:
     return save_batch_rows(rows, ensure_lsq_runs_csv())
+
+
+LSQ_MASS_FIELDS = (
+    "Run_Number", "Fraction_Row", "Enabled", "Fraction_Count", "Unit",
+    "Start", "End", "Target_mass_percent",
+    *(f"Impurity{i}_mass_percent" for i in range(1, MAX_IMPURITIES + 1)),
+)
+
+
+def ensure_lsq_mass_csv(path: Path | str = LSQ_MASS_CSV) -> Path:
+    """Keep fraction rows ordered by profile and position for JMP indexing."""
+    p = Path(path)
+    expected = MAX_LSQ_PROFILES * MAX_LSQ_FRACTIONS
+    def key_of(row: dict[str, Any]) -> tuple[int, int] | None:
+        try:
+            values = (float(row["Run_Number"]), float(row["Fraction_Row"]))
+            if any(not math.isfinite(value) or value != int(value) for value in values):
+                return None
+            return int(values[0]), int(values[1])
+        except (KeyError, TypeError, ValueError):
+            return None
+    old: list[dict[str, str]] = []
+    if p.is_file():
+        with p.open("r", encoding="utf-8-sig", newline="") as stream:
+            old = list(csv.DictReader(stream))
+        if (len(old) == expected and
+                all(key_of(row) == (i // MAX_LSQ_FRACTIONS + 1, i % MAX_LSQ_FRACTIONS + 1)
+                    for i, row in enumerate(old)) and
+                all(field in old[0] for field in LSQ_MASS_FIELDS)):
+            return p
+    by_key = {}
+    for row in old:
+        key = key_of(row)
+        if key is None:
+            continue
+        if key in by_key:
+            raise ValueError(f"Duplicate LSQ fraction mass row for run {key[0]}, fraction {key[1]}.")
+        by_key[key] = row
+    rows = []
+    for run in range(1, MAX_LSQ_PROFILES + 1):
+        for fraction in range(1, MAX_LSQ_FRACTIONS + 1):
+            row = {field: "" for field in LSQ_MASS_FIELDS}
+            row.update({"Run_Number": run, "Fraction_Row": fraction,
+                        "Enabled": "Off", "Fraction_Count": 1, "Unit": "CV"})
+            row.update({field: value for field, value in by_key.get((run, fraction), {}).items()
+                        if field in LSQ_MASS_FIELDS})
+            row["Run_Number"], row["Fraction_Row"] = run, fraction
+            rows.append(row)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=LSQ_MASS_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    return p
+
+
+def load_lsq_mass_rows(path: Path | str = LSQ_MASS_CSV) -> list[dict[str, str]]:
+    with ensure_lsq_mass_csv(path).open("r", encoding="utf-8-sig", newline="") as stream:
+        return list(csv.DictReader(stream))
 
 
 def _as_float(raw: Any, default: float | None = None) -> float | None:
