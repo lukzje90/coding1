@@ -293,13 +293,15 @@ def _lsq_reference_panel(k: int) -> tuple[str, list[str], str]:
     for i in range(1, 2 + MAX_IMPURITIES):
         row = f"lsqR{k}C{i}Cell"
         box = f"lsqR{k}C{i}Mass"
-        rows.append(f'{row} = V List Box({box} = Number Edit Box(., 8, << Set Width(78)))')
+        # Number Edit Box widths are character counts in JMP. Using pixel-like
+        # values here made each cell hundreds of pixels wide and hid columns.
+        rows.append(f'{row} = V List Box({box} = Number Edit Box(., 8, << Set Width(8)))')
         sends.append(f'Python Send({box} << Get, Python Name({_q(f"tdm_ui_lsq_r{k}_c{i}_mass_percent")}));')
         vis.append(f'{row} << Visibility(If({1 if i == 1 else f"impurityCount >= {i-1}"}, "Visible", "Collapse"));')
     body = f'''lsqRef{k}Panel = H List Box(
         Text Box("{k}", << Set Width(35)),
-        lsqR{k}Start = Number Edit Box(., 8, << Set Width(85)),
-        lsqR{k}End = Number Edit Box(., 8, << Set Width(85)),
+        lsqR{k}Start = Number Edit Box(., 8, << Set Width(8)),
+        lsqR{k}End = Number Edit Box(., 8, << Set Width(8)),
         {', '.join(rows)}
     )'''
     visibility = f'lsqRef{k}Panel << Visibility(If(lsqUsesComposition & lsqRefCount >= {k}, "Visible", "Collapse"));' + ''.join(vis)

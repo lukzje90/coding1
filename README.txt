@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG, mL LOADING AND FRACTION MASS% (R24h)
+TDM – MODIFIED WANG, mL LOADING AND FRACTION MASS% (R24i)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -60,6 +60,8 @@ Choose "Least-squares: chromatogram + species mass% by fraction" to enter up
 to 30 fractions for the selected LSQ profile. Choose CV or mL, then enter
 each fraction's start and end from run start. The midpoint is calculated;
 mL midpoints are divided by column volume to align with the solver CV axis.
+The fraction table uses compact numeric cells so Start, End, Target, and all
+five impurity columns fit under their headings; scroll down for later rows.
 Enter target and up to five impurity mass% values. Leave a cell blank when
 that species was not measured in a fraction; enter 0 for a measured zero.
 Blank cells create visible gaps, and only populated midpoint values enter
