@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24m)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24n)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -113,8 +113,9 @@ mass% table remains editable before any values have been entered.
 Choose CV or mL for each run, then enter
 each fraction's start and end from run start. The midpoint is calculated;
 mL midpoints are divided by column volume to align with the solver CV axis.
-The fraction table uses compact numeric cells so Start, End, Target, and all
-five impurity columns fit under their headings; scroll down for later rows.
+The fraction table puts each heading above its own compact numeric column.
+The target and impurity headings follow the species names in Model Parameters
+when those names are edited. Scroll down for later rows.
 Enter target and up to five impurity mass% values. Leave a cell blank when
 that species was not measured in a fraction; enter 0 for a measured zero.
 Blank cells create visible gaps, and only populated midpoint values enter

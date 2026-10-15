@@ -126,7 +126,7 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
     )
     body = f'''{p}Panel = Outline Box({_q(title)},
         V List Box(
-            {_trow("Species name", f"{p}Name", row.get("name", title))},
+            H List Box(Text Box("Species name", << Set Width(290)), {p}Name = Text Edit Box({_q(row.get('name', title))}, << Set Width(150), << Set Function(Function({{this}}, If(!isLoading, UpdateUI()))))),
             {_nrow("Feed composition mass% of total protein [%]", f"{p}Mass", row.get("mass_percent"), 360, "If(!isLoading, UpdateUI())")},
             {uv_response_control},
             {p}TdmTransport = V List Box(
@@ -290,27 +290,35 @@ def _step_panel(prefix: str, i: int, title: str) -> str:
     ))'''
 
 
-def _lsq_reference_panel(k: int) -> tuple[str, list[str], str]:
-    rows, sends, vis = [], [
-        f'Python Send(lsqR{k}Start << Get, Python Name({_q(f"tdm_ui_lsq_r{k}_start")}));',
-        f'Python Send(lsqR{k}End << Get, Python Name({_q(f"tdm_ui_lsq_r{k}_end")}));',
-    ], []
+def _lsq_reference_table() -> tuple[str, list[str]]:
+    """Keep each fraction heading and its 30 inputs in one physical column."""
+    columns: list[list[str]] = [
+        ['Text Box("#", << Set Width(28), << Set Height(64))'],
+        ['Text Box("Start", << Set Width(76), << Set Height(64))'],
+        ['Text Box("End", << Set Width(76), << Set Height(64))'],
+    ]
     for i in range(1, 2 + MAX_IMPURITIES):
-        row = f"lsqR{k}C{i}Cell"
-        box = f"lsqR{k}C{i}Mass"
-        # Number Edit Box widths are character counts in JMP. Using pixel-like
-        # values here made each cell hundreds of pixels wide and hid columns.
-        rows.append(f'{row} = V List Box({box} = Number Edit Box(., 8, << Set Width(8)))')
-        sends.append(f'Python Send({box} << Get, Python Name({_q(f"tdm_ui_lsq_r{k}_c{i}_mass_percent")}));')
-        vis.append(f'{row} << Visibility(If({1 if i == 1 else f"impurityCount >= {i-1}"}, "Visible", "Collapse"));')
-    body = f'''lsqRef{k}Panel = H List Box(
-        Text Box("{k}", << Set Width(35)),
-        lsqR{k}Start = Number Edit Box(., 8, << Set Width(8)),
-        lsqR{k}End = Number Edit Box(., 8, << Set Width(8)),
-        {', '.join(rows)}
-    )'''
-    visibility = f'lsqRef{k}Panel << Visibility(If(lsqUsesComposition & lsqRefCount >= {k}, "Visible", "Collapse"));' + ''.join(vis)
-    return body, sends, visibility
+        columns.append([
+            f'lsqMassHeaderC{i} = Text Box("", << Set Width(112), << Set Wrap(112), << Set Height(64))'
+        ])
+    visibility: list[str] = []
+    for k in range(1, MAX_LSQ_REFERENCE_POINTS + 1):
+        columns[0].append(f'lsqR{k}Index = Number Edit Box({k}, 8, << Set Width(3), << Enable(0))')
+        visibility.append(f'lsqR{k}Index << Visibility(If(lsqUsesComposition & lsqRefCount >= {k}, "Visible", "Collapse"));')
+        for column, field in ((1, "Start"), (2, "End")):
+            box = f"lsqR{k}{field}"
+            columns[column].append(f'{box} = Number Edit Box(., 8, << Set Width(7))')
+            visibility.append(f'{box} << Visibility(If(lsqUsesComposition & lsqRefCount >= {k}, "Visible", "Collapse"));')
+        for i in range(1, 2 + MAX_IMPURITIES):
+            box = f"lsqR{k}C{i}Mass"
+            columns[i + 2].append(f'{box} = Number Edit Box(., 8, << Set Width(8))')
+            visibility.append(f'{box} << Visibility(If(lsqUsesComposition & lsqRefCount >= {k}, "Visible", "Collapse"));')
+    table = 'H List Box(\n' + ',\n'.join(
+        f'lsqMassColumnC{i-2} = V List Box(' + ', '.join(column) + ')'
+        if i >= 3 else 'V List Box(' + ', '.join(column) + ')'
+        for i, column in enumerate(columns)
+    ) + '\n)'
+    return table, visibility
 
 
 def _req_expr(model: str, span: float, chromatography_mode: str | None = None) -> str:
@@ -394,10 +402,16 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     plw_panels = [_step_panel("plw", i, "Post-load wash") for i in range(1, MAX_PLW_STEPS + 1)]
     el_panels = [_step_panel("el", i, "Elution") for i in range(1, MAX_ELUTION_STEPS + 1)]
 
-    ref_bodies, ref_sends, ref_vis = [], [], []
-    for k in range(1, MAX_LSQ_REFERENCE_POINTS + 1):
-        b, s, v = _lsq_reference_panel(k)
-        ref_bodies.append(b); ref_sends.extend(s); ref_vis.append(v)
+    ref_table, ref_vis = _lsq_reference_table()
+    mass_header_updates = []
+    for i in range(1, 2 + MAX_IMPURITIES):
+        role = "Target" if i == 1 else f"Impurity {i-1}"
+        mass_header_updates.extend([
+            f'speciesName = Trim(Char(c{i}Name << Get Text));',
+            f'If(speciesName == "", speciesName = {_q(role)});',
+            f'lsqMassHeaderC{i} << Set Text(speciesName || " mass%");',
+            f'lsqMassColumnC{i} << Visibility(If({1 if i == 1 else f"impurityCount >= {i-1}"}, "Visible", "Collapse"));',
+        ])
     mass_save_rows, mass_load_rows = [], []
     mass_numeric_columns = "\n".join(
         f'Column(dtLSQMass, {_q(field)}) << Data Type(Numeric);'
@@ -1161,7 +1175,7 @@ ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r,
     If(mn > mx, 0, mx - mn)
 );
 
-UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLangmuir, isWang, isHIC, plwCount, elutionCount, stepMode, stepControl, startPct, endPct, startSalt, endSalt, activeStart, activeEnd, batchPHSpan, fitPHSpan, reqText, lsqUsesComposition, lsqRefCount, loadSaltValue, loadSourceLabel, stationaryFraction, nominalCapacity, targetDose}},
+UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLangmuir, isWang, isHIC, plwCount, elutionCount, stepMode, stepControl, startPct, endPct, startSalt, endSalt, activeStart, activeEnd, batchPHSpan, fitPHSpan, reqText, lsqUsesComposition, lsqRefCount, loadSaltValue, loadSourceLabel, stationaryFraction, nominalCapacity, targetDose, speciesName}},
     modelLabel = Char(modelBox << Get Selected);
     loadVolumeSummary << Set Text("Capacity: " || Char(loadDensity << Get) || " g/L resin; required feed volume: " || Char(loadVolumeML << Get) || " mL (" || Char(loadCV << Get) || " CV)");
     SyncLangmuirDerived();
@@ -1237,6 +1251,7 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     lsqTargetRunRow << Visibility(If(lsqUsesComposition, "Visible", "Collapse"));
     lsqCompositionPanel << Visibility(If(lsqUsesComposition, "Visible", "Collapse"));
     lsqRefCount = Num(lsqReferenceCountBox << Get Selected); If(Is Missing(lsqRefCount), lsqRefCount = 1);
+    {''.join(mass_header_updates)}
     {''.join(ref_vis)}
 );
 
@@ -1519,8 +1534,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     lsqMassEditorStatus = Text Box("", << Set Wrap(740)),
                     Text Box("Each LSQ run keeps its own fraction table. Choose the run above, then enter fraction start and end in CV or mL from run start. The midpoint is compared with that run's model species mass%. Blank cells create gaps; 0 is a measured zero.", << Set Wrap(740)),
                     H List Box(Text Box("Fraction rows [1-30]", << Set Width(240)), lsqReferenceCountBox = Combo Box({ref_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI()))), Text Box("Fraction axis"), lsqFractionUnit = Combo Box({{"CV", "mL"}}, << Set(1), << Set Width(90))),
-                    H List Box(Text Box("#", << Set Width(35)), Text Box("Start", << Set Width(85)), Text Box("End", << Set Width(85)), Text Box("Target %", << Set Width(78)), Text Box("Imp 1 %", << Set Width(78)), Text Box("Imp 2 %", << Set Width(78)), Text Box("Imp 3 %", << Set Width(78)), Text Box("Imp 4 %", << Set Width(78)), Text Box("Imp 5 %", << Set Width(78))),
-                    {', '.join(ref_bodies)}
+                    {ref_table}
                 ))
             )),
             "Run / Results",

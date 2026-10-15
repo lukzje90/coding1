@@ -17,6 +17,35 @@ from verify_model import make_config
 
 
 class FractionMassTests(unittest.TestCase):
+    def test_fraction_headers_follow_model_species_names_and_share_input_columns(self):
+        cfg = make_config(MODEL_EDM_LANGMUIR, 5, multistep=False)
+        cfg["components"][0]["name"] = "Product A"
+        cfg["components"][1]["name"] = "Acidic variant"
+        jsl = build_jsl(cfg)
+        _validate_jsl(jsl)
+        self.assertIn('c1Name = Text Edit Box("Product A", << Set Width(150), << Set Function', jsl)
+        self.assertIn('c2Name = Text Edit Box("Acidic variant", << Set Width(150), << Set Function', jsl)
+        for i in range(1, 7):
+            self.assertIn(f'speciesName = Trim(Char(c{i}Name << Get Text));', jsl)
+            self.assertIn(f'lsqMassHeaderC{i} << Set Text(speciesName || " mass%");', jsl)
+            self.assertIn(f'lsqMassColumnC{i} = V List Box(lsqMassHeaderC{i} = Text Box', jsl)
+            column = jsl.split(f'lsqMassColumnC{i} = V List Box(', 1)[1].split('\n)', 1)[0]
+            self.assertIn(f'lsqR1C{i}Mass = Number Edit Box', column)
+            self.assertIn(f'lsqR30C{i}Mass = Number Edit Box', column)
+            self.assertLess(column.index(f'lsqMassHeaderC{i} = Text Box'),
+                            column.index(f'lsqR1C{i}Mass = Number Edit Box'))
+            field = "Target_mass_percent" if i == 1 else f"Impurity{i - 1}_mass_percent"
+            self.assertIn(f'Column(dtLSQMass, "{field}")[massRow + 0] = lsqR1C{i}Mass << Get;', jsl)
+        self.assertIn('lsqMassColumnC6 << Visibility(If(impurityCount >= 5, "Visible", "Collapse"))', jsl)
+        with patch.dict(tdm_bridge.__dict__, {
+            "tdm_ui_lsq_reference_count": 1, "tdm_ui_lsq_r1_start": 0.2,
+            "tdm_ui_lsq_r1_end": 0.3, "tdm_ui_lsq_r1_c1_mass_percent": 70,
+            "tdm_ui_lsq_r1_c2_mass_percent": 30,
+        }):
+            references = tdm_bridge._composition_references_from_jmp(cfg)
+        self.assertEqual(references[0]["mass_percent"]["Product A"], 70)
+        self.assertEqual(references[0]["mass_percent"]["Acidic variant"], 30)
+
     def test_bridge_alignment_preview_contains_dotted_impurity_profile(self):
         cfg = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
         cfg["numerics"].update(time_steps=50, axial_positions=6)
