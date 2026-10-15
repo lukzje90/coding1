@@ -494,7 +494,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
             H List Box(Text Box("X = 0 at", << Set Width(180)), lsqXOrigin{slot} = Combo Box({{"RUN_START", "ELUTION_START"}}, << Set(1), << Set Width(170))),
             H List Box(Text Box("Use this run's fraction mass%", << Set Width(180)), lsqMassEnabled{slot} = Combo Box({{"Off", "On"}}, << Set(1), << Set Width(100), << Set Function(Function({{this}}, If(!isLoading, UpdateLSQRunSummary()))))),
             H List Box(Text Box("Fit measured conductivity", << Set Width(180)), lsqConductivityFit{slot} = Combo Box({{"Off", "On"}}, << Set(1), << Set Width(100))),
-            H List Box(Button Box("Attach Excel / CSV", AttachLSQCSV({slot})), Button Box("Edit process recipe", SwitchProcessScope(1, RunNumberFromLabel(lsqRunSlot{slot} << Get Selected)); mainTabs << Set(1))),
+            H List Box(Button Box("Attach Excel / CSV", AttachLSQCSV({slot})), Button Box("Edit process recipe", SwitchProcessScope(1, RunNumberFromLabel(lsqRunSlot{slot} << Get Selected)); mainTabs << Set(1)), Button Box("Preview this run", PreviewLSQSlot({slot}))),
             Outline Box("Optional columns and weight", << Close(1), V List Box(
                 H List Box(Text Box("Excel worksheet", << Set Width(180)), lsqSheet{slot} = Text Edit Box("", << Set Width(380))),
                 H List Box(Text Box("X column", << Set Width(180)), lsqXColumn{slot} = Text Edit Box("", << Set Width(380))),
@@ -765,7 +765,7 @@ batchSummary = {_path(BATCH_SUMMARY_CSV)};
 lsqApplyFile = {_path(LSQ_APPLY_JSL)};
 lsqReport = {_path(LSQ_REPORT_HTML)};
 lsqPreviewReport = {_path(LSQ_ALIGNMENT_HTML)};
-currentRun = 1; copiedRun = 0; isLoading = 1; isLSQSetup = 0; lsqMassEditorRun = 1;
+currentRun = 1; copiedRun = 0; isLoading = 1; isLSQSetup = 0; lsqMassEditorRun = 1; lsqPreviewRun = 0;
 dtBatchRuns = Open(batchRunsFile, Invisible);
 dtLSQRuns = Open(lsqRunsFile, Invisible);
 dtLSQMass = Open(lsqMassFile, Invisible);
@@ -1241,6 +1241,7 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     Python Send(lsqModeBox << Get Selected, Python Name("tdm_ui_lsq_mode"));
     Python Send(lsqRunCount << Get Selected, Python Name("tdm_ui_lsq_run_count"));
     {''.join(lsq_selection_sends)}
+    Python Send(If(actionText == "PREVIEW_LSQ_ALIGNMENT", lsqPreviewRun, 0), Python Name("tdm_ui_lsq_preview_run"));
     Python Send(LSQPathText(lsqAttachSlot), Python Name("tdm_ui_lsq_csv_path"));
     Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot], RunNumberFromLabel(lsqTargetRunSelector << Get Selected)), Python Name("tdm_ui_lsq_target_run"));
     Python Send(projectDir, Python Name("tdm_project_dir"));
@@ -1260,6 +1261,12 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     If(actionText == "FIT_LSQ" & Contains(statusValue, "Accepted/applied to shared batch parameters: True") > 0 & File Exists(lsqApplyFile), Eval(Parse(Load Text File(lsqApplyFile))));
     If(actionText == "PREVIEW_LSQ_ALIGNMENT" & Contains(statusValue, "LSQ_ALIGNMENT_READY:") > 0 & File Exists(lsqPreviewReport), Web(lsqPreviewReport));
     UpdateUI();
+);
+
+PreviewLSQSlot = Function({{slot}}, {{}},
+    lsqPreviewRun = LSQSelectedRun(slot);
+    SendAndRun("PREVIEW_LSQ_ALIGNMENT");
+    lsqPreviewRun = 0;
 );
 
 OpenAlignmentPreview = Function({{}}, {{}},
@@ -1476,7 +1483,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     ))
                 )),
                 H List Box(
-                    Button Box("Preview UV, conductivity and mass%", SendAndRun("PREVIEW_LSQ_ALIGNMENT")),
+                    Button Box("Preview UV, conductivity and mass%", lsqPreviewRun = 0; SendAndRun("PREVIEW_LSQ_ALIGNMENT")),
                     Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ"))
                 ),
                 H List Box(Button Box("Open alignment preview", OpenAlignmentPreview()), Button Box("Open fit report", OpenFitReport())),
@@ -1639,6 +1646,8 @@ def _validate_jsl(jsl: str) -> None:
     for slot in range(1, MAX_LSQ_PROFILES + 1):
         if f'Button Box("Attach Excel / CSV", AttachLSQCSV({slot}))' not in jsl:
             raise ValueError(f"LSQ run section {slot} must call its own attachment handler")
+        if f'Button Box("Preview this run", PreviewLSQSlot({slot}))' not in jsl:
+            raise ValueError(f"LSQ run section {slot} must preview its own selected run")
         if f'Return(RunNumberFromLabel(lsqRunSlot{slot} << Get Selected))' not in jsl:
             raise ValueError(f"LSQ run section {slot} must read its selector directly")
         if f'lsqCsvPath{slot} << Set Text(path)' not in jsl:

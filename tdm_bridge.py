@@ -358,9 +358,29 @@ def _selected_lsq_profile_rows(rows=None):
         row = rows[number - 1]
         path = str(row.get("LSQ_Chromatogram_CSV") or "").strip()
         if not path:
-            raise ValueError(f"Selected least-squares Run {number} has no attached chromatogram CSV.")
+            raise ValueError(f"Selected least-squares Run {number} has no attached Excel / CSV chromatogram.")
         selected.append((number, row, path))
     return selected
+
+
+def _preview_lsq_profile_rows(rows: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any], str]]:
+    """Use exactly the LSQ run requested by a section's preview button."""
+    raw = _text("tdm_ui_lsq_preview_run")
+    if not raw:
+        return _selected_lsq_profile_rows(rows)
+    number = _num("tdm_ui_lsq_preview_run")
+    if number == 0:
+        return _selected_lsq_profile_rows(rows)
+    if number is None or number != int(number) or not 1 <= number <= MAX_LSQ_PROFILES:
+        raise ValueError(f"Preview run must be an integer from 1 to {MAX_LSQ_PROFILES}.")
+    run_number = int(number)
+    if _num("tdm_ui_lsq_run_count") is not None and run_number not in _selected_lsq_run_numbers():
+        raise ValueError(f"LSQ Run {run_number} is not selected for preview.")
+    row = rows[run_number - 1]
+    path = str(row.get("LSQ_Chromatogram_CSV") or "").strip()
+    if not path:
+        raise ValueError(f"LSQ Run {run_number} has no attached Excel / CSV chromatogram.")
+    return [(run_number, row, path)]
 
 
 def _lsq_unlocked_paths_from_jmp() -> set[str] | None:
@@ -595,7 +615,8 @@ def main() -> int:
             # choices paired even if the source files are edited externally.
             lsq_rows = load_lsq_rows()
             batch_rows = load_batch_rows()
-            profile_rows = _selected_lsq_profile_rows(lsq_rows)
+            profile_rows = (_preview_lsq_profile_rows(lsq_rows) if action == "PREVIEW_LSQ_ALIGNMENT"
+                            else _selected_lsq_profile_rows(lsq_rows))
             if not profile_rows:
                 raise ValueError("Attach at least one UV chromatogram to a selected LSQ run first.")
             if len(profile_rows) > MAX_LSQ_PROFILES:
@@ -631,13 +652,14 @@ def main() -> int:
                         profile["composition_references"] = refs
                         enabled_mass_runs.append(profile_run_number)
                 profiles.append(profile)
-            if mode == "CHROMATOGRAM_AND_COMPOSITION" and not enabled_mass_runs:
+            if action == "FIT_LSQ" and mode == "CHROMATOGRAM_AND_COMPOSITION" and not enabled_mass_runs:
                 raise ValueError("Turn on fraction mass% for at least one selected LSQ run and enter its observations.")
             if action == "PREVIEW_LSQ_ALIGNMENT":
                 from tdm_least_squares import preview_lsq_alignment
                 preview = preview_lsq_alignment(profiles)
                 summary = "\n".join(
-                    f"LSQ Run {item['run_number']} — {item['run_name']} vs {item['model_run_label']}: "
+                    f"LSQ Run {item['run_number']} — {item['run_name']} vs {item['model_run_label']}; "
+                    f"file {item['source_path']} [{item['sheet_name']}]: "
                     f"{item['sample_points']} UV samples, measured {item['measured_start_CV']:.5g}–"
                     f"{item['measured_end_CV']:.5g} CV, programmed end {item['programmed_end_CV']:.5g} CV; "
                     f"pre-fit UV RMSE {item['uv_rmse_mAU']:.5g} mAU; "

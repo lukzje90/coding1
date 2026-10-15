@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24k)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24l)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -37,9 +37,11 @@ Model Parameters. JMP imports both process tables' numeric fields explicitly,
 including blank salt and ion cells, so editing a run cannot assign a number
 to a character column.
 
-Before least-squares refinement, click "Preview UV, conductivity and mass%" in the
-Least-Squares Refinement tab. It opens a separate HTML overlay for every
-selected LSQ run. In each run section, choose "Model run for UV comparison":
+Before least-squares refinement, click "Preview this run" in an LSQ run
+section to simulate and display only that run. The main "Preview UV,
+conductivity and mass%" button previews all selected runs; the report's
+run picker displays one alignment at a time. In each run section, choose
+"Model run for UV comparison":
 the independent LSQ recipe or any saved normal batch Run 1–30. The measured
 UV file stays attached to its LSQ profile. Both preview and refinement read
 the current saved recipe for the chosen model run and reread the UV file each
@@ -48,8 +50,9 @@ The plot and baseline policy use the same
 calculation as the fit. Preview runs one simulation per selected run and does
 not optimize or change fitted parameters. It reports the measured CV span,
 programmed end CV and pre-fit UV RMSE so axis or recipe mismatch can be fixed
-before a long refinement. The report names the model run and UV file for each
-profile. "Open alignment preview" reopens the last preview. Existing saved LSQ
+before a long refinement. The report names the model run, process stages,
+column volume, attached file, and actual Excel worksheet for each profile.
+"Open alignment preview" reopens the last preview. Existing saved LSQ
 profiles retain their independent recipe choice. If no LSQ run table exists,
 the newly generated first ten profiles default to the corresponding normal
 batch runs.

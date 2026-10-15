@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+from openpyxl import Workbook
 
 from tdm_jmp import _validate_jsl, build_jsl
 import tdm_bridge
@@ -220,6 +221,12 @@ class AlignmentPreviewTests(unittest.TestCase):
             self.assertIn("Predicted UV", markup)
             self.assertIn("Elution only", markup)
             self.assertIn("mL full run", markup)
+            self.assertIn('id="lsq-preview-run-picker"', markup)
+            self.assertIn('data-run="1"', markup)
+            self.assertIn('data-run="2" hidden', markup)
+            self.assertIn(str(first_csv), markup)
+            self.assertIn(str(second_csv), markup)
+            self.assertIn("<b>Process setup:</b> column volume", markup)
             self.assertFalse((root / "least_squares_fit_report.html").exists())
         self.assertEqual(first, original_first)
         self.assertEqual(second, original_second)
@@ -239,7 +246,9 @@ class AlignmentPreviewTests(unittest.TestCase):
     def test_jmp_has_a_separate_preview_action_and_report(self):
         jsl = build_jsl(load_config())
         _validate_jsl(jsl)
-        self.assertIn('Button Box("Preview UV, conductivity and mass%", SendAndRun("PREVIEW_LSQ_ALIGNMENT"))', jsl)
+        self.assertIn('Button Box("Preview UV, conductivity and mass%", lsqPreviewRun = 0; SendAndRun("PREVIEW_LSQ_ALIGNMENT"))', jsl)
+        self.assertEqual(jsl.count('Button Box("Preview this run", PreviewLSQSlot('), 10)
+        self.assertIn('Python Name("tdm_ui_lsq_preview_run")', jsl)
         self.assertIn('Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ"))', jsl)
         self.assertIn('If(actionText == "PREVIEW_LSQ_ALIGNMENT" & Contains(statusValue, "LSQ_ALIGNMENT_READY:")', jsl)
         self.assertIn('Button Box("Open alignment preview", OpenAlignmentPreview())', jsl)
@@ -247,6 +256,89 @@ class AlignmentPreviewTests(unittest.TestCase):
         self.assertIn('Column(dtLSQRuns, "LSQ_Model_Source")[r] = If(modelChoice', jsl)
         self.assertIn('Column(dtLSQRuns, "LSQ_Model_Run_Number")[r] = If(modelChoice', jsl)
         self.assertIn('modelChoice = LSQModelRunSelected(slot);', jsl)
+
+    def test_section_preview_uses_its_own_recipe_and_excel_file(self):
+        shared = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        shared["numerics"].update(time_steps=50, axial_positions=6)
+        lsq_rows = [default_batch_row(i) for i in range(1, 11)]
+        batch_rows = [default_batch_row(i) for i in range(1, 31)]
+        for number, load, elution in ((2, 0.4, 0.2), (4, 0.5, 0.4)):
+            lsq_rows[number - 1].update(
+                Run_Name=f"Reference {number}", Load_CV=load, PLW_Count=0,
+                Elution_Count=1, Elution1_CV=elution, Time_Steps=50,
+                Axial_Positions=6, LSQ_Model_Source=LSQ_MODEL_SOURCE_INDEPENDENT,
+                LSQ_Sheet=f"Measured {number}", LSQ_X_Column="CV",
+                LSQ_Signal_Column="UV 280 [mAU]",
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "alignment.html"
+
+            def write_excel(number):
+                path = root / f"run_{number}.xlsx"
+                workbook = Workbook()
+                decoy = workbook.active
+                decoy.title = "Decoy"
+                decoy.append(["CV", "UV 280 [mAU]"])
+                for cv in (0, 0.1, 0.2, 0.3, 0.4):
+                    decoy.append([cv, 100])
+                measured = workbook.create_sheet(f"Measured {number}")
+                measured.append(["CV", "UV 280 [mAU]"])
+                for cv in (0, 0.1, 0.2, 0.3, 0.4):
+                    measured.append([cv, number])
+                workbook.save(path)
+                return path
+
+            path_2 = write_excel(2)
+            path_4 = write_excel(4)
+            lsq_rows[1]["LSQ_Chromatogram_CSV"] = str(path_2)
+            actual_preview = lsq.preview_lsq_alignment
+            previews = []
+
+            def capture_preview(profiles):
+                result = actual_preview(profiles, output_html=report)
+                previews.append(result)
+                return result
+
+            ui = {
+                "tdm_ui_action": "PREVIEW_LSQ_ALIGNMENT",
+                "tdm_ui_lsq_run_count": 2,
+                "tdm_ui_lsq_selected_run_1": 2,
+                "tdm_ui_lsq_selected_run_2": 4,
+                "tdm_ui_lsq_preview_run": 2,
+                "tdm_ui_lsq_mode": "Normal least-squares: chromatogram only",
+            }
+            with patch.dict(tdm_bridge.__dict__, ui), \
+                 patch.object(tdm_bridge, "build_shared_config_from_jmp", return_value=shared), \
+                 patch.object(tdm_bridge, "_effective_run", return_value=shared), \
+                 patch.object(tdm_bridge, "load_lsq_rows", return_value=lsq_rows), \
+                 patch.object(tdm_bridge, "load_batch_rows", return_value=batch_rows), \
+                 patch.object(tdm_bridge, "BATCH_COUNT_FILE", root / "batch_count.txt"), \
+                 patch.object(tdm_bridge, "save_config"), \
+                 patch.object(tdm_bridge, "_write_status"), \
+                 patch.object(lsq, "preview_lsq_alignment", side_effect=capture_preview):
+                # Another selected run need not have a file to preview Run 2.
+                self.assertEqual(tdm_bridge.main(), 0)
+                first = previews[-1]["profiles"]
+                self.assertEqual(len(first), 1)
+                self.assertEqual(first[0]["run_number"], 2)
+                self.assertEqual(first[0]["source_path"], str(path_2))
+                self.assertEqual(first[0]["sheet_name"], "Measured 2")
+                self.assertAlmostEqual(first[0]["programmed_end_CV"], 0.6)
+                self.assertEqual(report.read_text().count('class="lsq-preview-run"'), 1)
+
+                lsq_rows[3]["LSQ_Chromatogram_CSV"] = str(path_4)
+                tdm_bridge.tdm_ui_lsq_preview_run = 4
+                self.assertEqual(tdm_bridge.main(), 0)
+                second = previews[-1]["profiles"]
+                self.assertEqual(len(second), 1)
+                self.assertEqual(second[0]["run_number"], 4)
+                self.assertEqual(second[0]["source_path"], str(path_4))
+                self.assertEqual(second[0]["sheet_name"], "Measured 4")
+                self.assertAlmostEqual(second[0]["programmed_end_CV"], 0.9)
+                self.assertIn("Reference 4", report.read_text())
+                self.assertNotIn(str(path_2), report.read_text())
 
     def test_bridge_preview_action_does_not_start_optimizer(self):
         shared = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)

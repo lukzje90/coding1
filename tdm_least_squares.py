@@ -90,6 +90,7 @@ class ChromatogramReference:
     conductivity_cv: np.ndarray | None = None
     conductivity_signal: np.ndarray | None = None
     conductivity_column: str | None = None
+    sheet_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -202,7 +203,7 @@ def _resolve_chromatogram_path(path: Path | str) -> Path:
     )
 
 
-def _read_numeric_rows(path: Path, *, sheet_name: str | None = None) -> tuple[list[str], list[dict[str, str]]]:
+def _read_numeric_rows(path: Path, *, sheet_name: str | None = None) -> tuple[list[str], list[dict[str, str]], str | None]:
     if not path.is_file():
         raise FileNotFoundError(f"Chromatogram file not found: {path}")
     if path.suffix.lower() in {".xlsx", ".xlsm"}:
@@ -235,10 +236,10 @@ def _read_numeric_rows(path: Path, *, sheet_name: str | None = None) -> tuple[li
                 except ValueError:
                     continue
                 if best is None or count > best[0]:
-                    best = (count, fields, rows)
+                    best = (count, fields, rows, sheet.title)
             if best is None:
                 raise ValueError("No worksheet has at least three numeric chromatogram samples; use headered CV/time and signal columns.")
-            return best[1], best[2]
+            return best[1], best[2], best[3]
         finally:
             workbook.close()
     if path.suffix.lower() == ".xls":
@@ -271,7 +272,8 @@ def _read_numeric_rows(path: Path, *, sheet_name: str | None = None) -> tuple[li
             "include UTF-8, UTF-16/UTF-32 with a byte-order mark, and Windows-1252."
         ) from last_decode_error
 
-    return _read_numeric_rows_text(text)
+    fields, rows = _read_numeric_rows_text(text)
+    return fields, rows, None
 
 
 def _read_numeric_rows_text(text: str) -> tuple[list[str], list[dict[str, str]]]:
@@ -511,7 +513,7 @@ def inspect_chromatogram_csv(path: Path | str, *, sheet_name: str | None = None,
                              require_uv: bool = False, fit_conductivity: bool = False,
                              conductivity_column: str | None = None) -> dict[str, Any]:
     p = _resolve_chromatogram_path(path)
-    fields, rows = _read_numeric_rows(p, sheet_name=sheet_name)
+    fields, rows, actual_sheet = _read_numeric_rows(p, sheet_name=sheet_name)
     x_field, signal_field, unit = _select_columns(fields, rows, x_column=x_column, signal_column=signal_column, x_unit=x_unit)
     if require_uv:
         _uv_reference_scale(signal_field, signal_column)
@@ -536,7 +538,7 @@ def inspect_chromatogram_csv(path: Path | str, *, sheet_name: str | None = None,
         "signal_column": signal_field,
         "x_unit": unit,
         "x_origin": origin,
-        "sheet_name": sheet_name or "auto",
+        "sheet_name": actual_sheet or "CSV",
         "columns": fields,
         "x_axis_assumption": assumption,
         "weight_column": _weight_column(fields),
@@ -608,7 +610,7 @@ def load_chromatogram_reference(path: Path | str, config: dict[str, Any], *,
                                 fit_conductivity: bool = False,
                                 conductivity_column: str | None = None) -> ChromatogramReference:
     p = _resolve_chromatogram_path(path)
-    fields, rows = _read_numeric_rows(p, sheet_name=sheet_name)
+    fields, rows, actual_sheet = _read_numeric_rows(p, sheet_name=sheet_name)
     x_field, signal_field, unit = _select_columns(fields, rows, x_column=x_column, signal_column=signal_column, x_unit=x_unit)
     signal_scale = _uv_reference_scale(signal_field, signal_column) if require_uv else 1.0
     cond_field = _conductivity_column(fields, rows, conductivity_column, fit_conductivity)
@@ -686,7 +688,7 @@ def load_chromatogram_reference(path: Path | str, config: dict[str, Any], *,
         cond_signal = cond_arr[:, 1]
         if not np.all(np.isfinite(cond_cv) & np.isfinite(cond_signal)):
             raise ValueError("Conductivity reference contains non-finite converted values.")
-    return ChromatogramReference(cv=cv, signal=y, x_column=display_x_field, signal_column=signal_field, x_unit=unit, source_path=str(p), x_axis_assumption=assumption, point_weights=weights, weight_column=weights_field, conductivity_cv=cond_cv, conductivity_signal=cond_signal, conductivity_column=cond_field)
+    return ChromatogramReference(cv=cv, signal=y, x_column=display_x_field, signal_column=signal_field, x_unit=unit, source_path=str(p), x_axis_assumption=assumption, point_weights=weights, weight_column=weights_field, conductivity_cv=cond_cv, conductivity_signal=cond_signal, conductivity_column=cond_field, sheet_name=actual_sheet)
 
 
 def _reference_row_weight(row: dict[str, str], weight_field: str | None) -> float:
@@ -1187,6 +1189,7 @@ def preview_lsq_alignment(
     if not 1 <= len(profiles) <= MAX_LSQ_PROFILES:
         raise ValueError(f"Alignment preview requires 1–{MAX_LSQ_PROFILES} selected LSQ runs.")
     sections: list[str] = []
+    choices: list[str] = []
     metrics: list[dict[str, Any]] = []
     for index, profile in enumerate(profiles, start=1):
         config = normalize_config(profile["config"])
@@ -1215,7 +1218,12 @@ def preview_lsq_alignment(
         predicted = np.asarray(chrom["predicted_detector_signal"], dtype=float)
         measured = np.asarray(chrom["measured"], dtype=float)
         rmse = float(np.sqrt(np.mean((predicted - measured) ** 2)))
-        program_end = float(info["result"]["simulation"]["program"].total_CV)
+        program = info["result"]["simulation"]["program"]
+        program_end = float(program.total_CV)
+        stage_receipt = "; ".join(
+            f"{stage.name}: {program.stage_start_CV[i]:.6g}–{program.stage_end_CV[i]:.6g} CV"
+            for i, stage in enumerate(program.stages)
+        )
         metric = {
             "run_number": run_number,
             "run_name": run_name,
@@ -1233,13 +1241,25 @@ def preview_lsq_alignment(
             "x_axis_assumption": reference.x_axis_assumption or "RUN_START",
             "signal_column": reference.signal_column,
             "source_path": str(Path(source).resolve()),
+            "sheet_name": reference.sheet_name or "CSV",
+            "column_volume_mL": float(program.column_volume_mL),
+            "stage_receipt": stage_receipt,
         }
         metrics.append(metric)
+        choices.append(
+            f'<option value="{html.escape(str(run_number), quote=True)}">'
+            f'LSQ Run {html.escape(str(run_number))}: {html.escape(run_name)}</option>'
+        )
         sections.append(
-            f"<h2>LSQ Run {html.escape(str(run_number))}: {html.escape(run_name)}</h2>"
+            f'<section class="lsq-preview-run" data-run="{html.escape(str(run_number), quote=True)}"'
+            + (' hidden>' if index > 1 else '>')
+            + f"<h2>LSQ Run {html.escape(str(run_number))}: {html.escape(run_name)}</h2>"
             f"<p><b>Model UV recipe:</b> {html.escape(metric['model_run_label'])} — "
             f"{html.escape(metric['model_run_name'])}. The model was simulated from the saved recipe for this preview.</p>"
-            f"<p><b>Measured UV:</b> {html.escape(metric['source_path'])}<br>"
+            f"<p><b>Process setup:</b> column volume {metric['column_volume_mL']:.6g} mL; "
+            f"{html.escape(stage_receipt)}.</p>"
+            f"<p><b>Attached Excel / CSV:</b> {html.escape(metric['source_path'])}; "
+            f"<b>worksheet:</b> {html.escape(metric['sheet_name'])}<br>"
             f"<b>Axis:</b> {html.escape(reference.x_column)} [{html.escape(reference.x_unit)}], "
             f"{html.escape(metric['x_axis_assumption'])}; "
             f"<b>signal:</b> {html.escape(reference.signal_column)}<br>"
@@ -1256,13 +1276,15 @@ def preview_lsq_alignment(
                + f"<p>{sum(len(row['mass_percent']) for row in comp_refs)} entered species observations. "
                  "Only populated midpoint cells contribute to refinement; smooth curves are display-only.</p>"
                if comp_refs else "")
+            + "</section>"
         )
     output_path = Path(output_html)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         '<!doctype html><meta charset="utf-8"><title>Pre-refinement UV alignment</title>'
         '<style>body{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}'
-        'svg{display:block;width:100%;height:auto}h2{margin-top:2rem}</style>'
+        'svg{display:block;width:100%;height:auto}h2{margin-top:2rem}'
+        '[hidden]{display:none!important}select{font-size:1rem;padding:.4rem;margin:.4rem}</style>'
         '<h1>Measured versus model UV before refinement</h1>'
         '<p>These are the current model parameters and selected saved model-run recipes. '
         'No optimizer was run and no fitted parameters were changed. Measured UV is displayed '
@@ -1270,7 +1292,13 @@ def preview_lsq_alignment(
         'every imported sample still enters the least-squares calculation. Predicted UV spans the complete programmed run. '
         'The selected detector-baseline policy is applied exactly as it is during refinement. '
         'If fraction mass% is entered, the preview shows midpoint observations and current model predictions. No fitting occurs in blank cells or between points.</p>'
-        + ''.join(sections), encoding="utf-8",
+        '<label for="lsq-preview-run-picker">View LSQ run:</label>'
+        '<select id="lsq-preview-run-picker">' + ''.join(choices) + '</select>'
+        + ''.join(sections)
+        + '<script>const picker=document.getElementById("lsq-preview-run-picker");'
+          'function showRun(){document.querySelectorAll(".lsq-preview-run").forEach(section=>'
+          '{section.hidden=section.dataset.run!==picker.value;});}'
+          'picker.addEventListener("change",showRun);showRun();</script>', encoding="utf-8",
     )
     return {"report_html": str(output_path), "profiles": metrics}
 
@@ -1978,7 +2006,7 @@ def run_global_least_squares_refinement(
             "run_context": context,
             "weight": profile_weight,
             "x_origin": _validate_x_origin(profile.get("x_origin"), ref.x_unit),
-            "sheet_name": profile.get("sheet_name") or "auto",
+            "sheet_name": ref.sheet_name or "CSV",
         })
 
     if mode == MODE_CHROMATOGRAM_AND_COMPOSITION and not any(p["composition_references"] for p in normalized_profiles):
@@ -2317,7 +2345,7 @@ def run_global_least_squares_refinement(
                 "x_unit": p["reference"].x_unit,
                 "x_origin": p["x_origin"],
                 "x_axis_assumption": p["reference"].x_axis_assumption,
-                "selected_sheet": p.get("sheet_name", "auto"),
+                "selected_sheet": p["reference"].sheet_name or "CSV",
                 "composition_references": p["composition_references"],
                 "run_weight": p["weight"], "point_weight_column": p["reference"].weight_column,
                 "recipe": p["config"],
