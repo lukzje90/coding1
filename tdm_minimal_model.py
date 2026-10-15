@@ -40,6 +40,7 @@ from tdm_minimal_io import (
     normalize_load_amount_basis,
     process_pH_span,
     resolve_process_chemistry,
+    resolve_initial_equilibration_chemistry,
     salt_input_mode,
     uses_cpa,
     uses_edm,
@@ -118,6 +119,7 @@ class ProgramStage:
 class StageProgram:
     column_volume_mL: float
     stages: list[ProgramStage]
+    initial_chemistry: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.stage_start_time_s: list[float] = []
@@ -641,7 +643,28 @@ def _build_program(config: dict[str, Any], feed_vector: np.ndarray) -> StageProg
                 start_percent_B=(float(start_B) if control == "BUFFER_B_PERCENT" and start_B is not None else None),
                 end_percent_B=(float(end_B) if control == "BUFFER_B_PERCENT" and end_B is not None else None),
             ))
-    return StageProgram(column_volume_mL=Vcol, stages=stages)
+    program = StageProgram(column_volume_mL=Vcol, stages=stages)
+    initial_env = resolve_initial_equilibration_chemistry(config)
+    if initial_env is None:
+        pH, salt, ionic, conductivity, _ = program.chemistry_at_cv(0.0)
+        source = "MATCH_LOAD"
+        percent_B = program.percent_B_at_cv(0.0)
+    else:
+        pH = initial_env["pH"]
+        salt = initial_env["salt_concentration_M"]
+        ionic = initial_env["ionic_strength_M"]
+        conductivity = initial_env["conductivity_mS_cm"]
+        source = str(initial_env["source"])
+        percent_B = 0.0 if source == "BUFFER_A" else 100.0 if source == "BUFFER_B" else float("nan")
+    program.initial_chemistry = {
+        "source": source,
+        "pH": float(pH),
+        "salt_concentration_M": float(salt),
+        "ionic_strength_M": float(ionic),
+        "conductivity_mS_cm": float(conductivity),
+        "percent_B": float(percent_B) if math.isfinite(percent_B) else None,
+    }
+    return program
 
 
 def _langmuir_arrays(config: dict[str, Any]) -> tuple[list[dict[str, Any]], np.ndarray, np.ndarray]:
@@ -1649,6 +1672,7 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
     nominal_saturation = _nominal_langmuir_saturation(config)
     parameter_receipt = {
         "required_inputs_used": required_parameter_values(config),
+        "initial_equilibration_used": dict(program.initial_chemistry or {}),
         "derived_species_feed_concentration_mg_mL": {
             str(r["name"]): float(config["feed"]["total_concentration_mg_mL"]) * float(r["mass_percent"]) / 100.0
             for r in active_components(config)
@@ -1685,7 +1709,7 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
     sim["diagnostics"]["batch_shared_parameter_fingerprint"] = parameter_receipt["batch_shared_parameter_fingerprint"]
     sim["diagnostics"]["chromatography_mode"] = config["chromatography_mode"]
     sim["diagnostics"]["system_response"] = dict(config["system"])
-    sim["diagnostics"]["column_salt_transport"] = "stirred upstream buffer volume; conservative axial transport; TDM salt fully pore-accessible; column initially equilibrated to effective load chemistry"
+    sim["diagnostics"]["column_salt_transport"] = "stirred upstream buffer volume; conservative axial transport; TDM salt fully pore-accessible; initial column and mixer chemistry follows this run's initial equilibration source"
     sim["diagnostics"]["binding_chemistry"] = ("Analytical salt molarity [M]" if is_hic(config) or uses_langmuir(model)
                                                else "Ionic strength [M]")
     sim["diagnostics"]["target_peak"] = target_peak
@@ -2054,6 +2078,14 @@ def write_outputs(
     derived = html.escape(json.dumps(derived_input_summary(config), indent=2))
     diagnostics = html.escape(json.dumps(result["simulation"]["diagnostics"], indent=2))
     parameter_receipt = html.escape(json.dumps(result.get("parameter_receipt", {}), indent=2, ensure_ascii=False))
+    initial = program.initial_chemistry or {}
+    initial_html = (
+        f"<p><b>Initial column equilibration:</b> {html.escape(str(initial.get('source', 'MATCH_LOAD')))}; "
+        f"pH {float(initial.get('pH', 0)):.6g}; salt {float(initial.get('salt_concentration_M', 0)):.6g} M; "
+        f"ionic strength {float(initial.get('ionic_strength_M', 0)):.6g} M; "
+        f"conductivity {float(initial.get('conductivity_mS_cm', 0)):.6g} mS/cm. "
+        "The incoming load chemistry displaces this initial liquid through the mixer, column and TDM pores.</p>"
+    )
     buffer_rows = "".join(
         "<tr>" + "".join(f"<td>{html.escape(str(value) if value is not None else '—')}</td>" for value in (
             label, env["salt_input_mode"], env["pH"], env["salt_concentration_M"],
@@ -2127,6 +2159,7 @@ def write_outputs(
 <p>Buffer references and %B stages use these current definitions. Direct endpoint stages use the recipe table below. HIC binding uses salt molarity; native CPA ion exchange uses ionic strength. The conversion factor is {config['conversion']['conductivity_to_salt_M_per_mS_cm']:g} M/(mS/cm). SALT_FACTOR_ESTIMATE marks an estimated conductivity overlay.</p>
 <div class="scroll"><table><thead><tr><th>Buffer</th><th>Salt input</th><th>pH</th><th>Salt M</th><th>Ionic source</th><th>Ionic strength M</th><th>Conductivity mS/cm</th><th>Conductivity source</th></tr></thead><tbody>{buffer_rows}</tbody></table></div>
 <h2>Process recipe used for this chromatogram</h2>
+{initial_html}
 <p>Total run: {program.total_CV:g} CV; {len(trace['CV']) - 1} reported time steps; {diagnostics_obj.get('axial_cells', '—')} axial cells. Marker numbers in the chart match this table.</p>
 <p>The chart outputs UV in mAU, with dotted programmed %B and lagged column %B, conductivity, and the programmed stage flow rate on their own axes in the same plot. The three overlays can be toggled independently. CSV also records programmed salt, column salt and the outlet cell's binding salt / ionic strength (pore phase for TDM). Detector dead volumes are independent downstream delays; the column mass balance uses the undelayed outlet. %B is undefined for direct endpoint chemistry stages. pH blending is a linear process approximation, without acid-base speciation.</p>
 <div class="scroll"><table><thead><tr><th>Marker</th><th>Stage</th><th>Start CV</th><th>End CV</th><th>Duration CV</th><th>Mode</th><th>Flow mL/min</th><th>Chemistry control</th><th>Start %B</th><th>End %B</th><th>pH start → end</th><th>Salt M start → end</th><th>Salt source/input start → end</th><th>Conductivity mS/cm start → end</th></tr></thead><tbody>{stage_rows}</tbody></table></div>
@@ -2151,6 +2184,7 @@ def write_outputs(
         "load_capacity_g_L_resin": float(config["feed"]["load_density_mg_mL_resin"]),
         "required_load_volume_CV": float(program.stages[0].duration_CV),
         "required_load_volume_mL": float(program.stages[0].duration_CV) * float(config["column"]["volume_mL"]),
+        "initial_equilibration": dict(program.initial_chemistry or {}),
         "time_steps": len(trace["CV"]) - 1,
         "axial_cells": diagnostics_obj.get("axial_cells"),
         "stages": stages,

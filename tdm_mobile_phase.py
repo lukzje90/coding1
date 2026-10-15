@@ -39,7 +39,16 @@ class MobilePhaseTransport:
             # mask. Salt, ionic strength and pH always use the actual endpoints.
             return np.array([pH, salt, ionic, cond, pct if np.isfinite(pct) else 0.0])
 
-        initial = inlet(0.0)
+        initial_chemistry = getattr(program, "initial_chemistry", None)
+        if initial_chemistry and initial_chemistry.get("source") != "MATCH_LOAD":
+            initial = np.array([
+                initial_chemistry["pH"], initial_chemistry["salt_concentration_M"],
+                initial_chemistry["ionic_strength_M"], initial_chemistry["conductivity_mS_cm"],
+                initial_chemistry["percent_B"] if initial_chemistry["percent_B"] is not None else 0.0,
+            ], dtype=float)
+        else:
+            initial = inlet(0.0)  # Exact legacy initial state for existing recipes.
+        self.initial_chemistry_state = initial.copy()
         block = self.nx * fields
         initial_bulk = np.tile(initial, (self.nx, 1)).ravel()
         y0 = np.concatenate([initial, initial_bulk, initial_bulk]) if self.tdm else np.concatenate([initial, initial_bulk])

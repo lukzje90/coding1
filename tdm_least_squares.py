@@ -1224,6 +1224,13 @@ def preview_lsq_alignment(
             f"{stage.name}: {program.stage_start_CV[i]:.6g}–{program.stage_end_CV[i]:.6g} CV"
             for i, stage in enumerate(program.stages)
         )
+        initial = program.initial_chemistry or {}
+        initial_receipt = (
+            f"{initial.get('source', 'MATCH_LOAD')}: pH {float(initial.get('pH', 0)):.6g}, "
+            f"salt {float(initial.get('salt_concentration_M', 0)):.6g} M, "
+            f"ionic strength {float(initial.get('ionic_strength_M', 0)):.6g} M, "
+            f"conductivity {float(initial.get('conductivity_mS_cm', 0)):.6g} mS/cm"
+        )
         metric = {
             "run_number": run_number,
             "run_name": run_name,
@@ -1244,6 +1251,7 @@ def preview_lsq_alignment(
             "sheet_name": reference.sheet_name or "CSV",
             "column_volume_mL": float(program.column_volume_mL),
             "stage_receipt": stage_receipt,
+            "initial_equilibration": dict(initial),
         }
         metrics.append(metric)
         choices.append(
@@ -1257,7 +1265,8 @@ def preview_lsq_alignment(
             f"<p><b>Model UV recipe:</b> {html.escape(metric['model_run_label'])} — "
             f"{html.escape(metric['model_run_name'])}. The model was simulated from the saved recipe for this preview.</p>"
             f"<p><b>Process setup:</b> column volume {metric['column_volume_mL']:.6g} mL; "
-            f"{html.escape(stage_receipt)}.</p>"
+            f"{html.escape(stage_receipt)}.<br><b>Initial column equilibration:</b> "
+            f"{html.escape(initial_receipt)}.</p>"
             f"<p><b>Attached Excel / CSV:</b> {html.escape(metric['source_path'])}; "
             f"<b>worksheet:</b> {html.escape(metric['sheet_name'])}<br>"
             f"<b>Axis:</b> {html.escape(reference.x_column)} [{html.escape(reference.x_unit)}], "

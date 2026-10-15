@@ -1,4 +1,4 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24l)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24m)
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,
@@ -36,6 +36,23 @@ buffer recipe. All runs use the column volume and mechanistic parameters in
 Model Parameters. JMP imports both process tables' numeric fields explicitly,
 including blank salt and ion cells, so editing a run cannot assign a number
 to a character column.
+
+INITIAL COLUMN EQUILIBRATION (R24m)
+Each normal and independent LSQ process run can specify the chemistry already
+in the column and upstream buffer mixer before the load begins. Choose Match
+Load to retain the previous model behavior and identical results. Buffer A or
+Buffer B uses that run's saved buffer definition, including its selected salt
+input and optional ionic-strength ion composition. Direct accepts a measured
+starting pH plus either salt molarity or conductivity as the authoritative
+salt input. The entered load material remains a separate incoming stream.
+During loading it displaces the initial liquid through the mixer and column;
+TDM also tracks the displacement in the particle pores. This is an initial
+condition, so it adds no programmed CV. The same transport is used by all five
+model combinations. Each run's initial values are saved in its own process
+table and displayed in the chromatogram result and LSQ alignment preview.
+Changing the initial pH in CPA ion exchange may require the corresponding
+pH-dependence coefficients for each protein. The model still uses its existing
+isotherms: the Langmuir combinations do not gain a new pH-binding law.
 
 Before least-squares refinement, click "Preview this run" in an LSQ run
 section to simulate and display only that run. The main "Preview UV,

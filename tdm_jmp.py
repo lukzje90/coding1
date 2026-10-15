@@ -588,6 +588,11 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'Column(dtRuns, "Load_Salt_M")[currentRun] = loadSalt << Get;',
         'Column(dtRuns, "Load_Salt_Input_Mode")[currentRun] = loadSaltMode << Get Selected;',
         'Column(dtRuns, "Load_Conductivity_mS_cm")[currentRun] = loadCond << Get;',
+        'Column(dtRuns, "Equilibration_Source")[currentRun] = equilibrationSource << Get Selected;',
+        'Column(dtRuns, "Equilibration_pH")[currentRun] = equilibrationPH << Get;',
+        'Column(dtRuns, "Equilibration_Salt_M")[currentRun] = equilibrationSalt << Get;',
+        'Column(dtRuns, "Equilibration_Salt_Input_Mode")[currentRun] = equilibrationSaltMode << Get Selected;',
+        'Column(dtRuns, "Equilibration_Conductivity_mS_cm")[currentRun] = equilibrationCond << Get;',
         'Column(dtRuns, "PLW_Count")[currentRun] = Num(plwCountBox << Get Selected);',
         'Column(dtRuns, "Elution_Count")[currentRun] = Num(elutionCountBox << Get Selected);',
     ]
@@ -611,10 +616,15 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'loadCond << Set(Column(dtRuns, "Load_Conductivity_mS_cm")[currentRun]);',
         'loadSalt << Set(Column(dtRuns, "Load_Salt_M")[currentRun]);',
         'loadSaltMode << Set(If(Uppercase(Char(Column(dtRuns, "Load_Salt_Input_Mode")[currentRun])) == "SALT_M", 2, 1));',
+        'equilibrationSource << Set(If(Uppercase(Char(Column(dtRuns, "Equilibration_Source")[currentRun])) == "BUFFER_A", 2, Uppercase(Char(Column(dtRuns, "Equilibration_Source")[currentRun])) == "BUFFER_B", 3, Uppercase(Char(Column(dtRuns, "Equilibration_Source")[currentRun])) == "DIRECT", 4, 1));',
+        'equilibrationPH << Set(Column(dtRuns, "Equilibration_pH")[currentRun]);',
+        'equilibrationSalt << Set(Column(dtRuns, "Equilibration_Salt_M")[currentRun]);',
+        'equilibrationSaltMode << Set(If(Uppercase(Char(Column(dtRuns, "Equilibration_Salt_Input_Mode")[currentRun])) == "SALT_M", 2, 1));',
+        'equilibrationCond << Set(Column(dtRuns, "Equilibration_Conductivity_mS_cm")[currentRun]);',
         'plwCountBox << Set(Num(Column(dtRuns, "PLW_Count")[currentRun]) + 1);',
         'elutionCountBox << Set(Num(Column(dtRuns, "Elution_Count")[currentRun]) + 1);',
     ]
-    copy_cols = ["Run_Name", "Load_Flow_mL_min", "Feed_Concentration_mg_mL", "Load_Amount_Basis", "Load_CV", "Load_Volume_mL", "Load_Density_mg_mL_resin", "Load_Mode", "Load_Start_Percent_B", "Load_End_Percent_B", "Load_Chemistry_Control", "Load_Material_Chemistry_Mode", "Time_Steps", "Axial_Positions", "Load_Source", "Load_pH", "Load_Salt_M", "Load_Conductivity_mS_cm", "PLW_Count", "Elution_Count"]
+    copy_cols = ["Run_Name", "Load_Flow_mL_min", "Feed_Concentration_mg_mL", "Load_Amount_Basis", "Load_CV", "Load_Volume_mL", "Load_Density_mg_mL_resin", "Load_Mode", "Load_Start_Percent_B", "Load_End_Percent_B", "Load_Chemistry_Control", "Load_Material_Chemistry_Mode", "Time_Steps", "Axial_Positions", "Load_Source", "Load_pH", "Load_Salt_M", "Load_Conductivity_mS_cm", "Equilibration_Source", "Equilibration_pH", "Equilibration_Salt_M", "Equilibration_Salt_Input_Mode", "Equilibration_Conductivity_mS_cm", "PLW_Count", "Elution_Count"]
 
     copy_cols.append("Load_Salt_Input_Mode")
     for bp, vp in (("BufferA", "bufferA"), ("BufferB", "bufferB")):
@@ -1094,7 +1104,7 @@ UpdateLSQRunSummary = Function({{}}, {{slot, r, n, attached, massEnabled, nPLW, 
     lsqProfilesStatus << Set Text(Char(n) || " run(s) selected; " || Char(attached) || " chromatogram(s) entered; " || Char(massEnabled) || " run(s) selected for fraction mass%. Each selected LSQ profile needs its own measured UV file and chosen model run.");
 );
 
-ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r, i, mn, mx, v, c, stepMode, chemControl, loadMaterialMode, loadMode, modelChoice}},
+ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r, i, mn, mx, v, c, stepMode, chemControl, loadMaterialMode, loadMode, modelChoice, initialSource}},
     If(Contains(Char(modelBox << Get Selected), "CPA") == 0, Return(0));
     nRuns = If(useSelectedLSQ, Num(lsqRunCount << Get Selected), Floor(batchCountBox << Get));
     If(Is Missing(nRuns), nRuns = 1);
@@ -1108,6 +1118,11 @@ ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r,
         ,
             runsTable = dtBatchRuns;
             r = slot;
+        );
+        initialSource = Uppercase(Char(Column(runsTable, "Equilibration_Source")[r]));
+        If(initialSource == "BUFFER_A" | initialSource == "BUFFER_B" | initialSource == "DIRECT",
+            v = ResolvedPHFromRow(runsTable, r, "Equilibration_Source", "Equilibration_pH");
+            If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v))
         );
         loadMaterialMode = Uppercase(Char(Column(runsTable, "Load_Material_Chemistry_Mode")[r]));
         loadMode = Uppercase(Char(Column(runsTable, "Load_Mode")[r]));
@@ -1194,6 +1209,7 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
         Char(ResolvedBufferSalt(bufferBCond, bufferBSalt, bufferBSaltMode)) || " M (" ||
         Char(bufferBSaltMode << Get Selected) || "); load start " || Char(loadSaltValue) || " M.");
     loadChemControlRow << Visibility("Visible");
+    equilibrationDirectPanel << Visibility(If(Uppercase(Char(equilibrationSource << Get Selected)) == "DIRECT", "Visible", "Collapse"));
     loadChemPanel << Visibility(If((isCPA | isLangmuir | isWang) & (Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT" | Uppercase(Char(loadChemControl << Get Selected)) == "ENDPOINT_CHEMISTRY"), "Visible", "Collapse"));
     loadPH << Visibility(If(isCPA | isWang, "Visible", "Collapse")); loadPHLabel << Visibility(If(isCPA | isWang, "Visible", "Collapse"));
     loadCond << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse")); loadCondLabel << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse"));
@@ -1399,7 +1415,17 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                             loadPHRow = H List Box(loadPHLabel = Text Box("Process / load pH", << Set Width(220)), loadPH = Number Edit Box(6, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI()))))),
                             {_salt_input_controls("load")},
                             loadCondRow = H List Box(loadCondLabel = Text Box("Load conductivity [mS/cm]", << Set Width(220)), loadCond = Number Edit Box(5, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI())))))
-                        )
+                        ),
+                        Outline Box("Initial column equilibration (before load)", V List Box(
+                            Text Box("Choose the chemistry initially filling the buffer mixer, column liquid, and TDM particle pores. Match load preserves existing results. Buffer A/B use this run's saved buffer definitions; Direct uses the measured starting pH and one authoritative salt input. This is an initial condition, not an added CV step.", << Set Wrap(700)),
+                            H List Box(Text Box("Initial equilibration source", << Set Width(290)), equilibrationSource = Combo Box({{"MATCH_LOAD", "BUFFER_A", "BUFFER_B", "DIRECT"}}, << Set(1), << Set Width(175), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+                            equilibrationDirectPanel = V List Box(
+                                H List Box(Text Box("Initial column pH", << Set Width(290)), equilibrationPH = Number Edit Box(., 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+                                H List Box(Text Box("Initial salt input", << Set Width(290)), equilibrationSaltMode = Combo Box({{"CONDUCTIVITY", "SALT_M"}}, << Set(1), << Set Width(175), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+                                H List Box(Text Box("Initial salt concentration [M]", << Set Width(290)), equilibrationSalt = Number Edit Box(., 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+                                H List Box(Text Box("Initial conductivity [mS/cm]", << Set Width(290)), equilibrationCond = Number Edit Box(., 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI())))))
+                            )
+                        ))
                     )
                 ),
                 Spacer Box(Size(1,8)),
@@ -1602,6 +1628,7 @@ def _validate_jsl(jsl: str) -> None:
                 raise ValueError(f"Removed template construct leaked into UI: {forbidden}")
     selected_text_controls = [
         "modelBox", "impurityCountBox", "plwCountBox", "elutionCountBox", "loadSource", "loadMaterialMode",
+        "equilibrationSource", "equilibrationSaltMode",
         "lsqModeBox", "lsqReferenceCountBox", "lsqFractionUnit", "lsqTargetRunSelector",
     ]
     for control in selected_text_controls:
@@ -1615,6 +1642,17 @@ def _validate_jsl(jsl: str) -> None:
         raise ValueError("Run profiles must be persisted to the explicit batch CSV path.")
     if "Python Send(Floor(batchCountBox << Get), Python Name(\"tdm_ui_batch_count\"))" not in jsl:
         raise ValueError("Numeric batch count must continue to use Number Edit Box Get().")
+    for field, control, getter in (
+        ("Equilibration_Source", "equilibrationSource", "Get Selected"),
+        ("Equilibration_pH", "equilibrationPH", "Get"),
+        ("Equilibration_Salt_M", "equilibrationSalt", "Get"),
+        ("Equilibration_Salt_Input_Mode", "equilibrationSaltMode", "Get Selected"),
+        ("Equilibration_Conductivity_mS_cm", "equilibrationCond", "Get"),
+    ):
+        if f'Column(dtRuns, "{field}")[currentRun] = {control} << {getter};' not in jsl:
+            raise ValueError(f"Initial equilibration {field} must be saved from the current run control.")
+        if f'{control} << Set(' not in jsl:
+            raise ValueError(f"Initial equilibration {field} must load with the current run.")
     for prefix, variable, max_steps in (
         ("PLW", "plw", MAX_PLW_STEPS), ("Elution", "el", MAX_ELUTION_STEPS)
     ):

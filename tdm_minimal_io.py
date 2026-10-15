@@ -13,7 +13,7 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-10-14-R24H-FRACTION-MASS-LSQ"
+RESULT_GUARD_BUILD = "2026-10-15-R24M-INITIAL-EQUILIBRATION"
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
 LSQ_MASS_CSV = PROJECT_DIR / "tdm_lsq_fraction_mass.csv"
@@ -222,6 +222,11 @@ def blank_config() -> dict[str, Any]:
             "load_source": "DIRECT",
             "load_chemistry_control": "BUFFER_B_PERCENT",
             "load_material_chemistry_mode": "BUFFER_RECIPE",
+            "equilibration_source": "MATCH_LOAD",
+            "equilibration_pH": None,
+            "equilibration_salt_concentration_M": None,
+            "equilibration_conductivity_mS_cm": None,
+            "equilibration_salt_input_mode": "CONDUCTIVITY",
             "load_amount_basis": "LOAD_VOLUME",
             "load_CV": None,
             "load_volume_mL": None,
@@ -405,6 +410,8 @@ def normalize_config(config: Any) -> Any:
                     source = str(buffer.get("ionic_strength_source") or "SALT_PROXY").strip().upper()
                     buffer["ionic_strength_source"] = source if source in {"SALT_PROXY", "ION_COMPOSITION"} else "SALT_PROXY"
             process["load_salt_input_mode"] = salt_input_mode(process, "load_")
+            process["equilibration_source"] = str(process.get("equilibration_source") or "MATCH_LOAD").strip().upper()
+            process["equilibration_salt_input_mode"] = salt_input_mode(process, "equilibration_")
             for key in ("plw_steps", "elution_steps"):
                 for step in process.get(key, []):
                     for side in ("start_", "end_"):
@@ -547,6 +554,22 @@ def load_material_chemistry_is_explicit(process: dict[str, Any]) -> bool:
             legacy_control=process.get("load_chemistry_control"),
         ) == "EXPLICIT"
         or _chemistry_control(process.get("load_chemistry_control")) == "ENDPOINT_CHEMISTRY"
+    )
+
+
+def resolve_initial_equilibration_chemistry(config: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve the pre-load column and mixer liquid, or retain legacy load matching."""
+    process = config.get("process", {})
+    source = str(process.get("equilibration_source") or "MATCH_LOAD").strip().upper()
+    if source == "MATCH_LOAD":
+        return None
+    if source not in {"BUFFER_A", "BUFFER_B", "DIRECT"}:
+        raise ValueError(f"Unknown initial equilibration source {source!r}.")
+    return resolve_process_chemistry(
+        config, source=source, pH=process.get("equilibration_pH"),
+        salt_M=process.get("equilibration_salt_concentration_M"),
+        conductivity_mS_cm=process.get("equilibration_conductivity_mS_cm"),
+        salt_input_mode=process.get("equilibration_salt_input_mode"),
     )
 
 
@@ -702,6 +725,12 @@ def process_pH_span(config: dict[str, Any]) -> float:
         return 0.0
     vals: list[float] = []
     p = config.get("process", {})
+    try:
+        initial = resolve_initial_equilibration_chemistry(config)
+        if initial is not None and initial.get("pH") is not None:
+            vals.append(float(initial["pH"]))
+    except (ValueError, TypeError):
+        pass  # Operating-condition validation reports an invalid source/value.
     if not load_material_chemistry_is_explicit(p):
         load_sides = ("start", "end") if str(p.get("load_mode") or "LINEAR").upper() == "LINEAR" else (("end",) if str(p.get("load_mode")).upper() == "STEP" else ("start",))
         for side in load_sides:
@@ -1212,6 +1241,16 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
     hic_salt_sources: list[tuple[str, dict[str, Any]]] = []
     if needs_process_salt:
         used_buffers: set[str] = set()
+        initial_source = str(p.get("equilibration_source") or "MATCH_LOAD").strip().upper()
+        if initial_source == "DIRECT":
+            _number(p.get("equilibration_pH"), "Initial equilibration pH", errors, lower=0, upper=14)
+            _validate_salt_input(p, "equilibration_", "Initial equilibration", errors)
+            if is_hic(config):
+                hic_salt_sources.append(("Initial equilibration", _salt_chemistry_from_fields(p, "equilibration_")))
+        elif initial_source in {"BUFFER_A", "BUFFER_B"}:
+            used_buffers.add(initial_source)
+        elif initial_source != "MATCH_LOAD":
+            errors.append("Initial equilibration source must be MATCH_LOAD, BUFFER_A, BUFFER_B or DIRECT.")
         load_control = _chemistry_control(p.get("load_chemistry_control"))
         if not load_material_chemistry_is_explicit(p):
             for side, label in (("start", "start"), ("end", "end")):
@@ -1265,7 +1304,7 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
         for src in sorted(used_buffers):
             key = "buffer_A" if src == "BUFFER_A" else "buffer_B"
             _validate_buffer_definition(config, key, "Buffer A" if key == "buffer_A" else "Buffer B", errors,
-                                        require_pH=uses_cpa(model) or uses_wang(model))
+                                        require_pH=uses_cpa(model) or uses_wang(model) or initial_source == src)
             buffer = p.get(key, {})
             if is_hic(config):
                 hic_salt_sources.append(("Buffer A" if key == "buffer_A" else "Buffer B", buffer))
@@ -1332,7 +1371,7 @@ def derived_input_summary(config: dict[str, Any]) -> dict[str, Any]:
 # ----------------------- batch run table -----------------------
 def _migrate_row_salt_inputs(row: dict[str, Any]) -> dict[str, Any]:
     row = dict(row)
-    for prefix in ["Load", "BufferA", "BufferB"] + [
+    for prefix in ["Load", "Equilibration", "BufferA", "BufferB"] + [
         f"{group}{i}_{side}" for group, count in (("PLW", MAX_PLW_STEPS), ("Elution", MAX_ELUTION_STEPS))
         for i in range(1, count + 1) for side in ("Start", "End")
     ]:
@@ -1350,6 +1389,8 @@ def batch_run_fields() -> list[str]:
         "Load_Chemistry_Control", "Load_Material_Chemistry_Mode", "Time_Steps", "Axial_Positions",
         "Load_Source", "Load_pH", "Load_Salt_M", "Load_Conductivity_mS_cm",
         "Load_Salt_Input_Mode",
+        "Equilibration_Source", "Equilibration_pH", "Equilibration_Salt_M",
+        "Equilibration_Conductivity_mS_cm", "Equilibration_Salt_Input_Mode",
         "PLW_Count", "Elution_Count",
     ]
     for prefix in ("BufferA", "BufferB"):
@@ -1405,6 +1446,11 @@ def default_batch_row(run_number: int) -> dict[str, Any]:
         "Load_Salt_M": "",
         "Load_Salt_Input_Mode": "CONDUCTIVITY",
         "Load_Conductivity_mS_cm": 5.0,
+        "Equilibration_Source": "MATCH_LOAD",
+        "Equilibration_pH": "",
+        "Equilibration_Salt_M": "",
+        "Equilibration_Conductivity_mS_cm": "",
+        "Equilibration_Salt_Input_Mode": "CONDUCTIVITY",
         "PLW_Count": 1,
         "Elution_Count": 1,
         "BufferA_Name": "Buffer A", "BufferA_pH": 6.0, "BufferA_Salt_M": "", "BufferA_Conductivity_mS_cm": 5.0,
@@ -1455,6 +1501,7 @@ def batch_run_numeric_fields() -> tuple[str, ...]:
         field for field in batch_run_fields()
         if isinstance(defaults[field], (int, float))
         or field.endswith(("_Salt_M", "_Concentration_M", "_Valency"))
+        or field in {"Equilibration_pH", "Equilibration_Conductivity_mS_cm"}
     )
 
 
@@ -1734,6 +1781,15 @@ def batch_row_to_run_config(row: dict[str, Any]) -> dict[str, Any]:
         "conductivity_mS_cm": p["load_conductivity_mS_cm"],
     })
     p["load_chemistry_control"] = _chemistry_control(row.get("Load_Chemistry_Control"))
+    p["equilibration_source"] = str(row.get("Equilibration_Source") or "MATCH_LOAD").strip().upper()
+    p["equilibration_pH"] = _as_float(row.get("Equilibration_pH"))
+    p["equilibration_salt_concentration_M"] = _as_float(row.get("Equilibration_Salt_M"))
+    p["equilibration_conductivity_mS_cm"] = _as_float(row.get("Equilibration_Conductivity_mS_cm"))
+    p["equilibration_salt_input_mode"] = salt_input_mode({
+        "salt_input_mode": row.get("Equilibration_Salt_Input_Mode"),
+        "salt_concentration_M": p["equilibration_salt_concentration_M"],
+        "conductivity_mS_cm": p["equilibration_conductivity_mS_cm"],
+    })
     raw_load_material_mode = row.get("Load_Material_Chemistry_Mode")
     if (not str(raw_load_material_mode or "").strip()
             and p["load_source"] == "DIRECT"

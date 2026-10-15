@@ -515,9 +515,12 @@ def _result_recipe_line(manifest_path: str | Path) -> str:
     stages = ", ".join(stage_text)
     load_volume = manifest.get("required_load_volume_mL")
     load_capacity = manifest.get("load_capacity_g_L_resin")
+    initial = manifest.get("initial_equilibration") or {}
     return (
         f"Run {manifest.get('run_number')} — {manifest.get('run_name')}: "
         f"load capacity {show(load_capacity)} g/L resin; required feed volume {show(load_volume)} mL; "
+        f"initial column {initial.get('source', 'MATCH_LOAD')} "
+        f"(pH {show(initial.get('pH'))}, salt {show(initial.get('salt_concentration_M'))} M); "
         f"{float(manifest['total_CV']):g} CV total ({stages})"
     )
 
