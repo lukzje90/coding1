@@ -17,6 +17,42 @@ from verify_model import make_config
 
 
 class FractionMassTests(unittest.TestCase):
+    def test_zero_feed_impurity_does_not_shift_later_fraction_columns(self):
+        cfg = make_config(MODEL_EDM_LANGMUIR, 2, multistep=False)
+        cfg["components"][0]["mass_percent"] = 60
+        cfg["components"][1].update(name="Absent impurity", mass_percent=0)
+        cfg["components"][2].update(name="Late impurity", mass_percent=40)
+        with tempfile.TemporaryDirectory() as directory:
+            rows = load_lsq_mass_rows(Path(directory) / "mass.csv")
+            rows[0].update(Enabled="On", Fraction_Count="1", Unit="CV", Start="0.1",
+                           End="0.2", Target_mass_percent="60", Impurity2_mass_percent="40")
+            refs = tdm_bridge._composition_references_for_run(cfg, 1, rows)
+            self.assertEqual(refs[0]["mass_percent"], {
+                "Target protein": "60", "Late impurity": "40"})
+            validated = lsq.validate_composition_references(cfg, refs)
+            self.assertEqual(validated[0]["mass_percent"], {
+                "Target protein": 60.0, "Late impurity": 40.0})
+            with patch.dict(tdm_bridge.__dict__, {
+                "tdm_ui_lsq_reference_count": 1, "tdm_ui_lsq_r1_start": 0.1,
+                "tdm_ui_lsq_r1_end": 0.2, "tdm_ui_lsq_r1_c1_mass_percent": 60,
+                "tdm_ui_lsq_r1_c2_mass_percent": None,
+                "tdm_ui_lsq_r1_c3_mass_percent": 40,
+            }):
+                from_ui = tdm_bridge._composition_references_from_jmp(cfg)
+            self.assertEqual(from_ui[0]["mass_percent"]["Late impurity"], 40)
+            rows[0]["Impurity1_mass_percent"] = "10"
+            with self.assertRaisesRegex(ValueError, "Absent impurity has zero feed mass"):
+                tdm_bridge._composition_references_for_run(cfg, 1, rows)
+
+    def test_duplicate_active_names_rejected_for_fraction_fit(self):
+        cfg = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
+        cfg["components"][1]["name"] = cfg["components"][0]["name"]
+        with self.assertRaisesRegex(ValueError, "names must be unique"):
+            lsq.validate_composition_references(cfg, [{
+                "fraction_index": 1, "start": 0.1, "end": 0.2,
+                "mass_percent": {cfg["components"][0]["name"]: 50},
+            }])
+
     def test_fraction_headers_follow_model_species_names_and_share_input_columns(self):
         cfg = make_config(MODEL_EDM_LANGMUIR, 5, multistep=False)
         cfg["components"][0]["name"] = "Product A"

@@ -945,6 +945,8 @@ def validate_composition_references(
     references: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     names = [str(r["name"]) for r in active_components(config)]
+    if len(names) != len(set(names)):
+        raise ValueError("Active species names must be unique for fraction mass% refinement.")
     out: list[dict[str, Any]] = []
     previous_cv = -math.inf
     previous_index = 0

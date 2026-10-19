@@ -90,6 +90,7 @@ from tdm_minimal_io import (
     MODEL_TDM_WANG,
     STATUS_PATH,
     active_components,
+    selected_components,
     apply_batch_shared_parameters,
     batch_max_pH_span,
     batch_row_to_run_config,
@@ -412,13 +413,20 @@ def _lsq_mode() -> str:
 def _composition_references_from_jmp(config: dict[str, Any]) -> list[dict[str, Any]]:
     count_raw = _num("tdm_ui_lsq_reference_count")
     count = min(max(int(count_raw) if count_raw is not None else 0, 0), MAX_LSQ_FRACTIONS)
-    names = [str(r["name"]) for r in active_components(config)]
+    species_slots = [(i, str(row["name"]), float(row.get("mass_percent") or 0) > 0)
+                     for i, row in enumerate(selected_components(config), start=1)]
     unit = str(globals().get("tdm_ui_lsq_fraction_unit") or "CV").strip().upper()
     refs: list[dict[str, Any]] = []
     for k in range(1, count + 1):
         start = _num(f"tdm_ui_lsq_r{k}_start")
         end = _num(f"tdm_ui_lsq_r{k}_end")
-        mass = {name: _num(f"tdm_ui_lsq_r{k}_c{i}_mass_percent") for i, name in enumerate(names, start=1)}
+        mass = {}
+        for slot, name, active in species_slots:
+            value = _num(f"tdm_ui_lsq_r{k}_c{slot}_mass_percent")
+            if active:
+                mass[name] = value
+            elif value is not None:
+                raise ValueError(f"Fraction {k}: {name} has zero feed mass; clear its mass% cell or give it feed mass in Model Parameters.")
         if start is None and end is None and all(value is None for value in mass.values()):
             continue
         refs.append({"fraction_index": k, "start": start, "end": end,
@@ -446,14 +454,20 @@ def _composition_references_for_run(config: dict[str, Any], run_number: int,
         raise ValueError(f"LSQ Run {run_number}: fraction row count must be 1–{MAX_LSQ_FRACTIONS}.")
     count = int(count_value)
     unit = str(own_rows[0]["Unit"] or "CV").strip().upper()
-    names = [str(row["name"]) for row in active_components(config)]
+    species_slots = [(i, str(species["name"]), float(species.get("mass_percent") or 0) > 0)
+                     for i, species in enumerate(selected_components(config), start=1)]
     def entered(value: Any) -> str:
         text = str(value or "").strip()
         return "" if text in {".", ""} else text
     references = []
     for index, row in enumerate(own_rows[:count], start=1):
-        mass = {name: entered(row["Target_mass_percent" if species == 1 else f"Impurity{species - 1}_mass_percent"])
-                for species, name in enumerate(names, start=1)}
+        mass = {}
+        for slot, name, active in species_slots:
+            value = entered(row["Target_mass_percent" if slot == 1 else f"Impurity{slot - 1}_mass_percent"])
+            if active:
+                mass[name] = value
+            elif value:
+                raise ValueError(f"LSQ Run {run_number} fraction {index}: {name} has zero feed mass; clear its mass% cell or give it feed mass in Model Parameters.")
         start, end = entered(row["Start"]), entered(row["End"])
         if not any((start, end, *mass.values())):
             continue
