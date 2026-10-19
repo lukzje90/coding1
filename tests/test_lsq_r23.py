@@ -264,6 +264,13 @@ class RefinementTests(unittest.TestCase):
         launcher = (ROOT / "00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl").read_text(encoding="utf-8")
         self.assertIn('Python Install Packages( "numpy scipy openpyxl" )', launcher)
         self.assertIn('dependencies_r23_checked', launcher)
+        self.assertIn('Get Script Name()', launcher)
+        self.assertIn('Pick File(\n        "Select open_tdm_setup.py', launcher)
+        self.assertNotIn('Get Default Directory()', launcher)
+        self.assertIn('setupName = "open_tdm_setup.py"', launcher)
+        for required in ("tdm_jmp.py", "tdm_bridge.py", "tdm_minimal_io.py",
+                         "tdm_minimal_model.py", "tdm_least_squares.py"):
+            self.assertIn(required, launcher)
         jsl = build_jsl()
         _validate_jsl(jsl)
         for expected in ["dtLSQRuns", "SwitchProcessScope", "lsqWeight",

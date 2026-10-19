@@ -1,8 +1,35 @@
 Names Default To Here( 1 );
 
 // Restored classic run-oriented UI with direct editable inputs.
-// Run this file from inside the extracted folder.  No template database is required.
-projectDir = Convert File Path( Get Default Directory(), "Absolute", "POSIX" );
+// JMP's default directory may differ from the folder containing this script.
+launcherName = "00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl";
+setupName = "open_tdm_setup.py";
+scriptFile = Try( Char( Get Script Name() ), "" );
+projectDir = "";
+If( Length( scriptFile ) > Length( launcherName ) &
+    Right( Lowercase( scriptFile ), Length( launcherName ) ) == Lowercase( launcherName ),
+    scriptFile = Convert File Path( scriptFile, "Absolute", "POSIX" );
+    projectDir = Left( scriptFile, Length( scriptFile ) - Length( launcherName ) );
+);
+
+// Some JMP launch methods do not expose the script path. Select this copy's
+// setup file explicitly rather than guessing from JMP's working directory.
+If( projectDir == "" | !File Exists( projectDir || setupName ),
+    selectedSetup = Pick File(
+        "Select open_tdm_setup.py in the extracted model folder", "",
+        {"Python setup|py", "All files|*"}, 1, 0, ""
+    );
+    If( Is Empty( selectedSetup ),
+        Write( "\!nModel launch cancelled: no setup file selected.\!n" );
+        Stop();
+    );
+    selectedSetup = Convert File Path( selectedSetup, "Absolute", "POSIX" );
+    If( Right( Lowercase( selectedSetup ), Length( setupName ) ) != setupName,
+        Write( "\!nERROR: Select open_tdm_setup.py from the extracted model folder.\!n" );
+        Stop();
+    );
+    projectDir = Left( selectedSetup, Length( selectedSetup ) - Length( setupName ) );
+);
 If( Right( projectDir, 1 ) != "/", projectDir = projectDir || "/" );
 
 If( !File Exists( projectDir || "open_tdm_setup.py" ) |
@@ -11,7 +38,7 @@ If( !File Exists( projectDir || "open_tdm_setup.py" ) |
     !File Exists( projectDir || "tdm_minimal_io.py" ) |
     !File Exists( projectDir || "tdm_minimal_model.py" ) |
     !File Exists( projectDir || "tdm_least_squares.py" ),
-    Write( "\!nERROR: Run 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl from the extracted model folder.\!n" );
+    Write( "\!nERROR: Required model files are missing from " || projectDir || ". Extract the complete ZIP and select open_tdm_setup.py in that folder.\!n" );
     Stop();
 );
 

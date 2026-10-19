@@ -1,4 +1,10 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24q)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24r)
+
+LAUNCHER FOLDER DETECTION (R24r)
+Open 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl from the extracted ZIP folder.
+The launcher now uses its own folder even when JMP's default directory points
+somewhere else. If JMP cannot report the script path, select open_tdm_setup.py
+from the same extracted folder when prompted. Keep all extracted files together.
 
 SEPARATE NORMAL AND LEAST-SQUARES CPU LIMITS (R24q)
 Process Setup now shows Normal prediction CPU limit directly below time steps
