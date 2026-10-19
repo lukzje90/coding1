@@ -5,6 +5,7 @@ import hashlib
 import html
 import json
 import math
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.optimize import brentq
 from scipy.sparse import lil_matrix
+from threadpoolctl import threadpool_limits
 
 from tdm_minimal_io import (
     LATEST_RESULTS_CSV,
@@ -25,6 +27,7 @@ from tdm_minimal_io import (
     MODEL_TDM_CPA,
     MODEL_TDM_LANGMUIR,
     MODEL_TDM_WANG,
+    MAX_CPU_THREADS,
     MAX_HIC_LOG_AFFINITY,
     RESULT_GUARD_BUILD,
     active_components,
@@ -1621,24 +1624,37 @@ def _langmuir_affinity_receipt(config: dict[str, Any], stages: list[dict[str, An
     return result
 
 
-def simulate(config: dict[str, Any]) -> dict[str, Any]:
+def simulate(config: dict[str, Any], *, native_threads: int | None = None) -> dict[str, Any]:
     config = normalize_config(config)
     errors = validate_config(config, strict=True)
     if errors:
         raise ValueError("Input validation failed:\n- " + "\n- ".join(errors))
+    raw_threads = config["numerics"]["cpu_threads"] if native_threads is None else native_threads
+    try:
+        thread_number = float(raw_threads)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Prediction CPU threads must be a whole number from 1 to {MAX_CPU_THREADS}.") from exc
+    if not math.isfinite(thread_number) or not thread_number.is_integer() or not 1 <= thread_number <= MAX_CPU_THREADS:
+        raise ValueError(f"Prediction CPU threads must be a whole number from 1 to {MAX_CPU_THREADS}.")
+    requested_threads = int(thread_number)
+    cpu_limit = min(requested_threads, os.cpu_count() or 1)
     model = config["model"]
-    if model == MODEL_TDM_WANG:
-        sim = _simulate_tdm_wang(config)
-    elif model == MODEL_TDM_CPA:
-        sim = _simulate_tdm_cpa(config)
-    elif model == MODEL_TDM_LANGMUIR:
-        sim = _simulate_tdm_langmuir(config)
-    elif model == MODEL_EDM_CPA:
-        sim = _simulate_edm_cpa(config)
-    elif model == MODEL_EDM_LANGMUIR:
-        sim = _simulate_edm_langmuir(config)
-    else:
-        raise ValueError(f"Unsupported model: {model}")
+    # Leave each coupled trajectory and every model equation unchanged. Native
+    # BLAS/OpenMP kernels may use this many threads when their operations allow.
+    with threadpool_limits(limits=cpu_limit):
+        if model == MODEL_TDM_WANG:
+            sim = _simulate_tdm_wang(config)
+        elif model == MODEL_TDM_CPA:
+            sim = _simulate_tdm_cpa(config)
+        elif model == MODEL_TDM_LANGMUIR:
+            sim = _simulate_tdm_langmuir(config)
+        elif model == MODEL_EDM_CPA:
+            sim = _simulate_edm_cpa(config)
+        elif model == MODEL_EDM_LANGMUIR:
+            sim = _simulate_edm_langmuir(config)
+        else:
+            raise ValueError(f"Unsupported model: {model}")
+    sim["diagnostics"]["prediction_cpu_thread_limit"] = cpu_limit
     trace = _output_trace(config, sim)
     program: StageProgram = sim["program"]
     first_elution_CV = next(
@@ -2211,6 +2227,8 @@ def run_and_write(
 def run_batch(
     base_config: dict[str, Any],
     run_configs: list[dict[str, Any]],
+    *,
+    parallel_workers: int | None = None,
 ) -> list[dict[str, Any]]:
     """Run several operating-condition variants with one locked parameter set.
 
@@ -2219,11 +2237,22 @@ def run_batch(
     selected model, column identity, transport/isotherm parameters, impurity
     selection, species composition or species parameters is overwritten by the
     base batch values before simulation.
+    Independent complete runs can be evaluated in separate CPU processes;
+    each coupled run still uses the original numerical solver.
     """
     if not run_configs:
         raise ValueError("A batch must contain at least one run.")
+    raw_workers = base_config.get("numerics", {}).get("cpu_threads", 1) if parallel_workers is None else parallel_workers
+    try:
+        worker_number = float(raw_workers)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Prediction CPU threads must be a whole number from 1 to {MAX_CPU_THREADS}.") from exc
+    if not math.isfinite(worker_number) or not worker_number.is_integer() or not 1 <= worker_number <= MAX_CPU_THREADS:
+        raise ValueError(f"Prediction CPU threads must be a whole number from 1 to {MAX_CPU_THREADS}.")
+    requested_workers = int(worker_number)
+    workers_used = min(requested_workers, len(run_configs), os.cpu_count() or 1)
     expected_fingerprint = batch_parameter_fingerprint(base_config)
-    results: list[dict[str, Any]] = []
+    effective_runs: list[tuple[dict[str, Any], list[str]]] = []
     for index, requested in enumerate(run_configs, start=1):
         effective, attempted_overrides = apply_batch_shared_parameters(base_config, requested)
         errors = validate_config(effective, strict=True)
@@ -2236,9 +2265,23 @@ def run_batch(
             raise RuntimeError(
                 f"Batch run {index} did not inherit the selected shared parameter set."
             )
-        result = simulate(effective)
+        effective_runs.append((effective, attempted_overrides))
+    if workers_used > 1:
+        from joblib import Parallel, delayed
+        # Each child solves one complete, unchanged trajectory. Set its native
+        # kernel limit to 1 so the batch budget does not multiply per process.
+        simulations = Parallel(n_jobs=workers_used, backend="loky")(
+            delayed(simulate)(effective, native_threads=1)
+            for effective, _ in effective_runs
+        )
+    else:
+        simulations = [simulate(effective, native_threads=requested_workers)
+                       for effective, _ in effective_runs]
+    results: list[dict[str, Any]] = []
+    for index, ((effective, attempted_overrides), result) in enumerate(zip(effective_runs, simulations), start=1):
         result["batch"] = {
             "run_number": index,
+            "cpu_workers_used": workers_used,
             "shared_parameter_fingerprint": expected_fingerprint,
             "shared_parameters": batch_shared_parameter_snapshot(base_config),
             "attempted_shared_overrides_ignored": attempted_overrides,
@@ -2251,11 +2294,13 @@ def run_batch_and_write(
     base_config: dict[str, Any],
     run_configs: list[dict[str, Any]],
     output_dir: Path | str,
+    *,
+    parallel_workers: int | None = None,
 ) -> dict[str, Any]:
     """Execute a batch and save a simple stable gallery for up to 30 runs."""
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
-    batch_results = run_batch(base_config, run_configs)
+    batch_results = run_batch(base_config, run_configs, parallel_workers=parallel_workers)
     rows: list[dict[str, Any]] = []
     cards: list[str] = []
     for raw_run, item in zip(run_configs, batch_results):
@@ -2288,5 +2333,6 @@ def run_batch_and_write(
         "summary_csv": str(summary_path),
         "gallery_html": str(gallery_path),
         "shared_parameter_fingerprint": batch_parameter_fingerprint(base_config),
+        "cpu_workers_used": batch_results[0]["result"]["batch"]["cpu_workers_used"],
         "runs": rows,
     }

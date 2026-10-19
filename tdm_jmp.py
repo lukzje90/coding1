@@ -28,6 +28,7 @@ from tdm_minimal_io import (
     MAX_BUFFER_IONS,
     MAX_IMPURITIES,
     MAX_LSQ_PROFILES,
+    MAX_CPU_THREADS,
     MAX_LSQ_FRACTIONS,
     MAX_PLW_STEPS,
     MAX_RUNS,
@@ -480,6 +481,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'Python Send(lsqBaselineMode << Get Selected, Python Name("tdm_ui_lsq_baseline_mode"));',
         'Python Send(lsqBaseline << Get, Python Name("tdm_ui_lsq_detector_baseline"));',
         'Python Send(lsqMaxEvaluations << Get, Python Name("tdm_ui_lsq_max_nfev"));',
+        'Python Send(predictionCPUThreads << Get, Python Name("tdm_ui_prediction_cpu_threads"));',
         'Python Send(lsqParallelWorkers << Get, Python Name("tdm_ui_lsq_parallel_workers"));',
     ]
     lsq_run_sections = []
@@ -1425,6 +1427,8 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                         Text Box("Select load capacity [g/L resin], load volume [CV], or load volume [mL] as the input. Capacity is numerically equal to mg/mL resin; CV = capacity ÷ feed concentration or mL ÷ column volume. The model applies the resulting total feed volume = CV × column volume. BUFFER_RECIPE resolves chemistry from the load Buffer B % program. EXPLICIT uses the load material source, pH, salt input and conductivity fields below, so feed chemistry reaches the solver even when the load %B display is retained.", << Set Wrap(700), << Set Font Style("Italic")),
                         {_nrow("Number of time steps", "timeStepsBox", 700)},
                         {_nrow("Number of axial positions", "axialPositionsBox", 20)},
+                        {_nrow("Normal prediction CPU limit [1–{MAX_CPU_THREADS}]", "predictionCPUThreads", cfg['numerics'].get('cpu_threads', 1))},
+                        Text Box("This shared CPU limit runs independent saved batch chromatograms in parallel. A single selected run stays one coupled trajectory; native numerical libraries may use the selected thread limit where supported. This setting is independent of least-squares workers.", << Set Wrap(700)),
                         Text Box("Numerical resolution is stored per run. Time steps set the reported time grid and cap the adaptive integration step; axial positions set the finite-volume cells along the column. For comparing subtle peak shifts from b or k_s changes, use at least 300 reported time steps; 50 points may hide a shift between adjacent samples.", << Set Wrap(700), << Set Font Style("Italic")),
                         loadChemPanel = V List Box(
                             H List Box(Text Box("Load chemistry source", << Set Width(220)), loadSource = Combo Box({{"DIRECT", "BUFFER_A", "BUFFER_B"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); ApplyChemSource(loadSource, loadPH, loadCond); SaveCurrentRun(); UpdateUI()))))),
@@ -1518,7 +1522,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
                     Text Box("Leave objective and weights alone for ordinary pointwise least-squares. The optimizer keeps the best improvement and stops when the objective, gradient, or parameter step converges. Each unlocked parameter adds another column solve per numerical Jacobian for every selected run. Progress is saved to least_squares_objective_history.csv. Set individual parameter locks on Model Parameters.", << Set Wrap(740)),
                     {_nrow("Safety cap: optimizer evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 320)},
-                    {_nrow("Parallel CPU workers [1–10]", "lsqParallelWorkers", cfg['least_squares'].get('parallel_workers', 1), 320)},
+                    {_nrow("Least-squares CPU workers [1–{MAX_CPU_THREADS}]", "lsqParallelWorkers", cfg['least_squares'].get('parallel_workers', 1), 320)},
                     Text Box("Independent selected runs and Jacobian parameter trials can use separate CPU cores. Multiple unlocked parameters can benefit even with one run. More workers use more memory; the fitted objective and parameters are unchanged.", << Set Wrap(740)),
                     Outline Box("Optional objective and stopping settings", << Close(1), V List Box(
                         H List Box(Text Box("Objective", << Set Width(240)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
@@ -1599,7 +1603,7 @@ def _validate_jsl(jsl: str) -> None:
         "Run saved batch", "Model combination", "Number of impurities [0-5]",
         "Normal least-squares: chromatogram only", "species mass% by fraction",
         "Feed composition mass% of total protein", "UV → protein response factor",
-        "Conductivity → salt factor", "Number of time steps", "Number of axial positions", "Number Edit Box", "tdm_batch_runs.csv",
+        "Conductivity → salt factor", "Number of time steps", "Number of axial positions", "Normal prediction CPU limit", "Least-squares CPU workers", "Number Edit Box", "tdm_batch_runs.csv",
         "Chemistry control", "Start / set-point Buffer B [%]", "End Buffer B [%]",
         "Buffer A (0% B)", "Buffer B (100% B)",
         "Saturation capacity qmax,i [g/L stationary phase]", "SyncLangmuirDerived",

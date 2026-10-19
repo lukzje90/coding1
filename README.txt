@@ -1,7 +1,22 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24p)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24q)
+
+SEPARATE NORMAL AND LEAST-SQUARES CPU LIMITS (R24q)
+Process Setup now shows Normal prediction CPU limit directly below time steps
+and axial positions. This setting is shared across the normal batch. Run
+saved batch evaluates independent chromatograms in separate CPU processes,
+up to the entered limit and the number of runs. Run selected keeps its coupled
+time trajectory intact; the setting also caps native numerical-library
+threads, but a single run may use fewer cores and may not become faster.
+Least-Squares Refinement has its own independent CPU worker setting. Enter
+12 there to permit up to 12 parallel run or parameter-trial evaluations when
+there is enough independent work. Both settings accept whole numbers 1–64;
+the actual process count is capped by available logical CPUs and work items.
+Fit workers each use one native numerical thread to avoid nested CPU pools.
+The model equations, solver methods, tolerances and time/axial grids are
+unchanged. The JMP launcher installs joblib and threadpoolctl as needed.
 
 PARALLEL CPU REFINEMENT (R24p)
-In Least-Squares Refinement, set Parallel CPU workers from 1 to 10. The
+In Least-Squares Refinement, set CPU workers from 1 to 64. The
 default of 1 retains serial fitting. With multiple selected runs, separate
 Python processes simulate those runs at each objective evaluation. With two
 or more unlocked parameters, numerical Jacobian parameter trials also run

@@ -84,6 +84,7 @@ from tdm_minimal_io import (
     LSQ_MODEL_SOURCE_BATCH,
     LSQ_MODEL_SOURCE_INDEPENDENT,
     MAX_LSQ_PROFILES,
+    MAX_CPU_THREADS,
     MAX_LSQ_FRACTIONS,
     MAX_RUNS,
     MODEL_TDM_CPA,
@@ -162,6 +163,11 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
     config["least_squares"]["objective"] = _text("tdm_ui_lsq_objective") or "RAW_SSE"
     config["least_squares"]["baseline_mode"] = _text("tdm_ui_lsq_baseline_mode") or "NONE"
     config["least_squares"]["detector_baseline"] = _num("tdm_ui_lsq_detector_baseline") or 0.0
+    if "tdm_ui_prediction_cpu_threads" in globals():
+        normal_threads = _num("tdm_ui_prediction_cpu_threads")
+        if normal_threads is None or not normal_threads.is_integer() or not 1 <= normal_threads <= MAX_CPU_THREADS:
+            raise ValueError(f"Normal prediction CPU limit must be a whole number from 1 to {MAX_CPU_THREADS}.")
+        config["numerics"]["cpu_threads"] = int(normal_threads)
     # Older bridge callers may not send this field. Once the JMP box exists,
     # reject an empty, fractional or out-of-range cap instead of resetting it.
     if "tdm_ui_lsq_max_nfev" in globals():
@@ -171,8 +177,8 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
         config["least_squares"]["max_nfev"] = int(cap)
     if "tdm_ui_lsq_parallel_workers" in globals():
         workers = _num("tdm_ui_lsq_parallel_workers")
-        if workers is None or not workers.is_integer() or not 1 <= workers <= MAX_LSQ_PROFILES:
-            raise ValueError(f"CPU workers must be a whole number from 1 to {MAX_LSQ_PROFILES}.")
+        if workers is None or not workers.is_integer() or not 1 <= workers <= MAX_CPU_THREADS:
+            raise ValueError(f"Least-squares CPU workers must be a whole number from 1 to {MAX_CPU_THREADS}.")
         config["least_squares"]["parallel_workers"] = int(workers)
     locks = _lsq_unlocked_paths_from_jmp()
     if locks is not None:
@@ -780,6 +786,7 @@ def main() -> int:
                 f"Run {run_number} — {context['run_name']} completed successfully.\n"
                 f"Recipe used: {_result_recipe_line(paths['manifest'])}\n"
                 f"Active mechanistic inputs consumed: {len(required_parameter_values(current_effective))}\n"
+                f"Normal prediction CPU limit: {min(int(current_effective['numerics']['cpu_threads']), os.cpu_count() or 1)}; a single coupled run may use fewer native threads.\n"
                 + peak_line
                 + affinity_line
                 + ("Run warnings:\n- " + "\n- ".join(run_warnings) + "\n" if run_warnings else "") +
@@ -804,13 +811,14 @@ def main() -> int:
                 run_configs.append(run_cfg)
             from tdm_minimal_model import run_batch_and_write
             batch_output_dir = _new_batch_results_dir()
-            info = run_batch_and_write(shared, run_configs, batch_output_dir)
+            info = run_batch_and_write(shared, run_configs, batch_output_dir,
+                                       parallel_workers=int(shared["numerics"]["cpu_threads"]))
             _save_batch_summary_to_root(info)
             recipe_lines = "\n".join(
                 _result_recipe_line(run["manifest"]) for run in info.get("runs", [])
             )
             _write_status(
-                f"Batch completed: {batch_count} run(s).\n"
+                f"Batch completed: {batch_count} run(s); CPU worker processes used: {info['cpu_workers_used']}.\n"
                 f"Recipes used:\n{recipe_lines}\n"
                 f"Shared model fingerprint: {info['shared_parameter_fingerprint']}\n"
                 f"Batch result folder: {batch_output_dir}\n"

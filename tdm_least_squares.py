@@ -44,6 +44,7 @@ from tdm_minimal_io import (
     MODEL_TDM_LANGMUIR,
     MODEL_TDM_WANG,
     MAX_LSQ_PROFILES,
+    MAX_CPU_THREADS,
     active_components,
     canonical_fit_parameter_path,
     normalize_config,
@@ -1453,7 +1454,9 @@ def _objective_parts(
     composition_refs: list[dict[str, Any]],
     fit_conductivity: bool = False,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    result = simulate(cfg)
+    # The fit's own worker count is the total CPU budget. Prevent each fit
+    # worker from spawning an additional native numerical thread pool.
+    result = simulate(cfg, native_threads=1)
     chrom_r, chrom_info = _chromatogram_residuals(cfg, ref, result["trace"])
     cond_r = np.empty(0, dtype=float)
     cond_info = None
@@ -2003,9 +2006,9 @@ def run_global_least_squares_refinement(
     try:
         requested_workers = float(parallel_workers)
     except (TypeError, ValueError) as exc:
-        raise ValueError("CPU workers must be a whole number from 1 to 10.") from exc
-    if not math.isfinite(requested_workers) or not requested_workers.is_integer() or not 1 <= requested_workers <= MAX_LSQ_PROFILES:
-        raise ValueError(f"CPU workers must be a whole number from 1 to {MAX_LSQ_PROFILES}.")
+        raise ValueError(f"CPU workers must be a whole number from 1 to {MAX_CPU_THREADS}.") from exc
+    if not math.isfinite(requested_workers) or not requested_workers.is_integer() or not 1 <= requested_workers <= MAX_CPU_THREADS:
+        raise ValueError(f"CPU workers must be a whole number from 1 to {MAX_CPU_THREADS}.")
     mode = str(mode or "").strip().upper()
     if mode not in SUPPORTED_MODES:
         raise ValueError("Least-squares mode must be CHROMATOGRAM or CHROMATOGRAM_AND_COMPOSITION.")

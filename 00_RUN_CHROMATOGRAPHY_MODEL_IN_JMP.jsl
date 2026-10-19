@@ -32,6 +32,13 @@ If( !File Exists( parallelMarker ),
     Save Text File( parallelMarker, "checked" );
 );
 
+// Allow the normal predictor to cap native numerical-library CPU threads.
+nativeThreadMarker = "$USER_APPDATA/tdm22_classic_direct_dependencies_r24q_checked.txt";
+If( !File Exists( nativeThreadMarker ),
+    Python Install Packages( "threadpoolctl" );
+    Save Text File( nativeThreadMarker, "checked" );
+);
+
 pythonFile = projectDir || "open_tdm_setup.py";
 projectDirWindows = Convert File Path( projectDir, "Absolute", "Windows" );
 pythonFileWindows = Convert File Path( pythonFile, "Absolute", "Windows" );
