@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import csv
+import calendar
 import hashlib
 import html
 import json
 import math
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 from scipy.integrate import solve_ivp
@@ -1963,6 +1965,27 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _uk_local_time(instant_utc: datetime) -> datetime:
+    """Render a run timestamp in UK civil time, including GMT/BST on Windows."""
+    instant_utc = instant_utc.astimezone(timezone.utc)
+    try:
+        return instant_utc.astimezone(ZoneInfo("Europe/London"))
+    except ZoneInfoNotFoundError:
+        # Some Windows Python installations have no IANA time-zone database.
+        # Current UK rules: BST starts/ends at 01:00 UTC on the last Sunday
+        # of March/October. Keep report generation available without tzdata.
+        year = instant_utc.year
+
+        def last_sunday(month: int) -> int:
+            day = calendar.monthrange(year, month)[1]
+            return day - (datetime(year, month, day).weekday() + 1) % 7
+
+        start = datetime(year, 3, last_sunday(3), 1, tzinfo=timezone.utc)
+        end = datetime(year, 10, last_sunday(10), 1, tzinfo=timezone.utc)
+        offset = timedelta(hours=1) if start <= instant_utc < end else timedelta(0)
+        return instant_utc.astimezone(timezone(offset, "BST" if offset else "GMT"))
+
+
 def _write_manifest(path: Path, manifest: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
@@ -2124,7 +2147,10 @@ def write_outputs(
         )) + "</tr>"
         for row in stages
     )
-    generated_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    generated_instant = datetime.now(timezone.utc)
+    generated_utc = generated_instant.isoformat(timespec="seconds")
+    generated_uk_time = _uk_local_time(generated_instant)
+    generated_uk_display = generated_uk_time.strftime("%d/%m/%Y %H:%M:%S %Z")
     diagnostics_obj = result["simulation"]["diagnostics"]
     saturation = diagnostics_obj.get("nominal_langmuir_saturation")
     saturation_html = (
@@ -2163,7 +2189,7 @@ def write_outputs(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;max-width:1000px;height:auto;background:#fff}}table{{border-collapse:collapse;max-width:100%;font-size:.9rem}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}pre{{background:#f4f4f4;padding:1rem;overflow:auto}}.scroll{{overflow-x:auto}}code{{overflow-wrap:anywhere}}</style>
 <h1>Chromatography model results</h1>
-<p><b>Run:</b> {run_number} — {html.escape(run_name)} &nbsp; <b>Build:</b> {RESULT_GUARD_BUILD} &nbsp; <b>Generated UTC:</b> {generated_utc}</p>
+<p><b>Run:</b> {run_number} — {html.escape(run_name)} &nbsp; <b>Build:</b> {RESULT_GUARD_BUILD} &nbsp; <b>Generated UK time:</b> {generated_uk_display}</p>
 <p><b>Model:</b> {html.escape(MODEL_LABELS[config['model']])}</p>
 <p><b>Settings fingerprint:</b> <code>{fingerprint}</code></p>
 <p><label><input type="checkbox" {'checked' if config['system']['show_percent_B'] else ''} onchange="document.querySelectorAll('[data-overlay=percent-b]').forEach(el=>el.style.display=this.checked?'':'none')"> Show %B</label>
@@ -2192,6 +2218,7 @@ def write_outputs(
         "schema": 1,
         "build_id": RESULT_GUARD_BUILD,
         "generated_utc": generated_utc,
+        "generated_uk_time": generated_uk_time.isoformat(timespec="seconds"),
         "run_number": run_number,
         "run_name": run_name,
         "configuration_fingerprint": fingerprint,

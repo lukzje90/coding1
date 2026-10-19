@@ -1,6 +1,6 @@
 Names Default To Here( 1 );
 
-// Restored classic run-oriented UI with direct editable inputs.
+// Open this saved script in JMP and press Ctrl+R to launch the model window.
 // JMP's default directory may differ from the folder containing this script.
 launcherName = "00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl";
 setupName = "open_tdm_setup.py";

@@ -1,4 +1,14 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24r)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24s)
+
+UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)
+The output chromatogram shows its generation time in UK local time, using GMT
+in winter and BST in summer (day/month/year and a 24-hour clock). The manifest
+retains its UTC timestamp and also records the UK timestamp with its UTC
+offset. The chromatogram time axis remains elapsed run minutes.
+After extracting the ZIP, open 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl in JMP
+and press Ctrl+R. The script launches the model window directly from its own
+folder. If JMP cannot provide the saved script path, it will ask you to select
+open_tdm_setup.py from that extracted folder rather than open another copy.
 
 LAUNCHER FOLDER DETECTION (R24r)
 Open 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl from the extracted ZIP folder.

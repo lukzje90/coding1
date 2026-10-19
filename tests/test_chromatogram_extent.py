@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import csv
+from datetime import datetime
 import json
 from pathlib import Path
 import re
@@ -10,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
+from zoneinfo import ZoneInfoNotFoundError
 
 import numpy as np
 
@@ -18,7 +20,7 @@ from tdm_minimal_io import (
     MODEL_EDM_LANGMUIR, apply_batch_shared_parameters, batch_row_to_run_config,
     load_batch_rows, load_config,
 )
-from tdm_minimal_model import _build_program, _stage_receipt, _svg_plot, simulate, write_outputs
+from tdm_minimal_model import _build_program, _stage_receipt, _svg_plot, _uk_local_time, simulate, write_outputs
 from verify_model import make_config
 
 
@@ -37,6 +39,21 @@ def _chromatogram_svg(document):
 def _points(polyline):
     return np.asarray([[float(value) for value in point.split(",")]
                        for point in polyline.attrib["points"].split()])
+
+
+class UKTimeTests(unittest.TestCase):
+    def test_uk_time_switches_at_both_dst_boundaries_with_or_without_tzdata(self):
+        cases = [
+            ("2026-03-29T00:59:00+00:00", "29/03/2026 00:59:00 GMT"),
+            ("2026-03-29T01:00:00+00:00", "29/03/2026 02:00:00 BST"),
+            ("2026-10-25T00:59:00+00:00", "25/10/2026 01:59:00 BST"),
+            ("2026-10-25T01:00:00+00:00", "25/10/2026 01:00:00 GMT"),
+        ]
+        for source, expected in cases:
+            instant = datetime.fromisoformat(source)
+            self.assertEqual(_uk_local_time(instant).strftime("%d/%m/%Y %H:%M:%S %Z"), expected)
+            with patch("tdm_minimal_model.ZoneInfo", side_effect=ZoneInfoNotFoundError):
+                self.assertEqual(_uk_local_time(instant).strftime("%d/%m/%Y %H:%M:%S %Z"), expected)
 
 
 class ChromatogramExtentTests(unittest.TestCase):
@@ -102,6 +119,10 @@ class ChromatogramExtentTests(unittest.TestCase):
             for curve in svg.findall("svg:polyline", SVG_NS):
                 self.assertAlmostEqual(_points(curve)[-1, 0], end, delta=0.02)
             manifest = json.loads(Path(outputs["manifest"]).read_text(encoding="utf-8"))
+            self.assertIn("Generated UK time:", report)
+            self.assertNotIn("Generated UTC:", report)
+            self.assertEqual(datetime.fromisoformat(manifest["generated_uk_time"]).timestamp(),
+                             datetime.fromisoformat(manifest["generated_utc"]).timestamp())
             self.assertEqual(manifest["total_CV"], 15.0)
             self.assertEqual(manifest["stages"][-1]["duration_CV"], 10.0)
             self.assertEqual(manifest["stages"][-1]["end_CV"], 15.0)

@@ -265,8 +265,12 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Python Install Packages( "numpy scipy openpyxl" )', launcher)
         self.assertIn('dependencies_r23_checked', launcher)
         self.assertIn('Get Script Name()', launcher)
+        self.assertIn('press Ctrl+R to launch the model window', launcher)
         self.assertIn('Pick File(\n        "Select open_tdm_setup.py', launcher)
         self.assertNotIn('Get Default Directory()', launcher)
+        self.assertLess(launcher.index('Set Default Directory( projectDir );'),
+                        launcher.index('returnCode = Python Submit File( pythonFile );'))
+        self.assertNotIn('Button Box(', launcher)
         self.assertIn('setupName = "open_tdm_setup.py"', launcher)
         for required in ("tdm_jmp.py", "tdm_bridge.py", "tdm_minimal_io.py",
                          "tdm_minimal_model.py", "tdm_least_squares.py"):
