@@ -1,4 +1,23 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24o)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24p)
+
+PARALLEL CPU REFINEMENT (R24p)
+In Least-Squares Refinement, set Parallel CPU workers from 1 to 10. The
+default of 1 retains serial fitting. With multiple selected runs, separate
+Python processes simulate those runs at each objective evaluation. With two
+or more unlocked parameters, numerical Jacobian parameter trials also run
+in parallel, including for a single selected run. All workers use the same
+shared candidate parameter vector and each run's own fixed process recipe,
+UV file, conductivity choice and fraction mass% observations. The parent
+process combines residuals in run and parameter order and writes the fit
+history and outputs. If one run and at most one parameter is unlocked, only
+one worker can be used. More workers increase CPU and memory use; they do
+not reduce the number of solver evaluations or change the least-squares
+objective. The fit report and settings JSON show the actual worker count.
+Parallel fitting needs joblib, installed by the JMP launcher on first use
+of this release. If worker startup fails in a JMP installation, select one
+worker to retain serial fitting. The JMP UI waits while a fit runs; check
+least_squares_objective_history.csv for progress.
+
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
 solver uses the modified Wang kinetic equation (4) from Beryamysoltan et al.,

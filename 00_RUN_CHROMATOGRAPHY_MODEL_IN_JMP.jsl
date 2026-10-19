@@ -25,6 +25,13 @@ If( !File Exists( dependencyMarker ),
     Save Text File( dependencyMarker, "checked" );
 );
 
+// Joblib starts separate Python processes for independent run simulations.
+parallelMarker = "$USER_APPDATA/tdm22_classic_direct_dependencies_r24p_checked.txt";
+If( !File Exists( parallelMarker ),
+    Python Install Packages( "joblib" );
+    Save Text File( parallelMarker, "checked" );
+);
+
 pythonFile = projectDir || "open_tdm_setup.py";
 projectDirWindows = Convert File Path( projectDir, "Absolute", "Windows" );
 pythonFileWindows = Convert File Path( pythonFile, "Absolute", "Windows" );

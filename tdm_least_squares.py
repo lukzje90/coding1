@@ -24,6 +24,7 @@ import html
 import io
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shutil
@@ -1484,6 +1485,37 @@ def _objective_parts(
     }
 
 
+class ParallelExecutionError(RuntimeError):
+    """A CPU worker failed outside the model objective; stop the fit."""
+
+
+def _objective_worker(cfg, ref, mode, composition_refs, fit_conductivity, detailed):
+    """Evaluate one run without writing fit state in a child process."""
+    try:
+        residual, info = _objective_parts(cfg, ref, mode, composition_refs, fit_conductivity)
+        return residual, info if detailed else None, None
+    except Exception as exc:
+        # Model errors remain candidate penalties; process startup/crash errors
+        # are raised by joblib itself and must stop the fit instead.
+        return None, None, f"{type(exc).__name__}: {exc}"
+
+
+def _trial_objective_worker(vector, base_configs, specs, profile_inputs, mode,
+                            scale_factors):
+    """One finite-difference parameter trial, evaluated in a CPU process."""
+    try:
+        blocks = []
+        for cfg, (ref, composition_refs, fit_conductivity), scale in zip(
+                base_configs, profile_inputs, scale_factors):
+            trial_cfg = _apply_vector(cfg, specs, vector)
+            residual, _ = _objective_parts(trial_cfg, ref, mode, composition_refs,
+                                           fit_conductivity)
+            blocks.append(residual * scale)
+        return np.concatenate(blocks), None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def _write_apply_jsl(config: dict[str, Any], specs: list[FitParameter]) -> None:
     mapping = {
         "qmax_g_L": "Qmax", "b_L_g": "B", "Z_ref": "Zref", "delta_ref": "Delta",
@@ -1600,10 +1632,11 @@ def _objective_improvement_percent(initial: float, candidate: float) -> float:
     return (initial - candidate) / max(abs(initial), 1e-30) * 100.0
 
 
-def _bounded_jacobian(fun, lower, upper):
+def _bounded_jacobian(fun, lower, upper, batch_fun=None):
     def jacobian(vector):
         base = fun(vector)
-        columns = []
+        trials = []
+        steps = []
         for i, value in enumerate(vector):
             h = max(1e-3, abs(float(value)) * 1e-3)
             trial = np.asarray(vector, dtype=float).copy()
@@ -1611,7 +1644,10 @@ def _bounded_jacobian(fun, lower, upper):
             if step < h * 0.1:
                 step = -min(h, value - lower[i])
             trial[i] += step
-            columns.append((fun(trial) - base) / step)
+            trials.append(trial)
+            steps.append(step)
+        values = batch_fun(trials) if batch_fun is not None else [fun(trial) for trial in trials]
+        columns = [(result - base) / step for result, step in zip(values, steps)]
         return np.column_stack(columns)
     return jacobian
 
@@ -1953,6 +1989,7 @@ def run_global_least_squares_refinement(
     mode: str = MODE_CHROMATOGRAM,
     unlocked_paths: Iterable[str] | None = None,
     max_nfev: int = 60,
+    parallel_workers: int = 1,
 ) -> dict[str, Any]:
     """Fit one shared mechanistic parameter vector against selected run profiles.
 
@@ -1963,6 +2000,12 @@ def run_global_least_squares_refinement(
     profiles = list(profiles)
     if not 1 <= len(profiles) <= MAX_LSQ_PROFILES:
         raise ValueError(f"Global least-squares fitting requires 1–{MAX_LSQ_PROFILES} attached chromatogram profiles.")
+    try:
+        requested_workers = float(parallel_workers)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("CPU workers must be a whole number from 1 to 10.") from exc
+    if not math.isfinite(requested_workers) or not requested_workers.is_integer() or not 1 <= requested_workers <= MAX_LSQ_PROFILES:
+        raise ValueError(f"CPU workers must be a whole number from 1 to {MAX_LSQ_PROFILES}.")
     mode = str(mode or "").strip().upper()
     if mode not in SUPPORTED_MODES:
         raise ValueError("Least-squares mode must be CHROMATOGRAM or CHROMATOGRAM_AND_COMPOSITION.")
@@ -2070,6 +2113,15 @@ def run_global_least_squares_refinement(
         unlocked_paths=unlocked_paths,
         candidate_paths=candidate_paths,
     )
+    workers_used = min(int(requested_workers), max(len(profiles), len(specs)), os.cpu_count() or 1)
+    parallel = None
+    delayed = None
+    if workers_used > 1:
+        try:
+            from joblib import Parallel, delayed
+        except ImportError as exc:
+            raise ParallelExecutionError("Parallel fitting requires joblib. Install requirements.txt or select one CPU worker.") from exc
+        parallel = Parallel(n_jobs=workers_used, backend="loky")
     x0, lo, hi = _encode_initial(specs)
     n_profiles = len(normalized_profiles)
     normalized_objective = first["least_squares"]["objective"] == "NORMALIZED_MSE"
@@ -2081,20 +2133,40 @@ def run_global_least_squares_refinement(
             raise ValueError("Global profiles must use the same objective and chromatography mode.")
     comp_refs_by_profile: list[list[dict[str, Any]]] = [p["composition_references"] for p in normalized_profiles]
 
-    def evaluate(configs: list[dict[str, Any]]) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    def evaluate(configs: list[dict[str, Any]], *, detailed: bool = True) -> tuple[np.ndarray, list[dict[str, Any] | None]]:
         residual_blocks = []
         infos = []
-        for cfg, prof, comp_refs, normalized_weight in zip(configs, normalized_profiles, comp_refs_by_profile, run_weights):
-            r, info = _objective_parts(cfg, prof["reference"], mode, comp_refs, prof["fit_conductivity"])
+        if parallel is None or n_profiles == 1:
+            parts = [(*_objective_parts(cfg, prof["reference"], mode, comp_refs, prof["fit_conductivity"]), None)
+                     for cfg, prof, comp_refs in zip(configs, normalized_profiles, comp_refs_by_profile)]
+        else:
+            try:
+                parts = parallel(
+                    delayed(_objective_worker)(cfg, prof["reference"], mode, comp_refs,
+                                               prof["fit_conductivity"], detailed)
+                    for cfg, prof, comp_refs in zip(configs, normalized_profiles, comp_refs_by_profile)
+                )
+            except Exception as exc:
+                raise ParallelExecutionError(
+                    f"CPU worker execution failed: {type(exc).__name__}: {exc}. Select one CPU worker to run serially."
+                ) from exc
+        for (r, info, error), normalized_weight in zip(parts, run_weights):
+            if error is not None:
+                raise ValueError(error)
             # WEIGHTED_RMSE: sum_r alpha_r * (sum_j w_rj e_rj² / sum_j w_rj).
             # Minimizing its square root is equivalent to minimizing its SSE
             # residual vector (SciPy's least_squares contract).
             scale_factor = math.sqrt(float(normalized_weight)) if weighted_objective else (1.0 / math.sqrt(n_profiles) if normalized_objective else 1.0)
             residual_blocks.append(r * scale_factor)
-            infos.append(info)
+            infos.append(info if detailed else None)
         return np.concatenate(residual_blocks), infos
 
     base_configs = [copy.deepcopy(p["config"]) for p in normalized_profiles]
+    scale_factors = [math.sqrt(float(weight)) if weighted_objective else
+                     (1.0 / math.sqrt(n_profiles) if normalized_objective else 1.0)
+                     for weight in run_weights]
+    profile_inputs = [(p["reference"], p["composition_references"], p["fit_conductivity"])
+                      for p in normalized_profiles]
     initial_r, initial_infos = evaluate(base_configs)
     initial_obj = float(np.sum(initial_r ** 2))
     fit_started = time.perf_counter()
@@ -2141,7 +2213,7 @@ def run_global_least_squares_refinement(
         eval_count += 1
         try:
             candidates = [_apply_vector(cfg, specs, vector) for cfg in base_configs]
-            values, _infos = evaluate(candidates)
+            values, _infos = evaluate(candidates, detailed=False)
             objective = float(np.sum(values * values))
             if not np.all(np.isfinite(values)) or not math.isfinite(objective):
                 raise FloatingPointError("non-finite global residual")
@@ -2149,10 +2221,44 @@ def run_global_least_squares_refinement(
                 best_vector = np.asarray(vector).copy()
             record(objective, "optimizer", "ok")
             return values
+        except ParallelExecutionError:
+            raise
         except Exception as exc:
             penalty = np.full_like(initial_r, 1e6, dtype=float)
             record(float(np.sum(penalty * penalty)), "optimizer", f"penalty: {type(exc).__name__}: {exc}")
             return penalty
+
+    def batch_residual(vectors: list[np.ndarray]) -> list[np.ndarray]:
+        """Record finite-difference trials in the same order as serial fitting."""
+        nonlocal eval_count, best_vector
+        try:
+            trials = parallel(
+                delayed(_trial_objective_worker)(vector, base_configs, specs,
+                                                 profile_inputs, mode, scale_factors)
+                for vector in vectors
+            )
+        except Exception as exc:
+            raise ParallelExecutionError(
+                f"CPU worker execution failed: {type(exc).__name__}: {exc}. Select one CPU worker to run serially."
+            ) from exc
+        outputs = []
+        for vector, (values, error) in zip(vectors, trials):
+            eval_count += 1
+            if error is None:
+                objective = float(np.sum(values * values))
+                if not np.all(np.isfinite(values)) or not math.isfinite(objective):
+                    error = "FloatingPointError: non-finite global residual"
+            if error is not None:
+                values = np.full_like(initial_r, 1e6, dtype=float)
+                objective = float(np.sum(values * values))
+                status = f"penalty: {error}"
+            else:
+                if objective < best_objective:
+                    best_vector = np.asarray(vector).copy()
+                status = "ok"
+            record(objective, "optimizer", status)
+            outputs.append(values)
+        return outputs
 
     if specs:
         cached_residual = _cache_last_evaluation(residual)
@@ -2160,7 +2266,8 @@ def run_global_least_squares_refinement(
             cached_residual,
             x0,
             bounds=(lo, hi),
-            jac=_bounded_jacobian(cached_residual, lo, hi),
+            jac=_bounded_jacobian(cached_residual, lo, hi,
+                                  batch_residual if parallel is not None and len(specs) > 1 else None),
             method=_optimizer_method(x0, lo, hi),
             loss="linear",
             x_scale="jac",
@@ -2189,6 +2296,8 @@ def run_global_least_squares_refinement(
         final_obj = float(np.sum(final_r ** 2))
         if not math.isfinite(final_obj):
             raise FloatingPointError("non-finite final global objective")
+    except ParallelExecutionError:
+        raise
     except Exception as exc:
         fitted_configs = [copy.deepcopy(cfg) for cfg in base_configs]
         final_r, final_infos = initial_r, initial_infos
@@ -2367,6 +2476,8 @@ def run_global_least_squares_refinement(
         "fitted_parameter_paths": [s.path for s in specs],
         "locked_parameter_paths": [p for p in candidate_paths if p not in {s.path for s in specs}],
         "max_nfev": int(max_nfev),
+        "parallel_workers_requested": int(requested_workers),
+        "parallel_workers_used": workers_used,
         "objective_history_csv": str(FIT_HISTORY_CSV),
     }
     FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -2409,7 +2520,7 @@ def run_global_least_squares_refinement(
 <meta charset="utf-8"><title>Global least-squares refinement</title>
 <style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
 <h1>Global least-squares refinement</h1>
-<p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}</p>
+<p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}; <b>CPU worker processes:</b> {workers_used}</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
 <b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Optimizer evaluations:</b> {eval_count}; <b>Unlocked parameters:</b> {len(specs)}.</p>
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise UV equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor. Conductivity, when enabled for a run, adds measured detector residuals normalized by that run's conductivity signal scale and sample count; in RAW_SSE these are rescaled to the measured UV scale.</p>
@@ -2431,6 +2542,7 @@ def run_global_least_squares_refinement(
         "improvement_percent": improvement,
         "nfev": opt_nfev,
         "residual_evaluations": eval_count,
+        "parallel_workers_used": workers_used,
         "mode": mode,
         "profile_metrics": metric_rows,
         "initial_weighted_rmse": math.sqrt(max(initial_obj, 0.0)) if weighted_objective else None,

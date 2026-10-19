@@ -169,6 +169,11 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
         if cap is None or not cap.is_integer() or not 2 <= cap <= 10000:
             raise ValueError("Safety cap must be a whole number from 2 to 10000 optimizer evaluations.")
         config["least_squares"]["max_nfev"] = int(cap)
+    if "tdm_ui_lsq_parallel_workers" in globals():
+        workers = _num("tdm_ui_lsq_parallel_workers")
+        if workers is None or not workers.is_integer() or not 1 <= workers <= MAX_LSQ_PROFILES:
+            raise ValueError(f"CPU workers must be a whole number from 1 to {MAX_LSQ_PROFILES}.")
+        config["least_squares"]["parallel_workers"] = int(workers)
     locks = _lsq_unlocked_paths_from_jmp()
     if locks is not None:
         config["least_squares"]["unlocked_paths"] = sorted(locks)
@@ -698,7 +703,8 @@ def main() -> int:
             _write_status(
                 f"Least-squares refinement running: {len(profiles)} profile(s), "
                 f"{len(fitted_paths)} unlocked parameters, "
-                f"{shared_raw['least_squares']['max_nfev']} optimizer-evaluation safety cap.\n"
+                f"{shared_raw['least_squares']['max_nfev']} optimizer-evaluation safety cap; "
+                f"up to {shared_raw['least_squares']['parallel_workers']} CPU worker(s).\n"
                 f"Each numerical Jacobian needs about {len(profiles) * (len(fitted_paths) + 1)} column solves. "
                 f"Progress: {FIT_HISTORY_CSV}"
             )
@@ -707,6 +713,7 @@ def main() -> int:
                 mode=mode,
                 unlocked_paths=unlocked_paths,
                 max_nfev=int(shared_raw["least_squares"]["max_nfev"]),
+                parallel_workers=int(shared_raw["least_squares"]["parallel_workers"]),
             )
             if fit["accepted"]:
                 fitted_shared = sanitize_config_for_selected_model(fit["fitted_config"])
@@ -728,6 +735,7 @@ def main() -> int:
                 f"{weighted_line}"
                 f"Objective improvement: {fit['improvement_percent']:.4g}%\n"
                 f"Optimizer function evaluations: {fit['nfev']}; actual residual evaluations: {fit['residual_evaluations']}\n"
+                f"CPU worker processes used: {fit['parallel_workers_used']}\n"
                 f"Optimizer converged: {fit['success']}; {fit['message']}\n"
                 f"Accepted/applied to shared batch parameters: {fit['accepted']}\n"
                 f"Improved parameters:\n{improved_list}\n"

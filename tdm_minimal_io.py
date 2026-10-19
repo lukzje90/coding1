@@ -196,7 +196,7 @@ def blank_config() -> dict[str, Any]:
         "chromatography_mode": "ION_EXCHANGE",
         "wang": {"q0_g_L": 20.0, "eta": 1.0},
         "system": system_defaults(),
-        "least_squares": {"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
+        "least_squares": {"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120, "parallel_workers": 1,
                           "unlocked_paths": None, "selected_run_numbers": None},
         "impurity_count": 0,
         "column": {
@@ -340,7 +340,7 @@ def normalize_config(config: Any) -> Any:
             if str(out["model"]) == MODEL_TDM_CPA and legacy_salt_d is not None:
                 defaults["salt_dispersion_mm2_s"] = legacy_salt_d
             out["system"] = deep_merge(defaults, out.get("system", {}))
-            out["least_squares"] = deep_merge({"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
+            out["least_squares"] = deep_merge({"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120, "parallel_workers": 1,
                                                 "unlocked_paths": None, "selected_run_numbers": None}, out.get("least_squares", {}))
         # Migrate legacy projects and initialize new impurity factors from
         # the shared target response. Each impurity remains independently
@@ -1054,6 +1054,9 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
     max_nfev = _number(lsq.get("max_nfev"), "Least-squares maximum solver evaluations", errors, lower=2, upper=10000)
     if max_nfev is not None and not max_nfev.is_integer():
         errors.append("Least-squares maximum solver evaluations must be a whole number.")
+    workers = _number(lsq.get("parallel_workers"), "Least-squares CPU workers", errors, lower=1, upper=MAX_LSQ_PROFILES)
+    if workers is not None and not workers.is_integer():
+        errors.append("Least-squares CPU workers must be a whole number.")
     conv = config.get("conversion", {})
     _number(conv.get("uv_to_protein_mAU_L_g"), "Target UV → protein response factor [mAU·L/g]", errors, positive=True)
     epsp: float | None = None

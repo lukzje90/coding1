@@ -480,6 +480,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'Python Send(lsqBaselineMode << Get Selected, Python Name("tdm_ui_lsq_baseline_mode"));',
         'Python Send(lsqBaseline << Get, Python Name("tdm_ui_lsq_detector_baseline"));',
         'Python Send(lsqMaxEvaluations << Get, Python Name("tdm_ui_lsq_max_nfev"));',
+        'Python Send(lsqParallelWorkers << Get, Python Name("tdm_ui_lsq_parallel_workers"));',
     ]
     lsq_run_sections = []
     lsq_selection_visibility = []
@@ -1517,6 +1518,8 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
                     Text Box("Leave objective and weights alone for ordinary pointwise least-squares. The optimizer keeps the best improvement and stops when the objective, gradient, or parameter step converges. Each unlocked parameter adds another column solve per numerical Jacobian for every selected run. Progress is saved to least_squares_objective_history.csv. Set individual parameter locks on Model Parameters.", << Set Wrap(740)),
                     {_nrow("Safety cap: optimizer evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 320)},
+                    {_nrow("Parallel CPU workers [1–10]", "lsqParallelWorkers", cfg['least_squares'].get('parallel_workers', 1), 320)},
+                    Text Box("Independent selected runs and Jacobian parameter trials can use separate CPU cores. Multiple unlocked parameters can benefit even with one run. More workers use more memory; the fitted objective and parameters are unchanged.", << Set Wrap(740)),
                     Outline Box("Optional objective and stopping settings", << Close(1), V List Box(
                         H List Box(Text Box("Objective", << Set Width(240)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
                         H List Box(Text Box("Baseline policy", << Set Width(240)), lsqBaselineMode = Combo Box({{"NONE", "INITIAL_MEDIAN"}}, << Set({1 if cfg['least_squares']['baseline_mode']=='NONE' else 2}), << Set Width(220))),
