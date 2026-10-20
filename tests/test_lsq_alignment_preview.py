@@ -243,6 +243,38 @@ class AlignmentPreviewTests(unittest.TestCase):
                                       output_html=root / "alignment.html")
             self.assertFalse((root / "alignment.html").exists())
 
+    def test_preview_opens_on_run_with_mass_percent_and_labels_other_run(self):
+        config = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
+        config["numerics"].update(time_steps=50, axial_positions=6)
+        trace = simulate(config)["trace"]
+        names = [component["name"] for component in config["components"][:2]]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            uv = root / "measured.csv"
+            report = root / "alignment.html"
+            _write_uv(uv, trace["CV"], trace["uv_mAU"], "CV")
+            preview = preview_lsq_alignment([
+                {"config": config, "chromatogram_csv": uv,
+                 "run_context": {"run_number": 1, "run_name": "UV only"}},
+                {"config": config, "chromatogram_csv": uv,
+                 "run_context": {"run_number": 2, "run_name": "Fraction run"},
+                 "composition_references": [
+                     {"fraction_index": 1, "start": 0.20, "end": 0.24,
+                      "x_unit": "CV", "mass_percent": {names[0]: 70, names[1]: 30}},
+                     {"fraction_index": 2, "start": 0.24, "end": 0.28,
+                      "x_unit": "CV", "mass_percent": {names[0]: 65, names[1]: 35}},
+                 ]},
+            ], output_html=report)
+            self.assertEqual([item["mass_percent_observations"] for item in preview["profiles"]], [0, 4])
+            markup = report.read_text(encoding="utf-8")
+            self.assertIn('<option value="2" selected>LSQ Run 2: Fraction run — 4 mass% points</option>', markup)
+            self.assertIn('data-run="1" hidden', markup)
+            self.assertIn('data-run="2"><h2>', markup)
+            self.assertIn('<h3 id="mass-preview-run-2">Fraction mass% at midpoints</h3>', markup)
+            self.assertIn('href="#mass-preview-run-2"', markup)
+            self.assertIn('no observations enabled for this run', markup)
+            self.assertIn('stroke-width="2.3" stroke-dasharray="2 4"', markup)
+
     def test_jmp_has_a_separate_preview_action_and_report(self):
         jsl = build_jsl(load_config())
         _validate_jsl(jsl)
@@ -252,6 +284,11 @@ class AlignmentPreviewTests(unittest.TestCase):
         self.assertIn('Button Box("Run least-squares refinement", SendAndRun("FIT_LSQ"))', jsl)
         self.assertIn('If(actionText == "PREVIEW_LSQ_ALIGNMENT" & Contains(statusValue, "LSQ_ALIGNMENT_READY:")', jsl)
         self.assertIn('Button Box("Open alignment preview", OpenAlignmentPreview())', jsl)
+        open_preview = jsl.split('OpenAlignmentPreview = Function', 1)[1].split('OpenFitReport = Function', 1)[0]
+        self.assertIn('lsqPreviewRun = 0;', open_preview)
+        self.assertIn('SendAndRun("PREVIEW_LSQ_ALIGNMENT")', open_preview)
+        self.assertNotIn('Web(lsqPreviewReport)', open_preview)
+        self.assertIn('If(actionText == "FIT_LSQ" | actionText == "PREVIEW_LSQ_ALIGNMENT" | actionText == "ATTACH_LSQ_CSV", If(!SaveAllLSQReferences(), Return()));', jsl)
         self.assertEqual(jsl.count('Text Box("Model run for UV comparison"'), 10)
         self.assertIn('Column(dtLSQRuns, "LSQ_Model_Source")[r] = If(modelChoice', jsl)
         self.assertIn('Column(dtLSQRuns, "LSQ_Model_Run_Number")[r] = If(modelChoice', jsl)

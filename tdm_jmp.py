@@ -1304,9 +1304,8 @@ PreviewLSQSlot = Function({{slot}}, {{}},
 );
 
 OpenAlignmentPreview = Function({{}}, {{}},
-    If(File Exists(lsqPreviewReport), Web(lsqPreviewReport),
-        lsqStatusText << Set Text("No alignment preview is available yet. Attach UV chromatograms and click Preview UV, conductivity and mass%.")
-    );
+    lsqPreviewRun = 0;
+    SendAndRun("PREVIEW_LSQ_ALIGNMENT");
 );
 
 OpenFitReport = Function({{}}, {{}},

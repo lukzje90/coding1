@@ -119,7 +119,10 @@ not optimize or change fitted parameters. It reports the measured CV span,
 programmed end CV and pre-fit UV RMSE so axis or recipe mismatch can be fixed
 before a long refinement. The report names the model run, process stages,
 column volume, attached file, and actual Excel worksheet for each profile.
-"Open alignment preview" reopens the last preview. Existing saved LSQ
+"Open alignment preview" saves the current entries, reruns the selected
+profiles, and opens a fresh report. If any run has enabled mass% observations,
+the report initially displays the first such run and links to its mass% graph.
+The run picker labels profiles with mass% observations. Existing saved LSQ
 profiles retain their independent recipe choice. If no LSQ run table exists,
 the newly generated first ten profiles default to the corresponding normal
 batch runs.

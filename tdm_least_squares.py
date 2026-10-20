@@ -1193,8 +1193,7 @@ def preview_lsq_alignment(
     profiles = list(profiles)
     if not 1 <= len(profiles) <= MAX_LSQ_PROFILES:
         raise ValueError(f"Alignment preview requires 1–{MAX_LSQ_PROFILES} selected LSQ runs.")
-    sections: list[str] = []
-    choices: list[str] = []
+    sections: list[tuple[str, str]] = []
     metrics: list[dict[str, Any]] = []
     for index, profile in enumerate(profiles, start=1):
         config = normalize_config(profile["config"])
@@ -1259,14 +1258,8 @@ def preview_lsq_alignment(
             "initial_equilibration": dict(initial),
         }
         metrics.append(metric)
-        choices.append(
-            f'<option value="{html.escape(str(run_number), quote=True)}">'
-            f'LSQ Run {html.escape(str(run_number))}: {html.escape(run_name)}</option>'
-        )
-        sections.append(
-            f'<section class="lsq-preview-run" data-run="{html.escape(str(run_number), quote=True)}"'
-            + (' hidden>' if index > 1 else '>')
-            + f"<h2>LSQ Run {html.escape(str(run_number))}: {html.escape(run_name)}</h2>"
+        sections.append((str(run_number),
+            f"<h2>LSQ Run {html.escape(str(run_number))}: {html.escape(run_name)}</h2>"
             f"<p><b>Model UV recipe:</b> {html.escape(metric['model_run_label'])} — "
             f"{html.escape(metric['model_run_name'])}. The model was simulated from the saved recipe for this preview.</p>"
             f"<p><b>Process setup:</b> column volume {metric['column_volume_mL']:.6g} mL; "
@@ -1283,23 +1276,44 @@ def preview_lsq_alignment(
             + (f'<p><b>Measured conductivity:</b> {html.escape(str(reference.conductivity_column))}; '
                f'<b>RMSE before refinement:</b> {info["conductivity"]["rmse_mS_cm"]:.6g} mS/cm.</p>'
                if info["conductivity"] else "")
+            + (f'<p><b>Fraction mass% alignment:</b> {metric["mass_percent_observations"]} observations. '
+               f'<a href="#mass-preview-run-{html.escape(str(run_number), quote=True)}">View mass% graph</a>.</p>'
+               if comp_refs else
+               '<p><b>Fraction mass% alignment:</b> no observations enabled for this run. '
+               'Select mass% refinement mode, turn on this run\'s fraction mass%, and enter fraction values to include them.</p>')
             + _chromatogram_fit_svg(config, info)
             + (_conductivity_fit_svg(info) if info["conductivity"] else "")
-            + ("<h3>Fraction mass% at midpoints</h3>"
+            + (f'<h3 id="mass-preview-run-{html.escape(str(run_number), quote=True)}">Fraction mass% at midpoints</h3>'
                + _composition_profile_svg(config, comp_refs, info["result"]["trace"])
                + f"<p>{sum(len(row['mass_percent']) for row in comp_refs)} entered species observations. "
                  "Only populated midpoint cells contribute to refinement; smooth curves are display-only.</p>"
                if comp_refs else "")
-            + "</section>"
-        )
+        ))
+    default_run = str(next(
+        (item["run_number"] for item in metrics if item["mass_percent_observations"]),
+        metrics[0]["run_number"],
+    ))
+    choices = [
+        f'<option value="{html.escape(str(item["run_number"]), quote=True)}"'
+        + (' selected' if str(item["run_number"]) == default_run else '')
+        + f'>LSQ Run {html.escape(str(item["run_number"]))}: {html.escape(item["run_name"])}'
+        + (f' — {item["mass_percent_observations"]} mass% points' if item["mass_percent_observations"] else '')
+        + '</option>'
+        for item in metrics
+    ]
+    rendered_sections = ''.join(
+        f'<section class="lsq-preview-run" data-run="{html.escape(run_number, quote=True)}"'
+        + (' hidden>' if run_number != default_run else '>') + content + '</section>'
+        for run_number, content in sections
+    )
     output_path = Path(output_html)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        '<!doctype html><meta charset="utf-8"><title>Pre-refinement UV alignment</title>'
+        '<!doctype html><meta charset="utf-8"><title>Pre-refinement alignment</title>'
         '<style>body{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}'
         'svg{display:block;width:100%;height:auto}h2{margin-top:2rem}'
         '[hidden]{display:none!important}select{font-size:1rem;padding:.4rem;margin:.4rem}</style>'
-        '<h1>Measured versus model UV before refinement</h1>'
+        '<h1>Measured versus model alignment before refinement</h1>'
         '<p>These are the current model parameters and selected saved model-run recipes. '
         'No optimizer was run and no fitted parameters were changed. Measured UV is displayed '
         'as the median imported sample in each chart pixel column to prevent dark overdraw; '
@@ -1308,7 +1322,7 @@ def preview_lsq_alignment(
         'If fraction mass% is entered, the preview shows midpoint observations and current model predictions. No fitting occurs in blank cells or between points.</p>'
         '<label for="lsq-preview-run-picker">View LSQ run:</label>'
         '<select id="lsq-preview-run-picker">' + ''.join(choices) + '</select>'
-        + ''.join(sections)
+        + rendered_sections
         + '<script>const picker=document.getElementById("lsq-preview-run-picker");'
           'function showRun(){document.querySelectorAll(".lsq-preview-run").forEach(section=>'
           '{section.hidden=section.dataset.run!==picker.value;});}'
