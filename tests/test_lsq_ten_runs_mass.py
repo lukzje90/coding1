@@ -97,6 +97,10 @@ class TenRunMassTests(unittest.TestCase):
             self.assertEqual({(row["Run_Number"], row["Measured_mass_percent"])
                               for row in mass_fit}, {(str(i), str(float(i))) for i in range(1, 11)})
             self.assertEqual({row["Run_Number"] for row in uv_fit}, {str(i) for i in range(1, 11)})
+            self.assertEqual({(row["run_number"], row["initial_rmse_percentage_points"],
+                               row["final_rmse_percentage_points"])
+                              for row in result["composition_profile_metrics"]},
+                             {(i, 100.0 - i, 100.0 - i) for i in range(1, 11)})
 
     def test_reversed_run_4_and_2_keep_their_own_recipe_uv_and_mass_in_preview_and_fit(self):
         shared = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)

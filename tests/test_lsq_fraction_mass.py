@@ -11,12 +11,82 @@ import numpy as np
 import tdm_bridge
 import tdm_least_squares as lsq
 from tdm_jmp import build_jsl, _validate_jsl
-from tdm_minimal_io import MODEL_EDM_LANGMUIR, default_batch_row, load_lsq_mass_rows
+from tdm_minimal_io import MODEL_EDM_LANGMUIR, MODEL_TDM_CPA, default_batch_row, load_lsq_mass_rows
 from tdm_minimal_model import simulate
 from verify_model import make_config
 
 
 class FractionMassTests(unittest.TestCase):
+    def test_tdm_cpa_four_species_fraction_profile_refines_wrong_parameter(self):
+        truth = make_config(MODEL_TDM_CPA, 3, multistep=False)
+        truth["numerics"].update(time_steps=60, axial_positions=6)
+        truth["process"]["load_CV"] = 3.0
+        truth["process"]["plw_count"] = 0
+        truth["process"]["elution_steps"][0]["CV"] = 10.0
+        truth["least_squares"]["objective"] = "NORMALIZED_MSE"
+        starting = copy.deepcopy(truth)
+        starting["components"][3]["D_ax_mm2_s"] *= 5.0
+        true_trace = simulate(truth)["trace"]
+        starting_trace = simulate(starting)["trace"]
+        names = [row["name"] for row in truth["components"][:4]]
+        cv = np.asarray(true_trace["CV"])
+        concentrations = np.asarray(true_trace["component_g_L"])
+        intervals = ((.35, .45), (.45, .55), (.55, .65), (.65, .75),
+                     (.75, .85), (3.65, 3.75), (3.85, 3.95))
+        fractions = []
+        for index, (start, end) in enumerate(intervals, 1):
+            predicted = lsq._predicted_mass_percent_at_cv(
+                cv, concentrations, (start + end) / 2, 4)
+            fractions.append({
+                "fraction_index": index, "start": start, "end": end,
+                "x_unit": "CV",
+                "mass_percent": {} if index == 4 else dict(zip(names, map(float, predicted))),
+            })
+        validated = lsq.validate_composition_references(starting, fractions)
+        initial_mass_residuals, _ = lsq._composition_residuals(
+            starting, validated, starting_trace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV 280 [mAU]"])
+                # UV already matches the wrong model. Movement toward truth
+                # therefore has to come from the entered fraction mass% data.
+                writer.writerows(zip(starting_trace["CV"], starting_trace["uv_mAU"]))
+            outputs = ("FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
+                       "FIT_CONDUCTIVITY_CSV", "FIT_REPORT_HTML", "FIT_CONFIG_JSON",
+                       "FIT_APPLY_JSL", "FIT_SETTINGS_JSON", "FIT_HISTORY_CSV",
+                       "FIT_IMPROVED_CSV", "FIT_IMPROVED_TXT", "CONFIG_PATH")
+            with patch.multiple(lsq, **{name: root / getattr(lsq, name).name
+                                        for name in outputs}):
+                fit = lsq.run_global_least_squares_refinement(
+                    [{"config": starting, "chromatogram_csv": source,
+                      "composition_references": fractions}],
+                    mode=lsq.MODE_CHROMATOGRAM_AND_COMPOSITION,
+                    unlocked_paths=["components[3].D_ax_mm2_s"], max_nfev=8)
+                with lsq.FIT_COMPOSITION_CSV.open(newline="", encoding="utf-8") as stream:
+                    fitted_rows = list(csv.DictReader(stream))
+                report = lsq.FIT_REPORT_HTML.read_text()
+            fitted_value = fit["fitted_config"]["components"][3]["D_ax_mm2_s"]
+            true_value = truth["components"][3]["D_ax_mm2_s"]
+            self.assertLess(abs(fitted_value - true_value), 0.15 * true_value)
+            fitted_trace = simulate(fit["fitted_config"])["trace"]
+            final_mass_residuals, _ = lsq._composition_residuals(
+                fit["fitted_config"], validated, fitted_trace)
+            self.assertLess(float(final_mass_residuals @ final_mass_residuals),
+                            0.01 * float(initial_mass_residuals @ initial_mass_residuals))
+            self.assertEqual(len(fitted_rows), 24)
+            self.assertEqual({int(row["Fraction"]) for row in fitted_rows},
+                             {1, 2, 3, 5, 6, 7})
+            metrics = fit["composition_profile_metrics"]
+            self.assertEqual({row["protein_species"] for row in metrics}, set(names))
+            self.assertTrue(all(row["observed_fractions"] == 6 for row in metrics))
+            impurity = next(row for row in metrics if row["protein_species"] == names[3])
+            self.assertLess(impurity["final_rmse_percentage_points"],
+                            0.1 * impurity["initial_rmse_percentage_points"])
+            self.assertIn("Fraction mass% fit by protein species", report)
+
     def test_zero_feed_impurity_does_not_shift_later_fraction_columns(self):
         cfg = make_config(MODEL_EDM_LANGMUIR, 2, multistep=False)
         cfg["components"][0]["mass_percent"] = 60

@@ -180,6 +180,9 @@ preview and final report show entered and predicted species lines, with the
 model line limited to measured segments. The target measured line is solid,
 measured impurity lines are dotted. The model target is dashed and model
 impurities use lighter dotted lines.
+The final fit report also shows before/after mass% RMSE in percentage points
+for each measured species in each LSQ run, so the fraction-profile improvement
+can be checked separately from the combined UV and mass% objective.
 Measured values are compared with
 100 x species concentration / total modeled-species concentration. Partial
 rows are allowed; a full row that does not total 100% may have an irreducible

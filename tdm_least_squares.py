@@ -2478,6 +2478,34 @@ def run_global_least_squares_refinement(
                 })
 
     composition_rows = []
+    composition_profile_metrics: list[dict[str, Any]] = []
+    for profile, initial_info, final_info in zip(normalized_profiles, initial_infos, final_infos):
+        initial_by_fraction = {
+            (row["Fraction"], row["Protein_Species"]): row
+            for row in initial_info["composition"]
+        }
+        for species in active_components(profile["config"]):
+            name = str(species["name"])
+            final_species = [row for row in final_info["composition"]
+                             if row["Protein_Species"] == name]
+            if not final_species:
+                continue
+            before = np.asarray([
+                float(row["Measured_mass_percent"])
+                - float(initial_by_fraction[(row["Fraction"], name)]["Simulated_mass_percent"])
+                for row in final_species], dtype=float)
+            after = np.asarray([
+                float(row["Measured_mass_percent"])
+                - float(row["Simulated_mass_percent"])
+                for row in final_species], dtype=float)
+            composition_profile_metrics.append({
+                "run_number": int(profile["run_context"]["run_number"]),
+                "run_name": str(profile["run_context"]["run_name"]),
+                "protein_species": name,
+                "observed_fractions": len(final_species),
+                "initial_rmse_percentage_points": float(np.sqrt(np.mean(before ** 2))),
+                "final_rmse_percentage_points": float(np.sqrt(np.mean(after ** 2))),
+            })
     conductivity_output_path = FIT_TRACE_CSV.with_name(FIT_CONDUCTIVITY_CSV.name)
     with conductivity_output_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=["Run_Number", "Run_Name", "Model_Run", "Conductivity_Column", "CV", "Measured_mS_cm", "Predicted_mS_cm", "Residual_mS_cm"])
@@ -2541,6 +2569,7 @@ def run_global_least_squares_refinement(
         "parallel_workers_requested": int(requested_workers),
         "parallel_workers_used": workers_used,
         "parallel_worker_fallback_used": worker_fallback_used,
+        "composition_profile_metrics": composition_profile_metrics,
         "objective_history_csv": str(FIT_HISTORY_CSV),
     }
     FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -2558,6 +2587,23 @@ def run_global_least_squares_refinement(
         )) + "</tr>"
         for metric in metric_rows
     )
+    composition_metric_rows = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
+            metric["run_number"], metric["run_name"], metric["protein_species"],
+            metric["observed_fractions"],
+            f'{metric["initial_rmse_percentage_points"]:.6g}',
+            f'{metric["final_rmse_percentage_points"]:.6g}',
+        )) + "</tr>"
+        for metric in composition_profile_metrics
+    )
+    composition_metrics_html = (
+        "<h2>Fraction mass% fit by protein species</h2>"
+        "<p>RMSE is measured in mass percentage points at entered fraction midpoints. "
+        "Blank species cells and fraction gaps add no observations.</p>"
+        "<table><thead><tr><th>Run</th><th>Profile</th><th>Protein species</th>"
+        "<th>Observed fractions</th><th>Before RMSE</th><th>After RMSE</th>"
+        "</tr></thead><tbody>" + composition_metric_rows + "</tbody></table>"
+    ) if composition_profile_metrics else ""
     recipe_details = "".join(
         f'<details><summary>Run {p["run_context"]["run_number"]} — {html.escape(p["run_context"]["run_name"])} recipe and input CSV</summary>'
         f'<pre>{html.escape(json.dumps({"run_context": p["run_context"], "configuration": p["config"]}, indent=2, ensure_ascii=False))}</pre></details>'
@@ -2585,9 +2631,10 @@ def run_global_least_squares_refinement(
 <h1>Global least-squares refinement</h1>
 <p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}; <b>CPU worker processes:</b> {workers_used} (requested {int(requested_workers)}; stalled-pool fallback: {worker_fallback_used})</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
-<b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {int(opt.nfev)}; <b>Unlocked parameters:</b> {len(specs)}.</p>
+<b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Unlocked parameters:</b> {len(specs)}.</p>
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise UV equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor. Conductivity, when enabled for a run, adds measured detector residuals normalized by that run's conductivity signal scale and sample count; in RAW_SSE these are rescaled to the measured UV scale.</p>
 <table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>UV RMSE</th><th>Weighted UV RMSE</th><th>Run weight</th><th>UV R²</th><th>Conductivity RMSE [mS/cm]</th></tr></thead><tbody>{profile_rows}</tbody></table>
+{composition_metrics_html}
 <h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>{overlays_html}
 <h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Profile recipes used</h2>{recipe_details}
@@ -2607,6 +2654,7 @@ def run_global_least_squares_refinement(
         "residual_evaluations": eval_count,
         "parallel_workers_used": workers_used,
         "parallel_worker_fallback_used": worker_fallback_used,
+        "composition_profile_metrics": composition_profile_metrics,
         "mode": mode,
         "profile_metrics": metric_rows,
         "initial_weighted_rmse": math.sqrt(max(initial_obj, 0.0)) if weighted_objective else None,
