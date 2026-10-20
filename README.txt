@@ -48,6 +48,11 @@ Parallel fitting needs joblib, installed by the JMP launcher on first use
 of this release. If worker startup fails in a JMP installation, select one
 worker to retain serial fitting. The JMP UI waits while a fit runs; check
 least_squares_objective_history.csv for progress.
+If the operating system terminates a worker during fitting, the refinement
+retries only unfinished trials with fewer processes: first two, then one.
+The same trial vectors and solver are used; the fit settings record the final
+worker count and whether fallback occurred. A TDM-CPA fit with large grids
+and many unlocked parameters may need one or two workers on a 16 GB laptop.
 
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The

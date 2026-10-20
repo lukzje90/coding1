@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from concurrent.futures.process import BrokenProcessPool
 import csv
 import json
 from multiprocessing import TimeoutError as ProcessTimeoutError
@@ -242,6 +243,121 @@ class ParallelCpuFitTests(unittest.TestCase):
             self.assertTrue(results[1]["parallel_worker_fallback_used"])
             settings = json.loads((root / "retry" / lsq.FIT_SETTINGS_JSON.name).read_text())
             self.assertTrue(settings["parallel_worker_fallback_used"])
+
+    def test_terminated_jacobian_workers_retry_unfinished_trials_serially(self):
+        truth = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        truth["numerics"].update(time_steps=50, axial_positions=6)
+        trace = simulate(truth)["trace"]
+        initial = copy.deepcopy(truth)
+        initial["components"][0]["qmax_g_L"] *= 1.2
+        paths = ["components[0].qmax_g_L", "components[0].b_L_g",
+                 "components[0].D_app_mm2_s"]
+
+        class CrashingParallel:
+            crashed_counts = []
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def __call__(self, jobs):
+                if self.kwargs.get("return_as") == "generator_unordered":
+                    count = self.kwargs["n_jobs"]
+
+                    def results():
+                        for job_number, (function, args, kwargs) in enumerate(jobs):
+                            if count > 2 and job_number == 1:
+                                CrashingParallel.crashed_counts.append(count)
+                                raise BrokenProcessPool("simulated worker termination")
+                            if count == 2:
+                                CrashingParallel.crashed_counts.append(count)
+                                raise BrokenProcessPool("simulated worker termination")
+                            yield function(*args, **kwargs)
+                    return results()
+                return [function(*args, **kwargs) for function, args, kwargs in jobs]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV 280 [mAU]"])
+                writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
+            results = []
+            for label, workers in (("serial", 1), ("retry", 3)):
+                result_dir = root / label
+                result_dir.mkdir()
+                with patch.multiple(lsq, **{name: result_dir / getattr(lsq, name).name
+                                            for name in OUTPUTS}):
+                    if workers == 3:
+                        with patch("joblib.Parallel", CrashingParallel):
+                            result = lsq.run_global_least_squares_refinement(
+                                [{"config": initial, "chromatogram_csv": source}],
+                                unlocked_paths=paths, max_nfev=2, parallel_workers=workers)
+                    else:
+                        result = lsq.run_global_least_squares_refinement(
+                            [{"config": initial, "chromatogram_csv": source}],
+                            unlocked_paths=paths, max_nfev=2, parallel_workers=workers)
+                results.append(result)
+            self.assertEqual(CrashingParallel.crashed_counts[:2], [3, 2])
+            self.assertEqual(results[1]["parallel_workers_used"], 1)
+            self.assertTrue(results[1]["parallel_worker_fallback_used"])
+            np.testing.assert_allclose(results[0]["final_objective"],
+                                       results[1]["final_objective"], rtol=1e-11)
+            with (root / "retry" / lsq.FIT_HISTORY_CSV.name).open(newline="") as stream:
+                history = list(csv.DictReader(stream))
+            trials = [row for row in history if row["phase"] == "jacobian"]
+            self.assertEqual(len({row["status"].split("parameter=", 1)[1] for row in trials[:3]}), 3)
+
+    def test_terminated_multi_run_pool_retries_same_objective_serially(self):
+        truth = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        truth["numerics"].update(time_steps=50, axial_positions=6)
+        trace = simulate(truth)["trace"]
+        initial = copy.deepcopy(truth)
+        initial["components"][0]["qmax_g_L"] *= 1.2
+
+        class CrashingObjectiveParallel:
+            calls = 0
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def __call__(self, jobs):
+                CrashingObjectiveParallel.calls += 1
+                raise BrokenProcessPool("simulated multi-run worker termination")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV 280 [mAU]"])
+                writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
+            profiles = [{"config": initial, "chromatogram_csv": source,
+                         "run_context": {"run_number": number}}
+                        for number in (1, 2)]
+            results = []
+            for label, workers in (("serial", 1), ("retry", 2)):
+                result_dir = root / label
+                result_dir.mkdir()
+                with patch.multiple(lsq, **{name: result_dir / getattr(lsq, name).name
+                                            for name in OUTPUTS}):
+                    if workers == 2:
+                        with patch("joblib.Parallel", CrashingObjectiveParallel):
+                            result = lsq.run_global_least_squares_refinement(
+                                profiles, unlocked_paths=["components[0].qmax_g_L"],
+                                max_nfev=2, parallel_workers=workers)
+                    else:
+                        result = lsq.run_global_least_squares_refinement(
+                            profiles, unlocked_paths=["components[0].qmax_g_L"],
+                            max_nfev=2, parallel_workers=workers)
+                results.append(result)
+            self.assertEqual(CrashingObjectiveParallel.calls, 1)
+            self.assertEqual(results[1]["parallel_workers_used"], 1)
+            self.assertTrue(results[1]["parallel_worker_fallback_used"])
+            np.testing.assert_allclose(results[0]["initial_objective"],
+                                       results[1]["initial_objective"], rtol=1e-11)
+            np.testing.assert_allclose(results[0]["final_objective"],
+                                       results[1]["final_objective"], rtol=1e-11)
 
 
 if __name__ == "__main__":

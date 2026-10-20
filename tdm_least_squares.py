@@ -18,6 +18,7 @@ Optional composition observations add normalized composition residuals.
 
 from dataclasses import dataclass
 import codecs
+from concurrent.futures.process import BrokenProcessPool
 import copy
 import csv
 import html
@@ -2143,9 +2144,11 @@ def run_global_least_squares_refinement(
     worker_fallback_used = False
     parallel = None
     delayed = None
+    SingleWorkerExecutor = None
     if workers_used > 1:
         try:
             from joblib import Parallel, delayed
+            from joblib.externals.loky import ProcessPoolExecutor as SingleWorkerExecutor
         except ImportError as exc:
             raise ParallelExecutionError("Parallel fitting requires joblib. Install requirements.txt or select one CPU worker.") from exc
         parallel = Parallel(n_jobs=workers_used, backend="loky")
@@ -2161,9 +2164,26 @@ def run_global_least_squares_refinement(
     comp_refs_by_profile: list[list[dict[str, Any]]] = [p["composition_references"] for p in normalized_profiles]
 
     def evaluate(configs: list[dict[str, Any]], *, detailed: bool = True) -> tuple[np.ndarray, list[dict[str, Any] | None]]:
+        nonlocal workers_used, parallel, worker_fallback_used
         residual_blocks = []
         infos = []
-        if parallel is None or n_profiles == 1:
+        if worker_fallback_used:
+            # Keep a worker crash isolated from JMP, including if the same
+            # perturbed parameters trigger a native-library segmentation fault.
+            try:
+                with SingleWorkerExecutor(max_workers=1) as executor:
+                    parts = [executor.submit(
+                        _objective_worker, cfg, prof["reference"], mode,
+                        comp_refs, prof["fit_conductivity"], detailed,
+                    ).result() for cfg, prof, comp_refs in zip(
+                        configs, normalized_profiles, comp_refs_by_profile)]
+            except BrokenProcessPool as exc:
+                raise ParallelExecutionError(
+                    "A model-evaluation worker terminated even after reducing CPU use. "
+                    "No fitted parameters were applied; inspect the objective history and "
+                    "retry with fewer unlocked parameters or a smaller grid."
+                ) from exc
+        elif parallel is None or n_profiles == 1:
             parts = [(*_objective_parts(cfg, prof["reference"], mode, comp_refs, prof["fit_conductivity"]), None)
                      for cfg, prof, comp_refs in zip(configs, normalized_profiles, comp_refs_by_profile)]
         else:
@@ -2173,6 +2193,13 @@ def run_global_least_squares_refinement(
                                                prof["fit_conductivity"], detailed)
                     for cfg, prof, comp_refs in zip(configs, normalized_profiles, comp_refs_by_profile)
                 )
+            except BrokenProcessPool:
+                # A terminated worker can leave a multi-run objective pool
+                # unusable. Re-evaluate the same configs with fewer processes.
+                worker_fallback_used = True
+                workers_used = 2 if workers_used > 2 else 1
+                parallel = Parallel(n_jobs=workers_used, backend="loky") if workers_used > 1 else None
+                return evaluate(configs, detailed=detailed)
             except Exception as exc:
                 raise ParallelExecutionError(
                     f"CPU worker execution failed: {type(exc).__name__}: {exc}. Select one CPU worker to run serially."
@@ -2290,6 +2317,15 @@ def run_global_least_squares_refinement(
             outputs[index] = values
 
         def dispatch(indices: list[int], count: int, timeout_seconds: float) -> None:
+            if count == 1:
+                with SingleWorkerExecutor(max_workers=1) as executor:
+                    for index in indices:
+                        result = executor.submit(
+                            _indexed_trial_objective_worker, index, vectors[index],
+                            base_configs, specs, profile_inputs, mode,
+                            scale_factors).result(timeout=timeout_seconds)
+                        receive(*result)
+                return
             stream = Parallel(n_jobs=count, backend="loky", batch_size=1,
                               pre_dispatch=count, return_as="generator_unordered",
                               timeout=timeout_seconds)(
@@ -2301,35 +2337,43 @@ def run_global_least_squares_refinement(
             for index, values, error in stream:
                 receive(index, values, error)
 
-        try:
-            dispatch(list(range(len(vectors))), workers_used, trial_timeout)
-        except (TimeoutError, ProcessTimeoutError):
-            # A 12-process pool may be starved even when an individual solve
-            # succeeds. Retry only unfinished probes with two processes.
-            # Their vectors and residuals are unchanged, so Jacobian values
-            # remain identical to a successful first attempt.
-            worker_fallback_used = True
-            workers_used = min(workers_used, 2)
-            parallel = Parallel(n_jobs=workers_used, backend="loky")
+        while pending:
             try:
-                dispatch(sorted(pending), workers_used, 3.0 * trial_timeout)
+                dispatch(sorted(pending), workers_used, trial_timeout)
             except (TimeoutError, ProcessTimeoutError) as exc:
-                paths = ", ".join(specs[i].path for i in sorted(pending))
-                raise ParallelExecutionError(
-                    f"Jacobian trial exceeded {3.0 * trial_timeout:.0f} seconds even after retrying "
-                    f"with {workers_used} CPU workers. Unfinished parameter(s): {paths}. "
-                    "No fitted parameters were applied; inspect these starting values or "
-                    "lock a problematic parameter before another fit."
-                ) from exc
+                if workers_used <= 2:
+                    paths = ", ".join(specs[i].path for i in sorted(pending))
+                    raise ParallelExecutionError(
+                        f"Jacobian trial exceeded {trial_timeout:.0f} seconds after retrying "
+                        f"with {workers_used} CPU workers. Unfinished parameter(s): {paths}. "
+                        "No fitted parameters were applied; inspect these starting values or "
+                        "lock a problematic parameter before another fit."
+                    ) from exc
+                # A busy pool may stall even when a single solve succeeds.
+                # Retry only unfinished probes with the same vectors.
+                worker_fallback_used = True
+                workers_used = 2
+                parallel = Parallel(n_jobs=workers_used, backend="loky")
+                trial_timeout *= 3.0
+            except BrokenProcessPool as exc:
+                if workers_used == 1:
+                    paths = ", ".join(specs[i].path for i in sorted(pending))
+                    raise ParallelExecutionError(
+                        "A parameter-trial worker terminated even with one isolated CPU process. "
+                        f"Unfinished parameter(s): {paths}. No fitted parameters were applied; "
+                        "inspect those starting values or lock them before another fit."
+                    ) from exc
+                # OOM or another worker crash invalidates the pool. The
+                # initial serial simulation succeeded, so finish the same
+                # Jacobian trials with fewer isolated processes.
+                worker_fallback_used = True
+                workers_used = 2 if workers_used > 2 else 1
+                parallel = Parallel(n_jobs=workers_used, backend="loky") if workers_used > 1 else None
             except Exception as exc:
                 raise ParallelExecutionError(
-                    f"CPU worker retry failed: {type(exc).__name__}: {exc}."
+                    f"CPU worker execution failed: {type(exc).__name__}: {exc}. "
+                    "The completed parameter trials are recorded in the objective history."
                 ) from exc
-        except Exception as exc:
-            raise ParallelExecutionError(
-                f"CPU worker execution failed: {type(exc).__name__}: {exc}. "
-                "The completed parameter trials are recorded in the objective history."
-            ) from exc
         if pending:
             raise ParallelExecutionError(
                 "Jacobian worker results are missing for: "
