@@ -101,6 +101,8 @@ class RefinementTests(unittest.TestCase):
                 result = ls.run_global_least_squares_refinement(
                     [{"config": base, "chromatogram_csv": uv}],
                     unlocked_paths=["conversion.uv_to_protein_mAU_L_g"], max_nfev=6)
+            self.assertIn("<b>Evaluation safety cap:</b> 6",
+                          (tmp / ls.FIT_REPORT_HTML.name).read_text(encoding="utf-8"))
             self.assertEqual(result["parameters"], ["conversion.uv_to_protein_mAU_L_g"])
             self.assertLess(result["final_objective"], result["initial_objective"] * 0.01)
             self.assertAlmostEqual(result["fitted_config"]["conversion"]["uv_to_protein_mAU_L_g"],
@@ -271,9 +273,9 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Current Window() << Get Path', launcher)
         self.assertIn('Current Window() << Get File Name', launcher)
         self.assertIn('Get Default Directory()', launcher)
-        self.assertIn('packageMarker = "tdm_r25a_package.marker"', launcher)
+        self.assertIn('packageMarker = "tdm_r25b_package.marker"', launcher)
         self.assertIn('File Exists( candidateDir || packageMarker )', launcher)
-        self.assertTrue((ROOT / "tdm_r25a_package.marker").is_file())
+        self.assertTrue((ROOT / "tdm_r25b_package.marker").is_file())
         self.assertLess(launcher.index('Get Script Name()'),
                         launcher.index('Current Window() << Get Path'))
         self.assertLess(launcher.index('Current Window() << Get File Name'),

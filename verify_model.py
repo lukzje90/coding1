@@ -393,8 +393,9 @@ def verify_button_paths() -> None:
 
         single_result_receipt = (project / 'latest_results_manifest.json').read_bytes()
         code, status = run_ui_bridge('RUN_BATCH')
-        assert code == 0 and 'Batch completed: 2 run(s).' in status, status
-        assert 'Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL; 14.6 CV total' in status
+        assert code == 0 and 'Batch completed: 2 run(s);' in status, status
+        assert 'Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL;' in status
+        assert '14.6 CV total' in status
         assert 'Elution 2 2.34 CV @ 1.44 mL/min' in status
         first_batch_dir = Path(next(
             line.split(': ', 1)[1] for line in status.splitlines()
@@ -430,7 +431,7 @@ def verify_button_paths() -> None:
         # Running again must create a separate output tree; existing/open results
         # are preserved instead of being recursively removed on Windows.
         code, status = run_ui_bridge('RUN_BATCH')
-        assert code == 0 and 'Batch completed: 2 run(s).' in status, status
+        assert code == 0 and 'Batch completed: 2 run(s);' in status, status
         second_batch_dir = Path(next(
             line.split(': ', 1)[1] for line in status.splitlines()
             if line.startswith('Batch result folder: ')
@@ -450,7 +451,7 @@ def verify_button_paths() -> None:
                 writer.writerow([float(cv), 5.0 + 200.0 * float(concentration)])
         code, status = run_ui_bridge('ATTACH_LSQ_CSV', {'tdm_ui_lsq_csv_path': str(raw)})
         assert code == 0 and 'attached to LSQ profile Run 2' in status, status
-        saved_profile = load_batch_rows(project / 'tdm_batch_runs.csv')[1]['LSQ_Chromatogram_CSV']
+        saved_profile = load_batch_rows(project / 'tdm_lsq_process_runs.csv')[1]['LSQ_Chromatogram_CSV']
         assert Path(saved_profile) == raw.resolve()
 
         # Attach a second run with its own process recipe and ensure the JMP
@@ -468,12 +469,13 @@ def verify_button_paths() -> None:
             'tdm_ui_lsq_csv_path': str(first_raw),
         })
         assert code == 0 and 'attached to LSQ profile Run 1' in status, status
-        assert Path(load_batch_rows(project / 'tdm_batch_runs.csv')[0]['LSQ_Chromatogram_CSV']) == first_raw.resolve()
+        assert Path(load_batch_rows(project / 'tdm_lsq_process_runs.csv')[0]['LSQ_Chromatogram_CSV']) == first_raw.resolve()
 
         code, status = run_ui_bridge('FIT_LSQ', {'tdm_ui_lsq_csv_path': str(raw)})
         assert code == 0 and 'Least-squares refinement completed.' in status, status
         assert 'Global profiles fitted: 2' in status
-        assert 'Run 1 — Button audit run 1:' in status and 'Run 2 — Button audit run 2:' in status
+        assert 'LSQ Run 1 — LSQ Run 1 vs Normal batch Run 1:' in status, status
+        assert 'LSQ Run 2 — LSQ Run 2 vs Normal batch Run 2:' in status, status
         assert (project / 'least_squares_fit_report.html').is_file()
         assert (project / 'least_squares_apply_to_ui.jsl').is_file()
         assert 'Accepted/applied to shared batch parameters: True' in status

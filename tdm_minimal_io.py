@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import math
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -1518,6 +1521,34 @@ def batch_run_numeric_fields() -> tuple[str, ...]:
     )
 
 
+def _write_csv_atomically(path: Path, fields: tuple[str, ...] | list[str],
+                          rows: list[dict[str, Any]], *, skip_unchanged: bool = False) -> None:
+    """Publish a complete table at once, including during parallel worker import."""
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows(rows)
+    content = output.getvalue()
+    if skip_unchanged and path.is_file():
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            if stream.read() == content:
+                return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="",
+                                         dir=path.parent, prefix=f".{path.name}.",
+                                         suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def ensure_batch_runs_csv(path: Path | str = BATCH_RUNS_CSV) -> Path:
     p = Path(path)
     fields = batch_run_fields()
@@ -1608,9 +1639,7 @@ def ensure_batch_runs_csv(path: Path | str = BATCH_RUNS_CSV) -> Path:
                     else:
                         base[control_col] = "ENDPOINT_CHEMISTRY"
         rows.append(base)
-    with p.open("w", encoding="utf-8", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
-        w.writeheader(); w.writerows(rows)
+    _write_csv_atomically(p, fields, rows, skip_unchanged=True)
     return p
 
 
@@ -1631,11 +1660,7 @@ def save_batch_rows(rows: list[dict[str, Any]], path: Path | str = BATCH_RUNS_CS
             row.update({key: value for key, value in _migrate_row_salt_inputs(rows[index]).items() if key in fields})
         row["Run_Number"] = index + 1
         normalized.append(row)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(normalized)
+    _write_csv_atomically(p, fields, normalized)
     return p
 
 
@@ -1716,11 +1741,7 @@ def ensure_lsq_mass_csv(path: Path | str = LSQ_MASS_CSV) -> Path:
                         if field in LSQ_MASS_FIELDS})
             row["Run_Number"], row["Fraction_Row"] = run, fraction
             rows.append(row)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=LSQ_MASS_FIELDS)
-        writer.writeheader()
-        writer.writerows(rows)
+    _write_csv_atomically(p, LSQ_MASS_FIELDS, rows)
     return p
 
 

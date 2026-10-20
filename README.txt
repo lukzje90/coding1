@@ -1,4 +1,17 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25a)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25b)
+
+OVERNIGHT FIT AUDIT (R25b)
+The LSQ optimizer-evaluation safety cap remains adjustable from 2 to 10000.
+The fit still stops on normal convergence, a solver error, or the selected cap.
+Check that value in the LSQ tab before an overnight run; the start message and
+fit report state the setting used.
+Saved run tables now publish whole CSV files atomically, so standalone worker
+startup cannot read a half-written run table. Opening an unchanged table no
+longer rewrites it, which also avoids needless OneDrive/Excel file-lock errors.
+The model equations and fraction mass% residuals are unchanged. In JMP, both
+normal batch and LSQ work use one process worker because JMP cannot launch
+joblib child processes. Normal Run selected respects its native math-library
+thread limit; the LSQ worker setting does not parallelize a JMP fit.
 
 LEAST-SQUARES FIT DURATION (R25a)
 After refinement finishes, the JMP status shows elapsed fit time in hours,
@@ -12,7 +25,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25a_package.marker beside the launcher and Python files. Run the saved
+tdm_r25b_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 JMP LEAST-SQUARES WORKER STARTUP FIX (R24y)
