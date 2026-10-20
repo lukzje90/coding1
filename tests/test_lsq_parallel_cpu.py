@@ -178,6 +178,11 @@ class ParallelCpuFitTests(unittest.TestCase):
                             unlocked_paths=["components[0].qmax_g_L", "components[0].b_L_g"],
                             max_nfev=3, parallel_workers=workers))
                 settings = json.loads((result_dir / lsq.FIT_SETTINGS_JSON.name).read_text())
+                report = (result_dir / lsq.FIT_REPORT_HTML.name).read_text()
+                self.assertGreater(settings["fit_elapsed_seconds"], 0)
+                self.assertEqual(settings["fit_elapsed_seconds"], results[-1]["fit_elapsed_seconds"])
+                self.assertEqual(settings["fit_elapsed_hms"], results[-1]["fit_elapsed_hms"])
+                self.assertIn(f"Elapsed fit time:</b> {settings['fit_elapsed_hms']}", report)
                 if label == "embedded":
                     self.assertEqual(settings["parallel_workers_requested"], 3)
                     self.assertEqual(settings["parallel_workers_used"], 1)
@@ -188,6 +193,9 @@ class ParallelCpuFitTests(unittest.TestCase):
                 np.testing.assert_allclose(
                     results[0]["fitted_config"]["components"][0][parameter],
                     results[1]["fitted_config"]["components"][0][parameter], rtol=1e-11)
+
+    def test_elapsed_time_format_keeps_hours_above_one_day(self):
+        self.assertEqual(lsq._format_elapsed_hms(75 * 3600 + 61), "75:01:01")
 
     def test_tdm_cpa_parallel_trials_match_serial_with_mass_and_conductivity(self):
         truth = make_config(MODEL_TDM_CPA, 1, multistep=False)

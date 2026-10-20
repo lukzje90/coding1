@@ -1,4 +1,10 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24z)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25a)
+
+LEAST-SQUARES FIT DURATION (R25a)
+After refinement finishes, the JMP status shows elapsed fit time in hours,
+minutes, seconds and decimal seconds. The fit report and settings JSON also
+record it. The timer starts when selected reference profiles are loaded and
+includes optimization, final verification and fitted output preparation.
 
 AUTOMATIC JMP MODEL FOLDER LOCATION (R24z)
 Extract the complete ZIP, open its saved
@@ -6,7 +12,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r24z_package.marker beside the launcher and Python files. Run the saved
+tdm_r25a_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 JMP LEAST-SQUARES WORKER STARTUP FIX (R24y)

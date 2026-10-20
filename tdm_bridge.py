@@ -745,6 +745,7 @@ def main() -> int:
                 if requested_lsq_workers > 1 and not fit["parallel_process_workers_available"] else "")
             _write_status(
                 "Least-squares refinement completed.\n"
+                f"Elapsed fit time: {fit['fit_elapsed_hms']} ({fit['fit_elapsed_seconds']:.1f} seconds).\n"
                 f"Global profiles fitted: {len(fit['profile_metrics'])} (objective: {shared_raw['least_squares']['objective']}).\n{profile_summary}\n"
                 f"Mode: {mode}\nInitial objective: {fit['initial_objective']:.7g}\nFinal objective: {fit['final_objective']:.7g}\n"
                 f"{weighted_line}"

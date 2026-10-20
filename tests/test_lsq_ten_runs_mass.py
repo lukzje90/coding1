@@ -194,10 +194,12 @@ class TenRunMassTests(unittest.TestCase):
                  patch.object(tdm_bridge, "load_lsq_mass_rows", return_value=mass_rows), \
                  patch.object(tdm_bridge, "BATCH_COUNT_FILE", root / "count.txt"), \
                  patch.object(tdm_bridge, "save_config"), \
-                 patch.object(tdm_bridge, "_write_status"), \
+                 patch.object(tdm_bridge, "_write_status") as status, \
                  patch.object(lsq, "run_global_least_squares_refinement", side_effect=fit), \
                  patch.multiple(lsq, **{name: root / getattr(lsq, name).name for name in outputs}):
                 self.assertEqual(tdm_bridge.main(), 0)
+                self.assertIn(f"Elapsed fit time: {fit_results[0]['fit_elapsed_hms']}",
+                              status.call_args[0][0])
                 with lsq.FIT_COMPOSITION_CSV.open(newline="", encoding="utf-8") as stream:
                     mass_fit = list(csv.DictReader(stream))
                 with lsq.FIT_TRACE_CSV.open(newline="", encoding="utf-8") as stream:

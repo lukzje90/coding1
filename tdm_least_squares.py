@@ -1660,6 +1660,13 @@ def _objective_improvement_percent(initial: float, candidate: float) -> float:
     return (initial - candidate) / max(abs(initial), 1e-30) * 100.0
 
 
+def _format_elapsed_hms(seconds: float) -> str:
+    whole_seconds = max(0, round(seconds))
+    hours, remainder = divmod(whole_seconds, 3600)
+    minutes, seconds_left = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds_left:02d}"
+
+
 def _bounded_jacobian(fun, lower, upper, batch_fun=None):
     def jacobian(vector):
         base = fun(vector)
@@ -2025,6 +2032,7 @@ def run_global_least_squares_refinement(
     residuals are concatenated without scaling: their squared norm is equation
     9 summed across runs. NORMALIZED_MSE is an explicit optional weighting.
     """
+    total_started = time.perf_counter()
     profiles = list(profiles)
     if not 1 <= len(profiles) <= MAX_LSQ_PROFILES:
         raise ValueError(f"Global least-squares fitting requires 1–{MAX_LSQ_PROFILES} attached chromatogram profiles.")
@@ -2667,8 +2675,6 @@ def run_global_least_squares_refinement(
         "objective_history_csv": str(history_path) if history_path else None,
         "objective_history_write_error": history_write_error,
     }
-    FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
-
     parameter_rows = "".join(
         f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(seed, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td></tr>"
         for spec in specs
@@ -2730,10 +2736,16 @@ def run_global_least_squares_refinement(
     if history_write_error:
         history_file_html += (". A progress-file write failed: "
                               + html.escape(history_write_error))
+    fit_elapsed_seconds = time.perf_counter() - total_started
+    fit_elapsed_hms = _format_elapsed_hms(fit_elapsed_seconds)
+    settings["fit_elapsed_seconds"] = fit_elapsed_seconds
+    settings["fit_elapsed_hms"] = fit_elapsed_hms
+    FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
     FIT_REPORT_HTML.write_text(f"""<!doctype html>
 <meta charset="utf-8"><title>Global least-squares refinement</title>
 <style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
 <h1>Global least-squares refinement</h1>
+<p><b>Elapsed fit time:</b> {fit_elapsed_hms} ({fit_elapsed_seconds:.1f} seconds). Measured from loading the selected reference profiles through fitted output preparation.</p>
 <p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}; <b>CPU worker processes:</b> {workers_used} (requested {int(requested_workers)}; stalled-pool fallback: {worker_fallback_used}; process workers available: {process_workers_available})</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
 <b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Unlocked parameters:</b> {len(specs)}.</p>
@@ -2757,6 +2769,8 @@ def run_global_least_squares_refinement(
         "improvement_percent": improvement,
         "nfev": opt_nfev,
         "residual_evaluations": eval_count,
+        "fit_elapsed_seconds": fit_elapsed_seconds,
+        "fit_elapsed_hms": fit_elapsed_hms,
         "parallel_workers_used": workers_used,
         "parallel_process_workers_available": process_workers_available,
         "parallel_worker_fallback_used": worker_fallback_used,
