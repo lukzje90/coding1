@@ -712,7 +712,8 @@ def main() -> int:
                 f"{shared_raw['least_squares']['max_nfev']} optimizer-evaluation safety cap; "
                 f"up to {shared_raw['least_squares']['parallel_workers']} CPU worker(s).\n"
                 f"Each numerical Jacobian needs about {len(profiles) * (len(fitted_paths) + 1)} column solves. "
-                f"Progress: {FIT_HISTORY_CSV}"
+                f"Progress: {FIT_HISTORY_CSV}. If this file is locked, the fit continues "
+                "and reports a recovered history path when complete."
             )
             fit = run_global_least_squares_refinement(
                 profiles,
@@ -745,7 +746,7 @@ def main() -> int:
                 f"Optimizer converged: {fit['success']}; {fit['message']}\n"
                 f"Accepted/applied to shared batch parameters: {fit['accepted']}\n"
                 f"Improved parameters:\n{improved_list}\n"
-                f"Report: {fit['fit_report_html']}\nParameter list CSV: {fit['improved_parameters_csv']}\nObjective history CSV: {fit['latest_fit_history_csv']}"
+                f"Report: {fit['fit_report_html']}\nParameter list CSV: {fit['improved_parameters_csv']}\nObjective history CSV: {fit['latest_fit_history_csv'] or 'unavailable; history is plotted in the fit report'}"
             )
             return 0
 

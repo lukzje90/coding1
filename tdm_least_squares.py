@@ -30,6 +30,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import time
 from types import SimpleNamespace
 from typing import Any, Iterable
@@ -2234,14 +2235,47 @@ def run_global_least_squares_refinement(
         "phase": "initial", "status": "ok",
     }]
     eval_count = 0
+    history_fields = ["evaluation", "elapsed_seconds", "objective", "best_objective", "improvement_percent", "phase", "status"]
+    history_path: Path | None = FIT_HISTORY_CSV
+    history_backup = FIT_HISTORY_CSV.with_name(
+        f"{FIT_HISTORY_CSV.stem}_recovered_{os.getpid()}_{time.time_ns()}.csv")
+    history_temp = Path(tempfile.gettempdir()) / history_backup.name
+    history_logging_disabled = False
+    history_write_error: str | None = None
 
     def write_history() -> None:
-        FIT_HISTORY_CSV.parent.mkdir(parents=True, exist_ok=True)
-        with FIT_HISTORY_CSV.open("w", encoding="utf-8", newline="") as fh:
-            fields = ["evaluation", "elapsed_seconds", "objective", "best_objective", "improvement_percent", "phase", "status"]
-            writer = csv.DictWriter(fh, fieldnames=fields)
-            writer.writeheader()
-            writer.writerows(history)
+        nonlocal history_path, history_logging_disabled, history_write_error
+        if history_logging_disabled:
+            return
+        targets = dict.fromkeys([p for p in (history_path, history_backup, history_temp) if p is not None])
+        for path in targets:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("w", encoding="utf-8", newline="") as fh:
+                    writer = csv.DictWriter(fh, fieldnames=history_fields)
+                    writer.writeheader()
+                    writer.writerows(history)
+            except OSError as exc:
+                history_write_error = f"{type(exc).__name__}: {exc}"
+                continue
+            history_path = path
+            return
+        history_path = None
+        history_logging_disabled = True
+
+    def append_history(row: dict[str, Any]) -> None:
+        nonlocal history_path, history_write_error
+        if history_path is None:
+            return
+        try:
+            with history_path.open("a", encoding="utf-8", newline="") as fh:
+                csv.DictWriter(fh, fieldnames=history_fields).writerow(row)
+        except OSError as exc:
+            # Progress I/O is separate from the scientific objective. A locked
+            # OneDrive/Excel CSV must not turn a valid trial into a penalty.
+            history_write_error = f"{type(exc).__name__}: {exc}"
+            history_path = history_backup if history_path == FIT_HISTORY_CSV else history_temp
+            write_history()  # Restore every row, including the failed append.
 
     def record(objective: float, phase: str, status: str) -> None:
         nonlocal best_objective
@@ -2256,11 +2290,9 @@ def run_global_least_squares_refinement(
             "status": status,
         }
         history.append(row)
-        # Append one small progress row. Rewriting the entire growing history
-        # on every solver call is quadratic work, especially in OneDrive.
-        with FIT_HISTORY_CSV.open("a", encoding="utf-8", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(row))
-            writer.writerow(row)
+        # Normal progress writes append one row; only a locked file triggers
+        # a full in-memory snapshot to a fresh path.
+        append_history(row)
 
     write_history()
 
@@ -2628,7 +2660,8 @@ def run_global_least_squares_refinement(
         "parallel_workers_used": workers_used,
         "parallel_worker_fallback_used": worker_fallback_used,
         "composition_profile_metrics": composition_profile_metrics,
-        "objective_history_csv": str(FIT_HISTORY_CSV),
+        "objective_history_csv": str(history_path) if history_path else None,
+        "objective_history_write_error": history_write_error,
     }
     FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -2683,6 +2716,16 @@ def run_global_least_squares_refinement(
     overlays_html = "".join(profile_plots)
     improvement = _objective_improvement_percent(initial_obj, final_obj)
     history_plot = _objective_history_svg(history)
+    if history_path is None:
+        history_file_html = "History CSV could not be written; the complete history is plotted below."
+    elif history_path.parent == FIT_REPORT_HTML.parent:
+        history_name = html.escape(history_path.name, quote=True)
+        history_file_html = f'History file: <a href="{history_name}">{history_name}</a>'
+    else:
+        history_file_html = f"History file: <code>{html.escape(str(history_path))}</code>"
+    if history_write_error:
+        history_file_html += (". A progress-file write failed: "
+                              + html.escape(history_write_error))
     FIT_REPORT_HTML.write_text(f"""<!doctype html>
 <meta charset="utf-8"><title>Global least-squares refinement</title>
 <style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
@@ -2697,7 +2740,7 @@ def run_global_least_squares_refinement(
 <h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Profile recipes used</h2>{recipe_details}
 <h2>Objective construction</h2><p>Equation 9 is the sum of squared predicted-minus-measured UV detector samples. RAW_SSE preserves the UV term verbatim. NORMALIZED_MSE divides each run's UV residuals by its signal scale and sqrt(sample count). Enabled conductivity adds one residual per numeric measured point; these are divided by the measured conductivity scale and sqrt(conductivity point count), then expressed in comparable UV units for RAW_SSE. Fraction mass% adds measured-minus-predicted residuals at entered midpoints only, divided by 100 and sqrt(the populated species-observation count). With RAW_SSE, the mass% group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the UV sample count); with NORMALIZED_MSE both groups are dimensionless with the same 1 mAU UV floor. The predicted fraction is 100 times that species' simulated concentration divided by the sum of modeled species concentrations. Blank cells add no residual; chart interpolation is display-only. WEIGHTED_RMSE applies when fraction mass% is off. Baseline estimation is opt-in; the default baseline is fixed. Each selected run's process settings remain fixed during refinement. Only unlocked active-model parameters are shared and refined.</p>
-<h2>Objective improvement over time</h2><p>History file: <a href="{FIT_HISTORY_CSV.name}">{FIT_HISTORY_CSV.name}</a></p>{history_plot}
+<h2>Objective improvement over time</h2><p>{history_file_html}</p>{history_plot}
 <p>Files: {FIT_TRACE_CSV.name}, {FIT_CONDUCTIVITY_CSV.name}, {FIT_RESULTS_CSV.name}, {FIT_COMPOSITION_CSV.name}, {FIT_SETTINGS_JSON.name}.</p>
 """, encoding="utf-8")
 
@@ -2727,8 +2770,8 @@ def run_global_least_squares_refinement(
         "fit_report_html": str(FIT_REPORT_HTML),
         "fit_config_json": str(FIT_CONFIG_JSON),
         "fit_settings_json": str(FIT_SETTINGS_JSON),
-        "fit_history_csv": str(FIT_HISTORY_CSV),
-        "latest_fit_history_csv": str(FIT_HISTORY_CSV),
+        "fit_history_csv": str(history_path) if history_path else None,
+        "latest_fit_history_csv": str(history_path) if history_path else None,
         "apply_jsl": str(FIT_APPLY_JSL),
         "parameters": [spec.path for spec in specs],
     }

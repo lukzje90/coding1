@@ -225,6 +225,10 @@ While JMP is busy, least_squares_objective_history.csv gains progress rows with
 elapsed seconds and the best objective so far. A repeated base solve and repeated
 full-file history rewrites have been removed. The conductivity-detector delay
 is excluded from UV fitting because it cannot affect the fitted signal.
+If Excel or OneDrive locks the objective-history CSV, the fit continues and
+writes the complete history to a uniquely named recovered CSV. The completion
+message, settings JSON and report identify the actual file. If progress files
+cannot be written, the report still plots the in-memory history.
 Parallel Jacobian rows are written as each parameter trial completes, with its
 parameter path in the status column; their completion order may differ from
 the parameter list. The Jacobian columns themselves retain parameter order.

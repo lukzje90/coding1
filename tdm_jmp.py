@@ -1281,7 +1281,7 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     Python Send(projectDir, Python Name("tdm_project_dir"));
     Python Send(projectDir, Python Name("tdm_project_dir_posix"));
     If(actionText == "FIT_LSQ",
-        lsqStatusText << Set Text("Refinement running. The JMP window will respond when Python finishes. Progress is appended to least_squares_objective_history.csv in this folder; each numerical Jacobian needs additional column solves for unlocked parameters.");
+        lsqStatusText << Set Text("Refinement running. The JMP window will respond when Python finishes. Progress is appended to least_squares_objective_history.csv; if that file is locked, a recovered history path is reported after the fit. Each numerical Jacobian needs additional column solves for unlocked parameters.");
         Wait(0.01)
     );
     If(actionText == "PREVIEW_LSQ_ALIGNMENT",
