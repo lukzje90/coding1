@@ -1,4 +1,13 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24y)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24z)
+
+AUTOMATIC JMP MODEL FOLDER LOCATION (R24z)
+Extract the complete ZIP, open its saved
+00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl in JMP, and press Ctrl+R. The launcher
+finds the model files beside itself. It also checks the editor window and the
+current directory for this package's marker when JMP does not report the
+script path. It no longer opens a folder or file picker. Keep
+tdm_r24z_package.marker beside the launcher and Python files. Run the saved
+launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 JMP LEAST-SQUARES WORKER STARTUP FIX (R24y)
 JMP's embedded Python runs least-squares refinement with one worker even if
@@ -13,14 +22,12 @@ retains its UTC timestamp and also records the UK timestamp with its UTC
 offset. The chromatogram time axis remains elapsed run minutes.
 After extracting the ZIP, open 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl in JMP
 and press Ctrl+R. The script launches the model window directly from its own
-folder. If JMP cannot provide the saved script path, it will ask you to select
-open_tdm_setup.py from that extracted folder rather than open another copy.
+folder.
 
 LAUNCHER FOLDER DETECTION (R24r)
 Open 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl from the extracted ZIP folder.
-The launcher now uses its own folder even when JMP's default directory points
-somewhere else. If JMP cannot report the script path, select open_tdm_setup.py
-from the same extracted folder when prompted. Keep all extracted files together.
+The launcher uses its own folder even when JMP's default directory points
+somewhere else. Keep all extracted files together.
 
 SEPARATE NORMAL AND LEAST-SQUARES CPU LIMITS (R24q)
 Process Setup now shows Normal prediction CPU limit directly below time steps

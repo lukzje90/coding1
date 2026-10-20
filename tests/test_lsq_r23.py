@@ -4,6 +4,7 @@ import copy
 import csv
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -266,8 +267,21 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('dependencies_r23_checked', launcher)
         self.assertIn('Get Script Name()', launcher)
         self.assertIn('press Ctrl+R to launch the model window', launcher)
-        self.assertIn('Pick File(\n        "Select open_tdm_setup.py', launcher)
-        self.assertNotIn('Get Default Directory()', launcher)
+        self.assertNotIn('Pick File(', launcher)
+        self.assertIn('Current Window() << Get Path', launcher)
+        self.assertIn('Current Window() << Get File Name', launcher)
+        self.assertIn('Get Default Directory()', launcher)
+        self.assertIn('packageMarker = "tdm_r24z_package.marker"', launcher)
+        self.assertIn('File Exists( candidateDir || packageMarker )', launcher)
+        self.assertTrue((ROOT / "tdm_r24z_package.marker").is_file())
+        self.assertLess(launcher.index('Get Script Name()'),
+                        launcher.index('Current Window() << Get Path'))
+        self.assertLess(launcher.index('Current Window() << Get File Name'),
+                        launcher.index('Get Default Directory()'))
+        structure = re.sub(r'//[^\n]*', '', launcher)
+        structure = re.sub(r'"(?:\\.|[^"\\])*"', '""', structure)
+        for opening, closing in (("(", ")"), ("{", "}")):
+            self.assertEqual(structure.count(opening), structure.count(closing))
         self.assertLess(launcher.index('Set Default Directory( projectDir );'),
                         launcher.index('returnCode = Python Submit File( pythonFile );'))
         self.assertNotIn('Button Box(', launcher)

@@ -4,33 +4,45 @@ Names Default To Here( 1 );
 // JMP's default directory may differ from the folder containing this script.
 launcherName = "00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl";
 setupName = "open_tdm_setup.py";
-scriptFile = Try( Char( Get Script Name() ), "" );
-projectDir = "";
-If( Length( scriptFile ) > Length( launcherName ) &
-    Right( Lowercase( scriptFile ), Length( launcherName ) ) == Lowercase( launcherName ),
-    scriptFile = Convert File Path( scriptFile, "Absolute", "POSIX" );
-    projectDir = Left( scriptFile, Length( scriptFile ) - Length( launcherName ) );
+packageMarker = "tdm_r24z_package.marker";
+
+// JMP can report either a full script path, an editor-window path, or only a
+// working directory. Accept a folder only when this package marker and the
+// launcher are together, so an older release is not selected by name.
+FindModelFolder = Function( {candidate}, {candidatePath, candidateDir},
+    candidateDir = "";
+    candidatePath = Try( Convert File Path( Char( candidate ), "Absolute", "POSIX" ), "" );
+    If( candidatePath != "",
+        If( Length( candidatePath ) >= Length( launcherName ) &
+            Right( Lowercase( candidatePath ), Length( launcherName ) ) == Lowercase( launcherName ),
+            candidateDir = Left( candidatePath, Length( candidatePath ) - Length( launcherName ) ),
+            candidateDir = candidatePath
+        );
+        If( Right( candidateDir, 1 ) != "/", candidateDir = candidateDir || "/" );
+        If( !File Exists( candidateDir || packageMarker ) |
+            !File Exists( candidateDir || launcherName ) |
+            !File Exists( candidateDir || setupName ),
+            candidateDir = ""
+        );
+    );
+    candidateDir
 );
 
-// Some JMP launch methods do not expose the script path. Select this copy's
-// setup file explicitly rather than guessing from JMP's working directory.
-If( projectDir == "" | !File Exists( projectDir || setupName ),
-    selectedSetup = Pick File(
-        "Select open_tdm_setup.py in the extracted model folder", "",
-        {"Python setup|py", "All files|*"}, 1, 0, ""
-    );
-    If( Is Empty( selectedSetup ),
-        Write( "\!nModel launch cancelled: no setup file selected.\!n" );
-        Stop();
-    );
-    selectedSetup = Convert File Path( selectedSetup, "Absolute", "POSIX" );
-    If( Right( Lowercase( selectedSetup ), Length( setupName ) ) != setupName,
-        Write( "\!nERROR: Select open_tdm_setup.py from the extracted model folder.\!n" );
-        Stop();
-    );
-    projectDir = Left( selectedSetup, Length( selectedSetup ) - Length( setupName ) );
+scriptFile = Try( Char( Get Script Name() ), "" );
+projectDir = "";
+// A bare script name would resolve against JMP's possibly stale default
+// directory. Prefer an editor-window path before trusting that relative name.
+If( Contains( scriptFile, ":" ) | Left( scriptFile, 1 ) == "/",
+    projectDir = FindModelFolder( scriptFile )
 );
-If( Right( projectDir, 1 ) != "/", projectDir = projectDir || "/" );
+If( projectDir == "", projectDir = FindModelFolder( Try( Char( Current Window() << Get Path ), "" ) ) );
+If( projectDir == "", projectDir = FindModelFolder( Try( Char( Current Window() << Get File Name ), "" ) ) );
+If( projectDir == "", projectDir = FindModelFolder( scriptFile ) );
+If( projectDir == "", projectDir = FindModelFolder( Try( Char( Get Default Directory() ), "" ) ) );
+If( projectDir == "",
+    Write( "\!nERROR: JMP could not locate this extracted model folder automatically. Open the saved 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl from the complete extracted ZIP and press Ctrl+R.\!n" );
+    Stop();
+);
 
 If( !File Exists( projectDir || "open_tdm_setup.py" ) |
     !File Exists( projectDir || "tdm_jmp.py" ) |
@@ -38,10 +50,11 @@ If( !File Exists( projectDir || "open_tdm_setup.py" ) |
     !File Exists( projectDir || "tdm_minimal_io.py" ) |
     !File Exists( projectDir || "tdm_minimal_model.py" ) |
     !File Exists( projectDir || "tdm_least_squares.py" ),
-    Write( "\!nERROR: Required model files are missing from " || projectDir || ". Extract the complete ZIP and select open_tdm_setup.py in that folder.\!n" );
+    Write( "\!nERROR: Required model files are missing from " || projectDir || ". Extract the complete ZIP and rerun its saved JMP launcher.\!n" );
     Stop();
 );
 
+Write( "\!nOpening chromatography model from " || projectDir || "\!n" );
 Set Default Directory( projectDir );
 
 // R23 requires openpyxl for experimental Excel chromatogram ingestion. Use a
