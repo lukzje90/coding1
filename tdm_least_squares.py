@@ -24,6 +24,7 @@ import html
 import io
 import json
 import math
+from multiprocessing import TimeoutError as ProcessTimeoutError
 import os
 from pathlib import Path
 import re
@@ -1519,6 +1520,14 @@ def _trial_objective_worker(vector, base_configs, specs, profile_inputs, mode,
         return None, f"{type(exc).__name__}: {exc}"
 
 
+def _indexed_trial_objective_worker(index, vector, base_configs, specs,
+                                    profile_inputs, mode, scale_factors):
+    """Return the trial index so unordered CPU results retain Jacobian columns."""
+    values, error = _trial_objective_worker(
+        vector, base_configs, specs, profile_inputs, mode, scale_factors)
+    return index, values, error
+
+
 def _write_apply_jsl(config: dict[str, Any], specs: list[FitParameter]) -> None:
     mapping = {
         "qmax_g_L": "Qmax", "b_L_g": "B", "Z_ref": "Zref", "delta_ref": "Delta",
@@ -2117,6 +2126,7 @@ def run_global_least_squares_refinement(
         candidate_paths=candidate_paths,
     )
     workers_used = min(int(requested_workers), max(len(profiles), len(specs)), os.cpu_count() or 1)
+    worker_fallback_used = False
     parallel = None
     delayed = None
     if workers_used > 1:
@@ -2170,7 +2180,9 @@ def run_global_least_squares_refinement(
                      for weight in run_weights]
     profile_inputs = [(p["reference"], p["composition_references"], p["fit_conductivity"])
                       for p in normalized_profiles]
+    initial_started = time.perf_counter()
     initial_r, initial_infos = evaluate(base_configs)
+    initial_seconds = time.perf_counter() - initial_started
     initial_obj = float(np.sum(initial_r ** 2))
     fit_started = time.perf_counter()
     best_objective = initial_obj
@@ -2232,20 +2244,21 @@ def run_global_least_squares_refinement(
             return penalty
 
     def batch_residual(vectors: list[np.ndarray]) -> list[np.ndarray]:
-        """Record finite-difference trials in the same order as serial fitting."""
-        nonlocal eval_count, best_vector
-        try:
-            trials = parallel(
-                delayed(_trial_objective_worker)(vector, base_configs, specs,
-                                                 profile_inputs, mode, scale_factors)
-                for vector in vectors
-            )
-        except Exception as exc:
-            raise ParallelExecutionError(
-                f"CPU worker execution failed: {type(exc).__name__}: {exc}. Select one CPU worker to run serially."
-            ) from exc
-        outputs = []
-        for vector, (values, error) in zip(vectors, trials):
+        """Stream completed trials, preserving their original Jacobian columns."""
+        nonlocal eval_count, best_vector, workers_used, parallel, worker_fallback_used
+        outputs: list[np.ndarray | None] = [None] * len(vectors)
+        pending = set(range(len(vectors)))
+        # A trial can legitimately take longer than the initial solve. Bound
+        # the wait so one stiff trajectory or overloaded worker pool cannot
+        # silently hold the whole Jacobian for days. Retrying uses identical
+        # parameter vectors and the same solver; no derivative is approximated.
+        trial_timeout = max(180.0, min(1200.0, 4.0 * initial_seconds * n_profiles + 120.0))
+
+        def receive(index: int, values: np.ndarray | None, error: str | None) -> None:
+            nonlocal eval_count, best_vector
+            if index not in pending:
+                raise ParallelExecutionError(f"Duplicate Jacobian result for {specs[index].path}.")
+            pending.remove(index)
             eval_count += 1
             if error is None:
                 objective = float(np.sum(values * values))
@@ -2257,10 +2270,56 @@ def run_global_least_squares_refinement(
                 status = f"penalty: {error}"
             else:
                 if objective < best_objective:
-                    best_vector = np.asarray(vector).copy()
+                    best_vector = np.asarray(vectors[index]).copy()
                 status = "ok"
-            record(objective, "optimizer", status)
-            outputs.append(values)
+            record(objective, "jacobian", f"{status}; parameter={specs[index].path}")
+            outputs[index] = values
+
+        def dispatch(indices: list[int], count: int, timeout_seconds: float) -> None:
+            stream = Parallel(n_jobs=count, backend="loky", batch_size=1,
+                              pre_dispatch=count, return_as="generator_unordered",
+                              timeout=timeout_seconds)(
+                delayed(_indexed_trial_objective_worker)(
+                    index, vectors[index], base_configs, specs, profile_inputs,
+                    mode, scale_factors)
+                for index in indices
+            )
+            for index, values, error in stream:
+                receive(index, values, error)
+
+        try:
+            dispatch(list(range(len(vectors))), workers_used, trial_timeout)
+        except (TimeoutError, ProcessTimeoutError):
+            # A 12-process pool may be starved even when an individual solve
+            # succeeds. Retry only unfinished probes with two processes.
+            # Their vectors and residuals are unchanged, so Jacobian values
+            # remain identical to a successful first attempt.
+            worker_fallback_used = True
+            workers_used = min(workers_used, 2)
+            parallel = Parallel(n_jobs=workers_used, backend="loky")
+            try:
+                dispatch(sorted(pending), workers_used, 3.0 * trial_timeout)
+            except (TimeoutError, ProcessTimeoutError) as exc:
+                paths = ", ".join(specs[i].path for i in sorted(pending))
+                raise ParallelExecutionError(
+                    f"Jacobian trial exceeded {3.0 * trial_timeout:.0f} seconds even after retrying "
+                    f"with {workers_used} CPU workers. Unfinished parameter(s): {paths}. "
+                    "No fitted parameters were applied; inspect these starting values or "
+                    "lock a problematic parameter before another fit."
+                ) from exc
+            except Exception as exc:
+                raise ParallelExecutionError(
+                    f"CPU worker retry failed: {type(exc).__name__}: {exc}."
+                ) from exc
+        except Exception as exc:
+            raise ParallelExecutionError(
+                f"CPU worker execution failed: {type(exc).__name__}: {exc}. "
+                "The completed parameter trials are recorded in the objective history."
+            ) from exc
+        if pending:
+            raise ParallelExecutionError(
+                "Jacobian worker results are missing for: "
+                + ", ".join(specs[i].path for i in sorted(pending)))
         return outputs
 
     if specs:
@@ -2481,6 +2540,7 @@ def run_global_least_squares_refinement(
         "max_nfev": int(max_nfev),
         "parallel_workers_requested": int(requested_workers),
         "parallel_workers_used": workers_used,
+        "parallel_worker_fallback_used": worker_fallback_used,
         "objective_history_csv": str(FIT_HISTORY_CSV),
     }
     FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -2523,9 +2583,9 @@ def run_global_least_squares_refinement(
 <meta charset="utf-8"><title>Global least-squares refinement</title>
 <style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
 <h1>Global least-squares refinement</h1>
-<p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}; <b>CPU worker processes:</b> {workers_used}</p>
+<p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}; <b>CPU worker processes:</b> {workers_used} (requested {int(requested_workers)}; stalled-pool fallback: {worker_fallback_used})</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
-<b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Optimizer evaluations:</b> {eval_count}; <b>Unlocked parameters:</b> {len(specs)}.</p>
+<b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {int(opt.nfev)}; <b>Unlocked parameters:</b> {len(specs)}.</p>
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise UV equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor. Conductivity, when enabled for a run, adds measured detector residuals normalized by that run's conductivity signal scale and sample count; in RAW_SSE these are rescaled to the measured UV scale.</p>
 <table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>UV RMSE</th><th>Weighted UV RMSE</th><th>Run weight</th><th>UV R²</th><th>Conductivity RMSE [mS/cm]</th></tr></thead><tbody>{profile_rows}</tbody></table>
 <h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>{overlays_html}
@@ -2546,6 +2606,7 @@ def run_global_least_squares_refinement(
         "nfev": opt_nfev,
         "residual_evaluations": eval_count,
         "parallel_workers_used": workers_used,
+        "parallel_worker_fallback_used": worker_fallback_used,
         "mode": mode,
         "profile_metrics": metric_rows,
         "initial_weighted_rmse": math.sqrt(max(initial_obj, 0.0)) if weighted_objective else None,

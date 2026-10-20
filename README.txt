@@ -214,6 +214,16 @@ While JMP is busy, least_squares_objective_history.csv gains progress rows with
 elapsed seconds and the best objective so far. A repeated base solve and repeated
 full-file history rewrites have been removed. The conductivity-detector delay
 is excluded from UV fitting because it cannot affect the fitted signal.
+Parallel Jacobian rows are written as each parameter trial completes, with its
+parameter path in the status column; their completion order may differ from
+the parameter list. The Jacobian columns themselves retain parameter order.
+If a worker pool stops making progress, unfinished trials are retried with
+two CPU workers using the same parameter values and solver. A trial that still
+exceeds its time limit raises an error naming the unfinished parameters instead
+of leaving JMP waiting indefinitely. The safety cap counts optimizer candidate
+evaluations, not the additional parameter trials needed for each Jacobian.
+For example, 44 unlocked parameters require up to 44 additional full-model
+simulations for each numerical Jacobian, so a cap of 100 is not 100 solves.
 The supplied 1400-step/100-cell LSQ recipe can still take considerable time with
 all parameters unlocked. For a diagnostic fit, edit the separate LSQ recipe to
 use fewer time steps/cells; check the final result at full resolution.

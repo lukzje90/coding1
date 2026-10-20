@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import csv
 import json
+from multiprocessing import TimeoutError as ProcessTimeoutError
 from pathlib import Path
 import tempfile
 import unittest
@@ -123,6 +124,14 @@ class ParallelCpuFitTests(unittest.TestCase):
                         [{"config": initial, "chromatogram_csv": source}],
                         unlocked_paths=["components[0].qmax_g_L", "components[0].b_L_g"],
                         max_nfev=3, parallel_workers=workers))
+                if workers == 2:
+                    with (result_dir / lsq.FIT_HISTORY_CSV.name).open(newline="") as stream:
+                        history = list(csv.DictReader(stream))
+                    trials = [row for row in history if row["phase"] == "jacobian"]
+                    self.assertTrue(trials)
+                    self.assertTrue(any("parameter=components[0].qmax_g_L" in row["status"]
+                                        for row in trials))
+                    self.assertEqual(len(history), results[-1]["residual_evaluations"] + 1)
             for key in ("initial_objective", "final_objective", "improvement_percent"):
                 np.testing.assert_allclose(results[0][key], results[1][key], rtol=1e-11, atol=1e-11)
             for parameter in ("qmax_g_L", "b_L_g"):
@@ -168,6 +177,71 @@ class ParallelCpuFitTests(unittest.TestCase):
                     results[0]["fitted_config"]["components"][0][parameter],
                     results[1]["fitted_config"]["components"][0][parameter], rtol=1e-11)
             self.assertEqual(results[1]["parallel_workers_used"], 2)
+
+    def test_timed_out_trial_pool_retries_same_vectors_with_fewer_workers(self):
+        truth = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        truth["numerics"].update(time_steps=50, axial_positions=6)
+        trace = simulate(truth)["trace"]
+        initial = copy.deepcopy(truth)
+        initial["components"][0]["qmax_g_L"] *= 1.2
+        initial["components"][0]["b_L_g"] *= 0.8
+        paths = ["components[0].qmax_g_L", "components[0].b_L_g",
+                 "components[0].D_app_mm2_s"]
+
+        class TimeoutOnceParallel:
+            calls = 0
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def __call__(self, jobs):
+                if self.kwargs.get("return_as") == "generator_unordered":
+                    TimeoutOnceParallel.calls += 1
+
+                    def results():
+                        for index, (function, args, kwargs) in enumerate(jobs):
+                            if TimeoutOnceParallel.calls == 1 and index == 1:
+                                raise ProcessTimeoutError()
+                            yield function(*args, **kwargs)
+                    return results()
+                return [function(*args, **kwargs) for function, args, kwargs in jobs]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV 280 [mAU]"])
+                writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
+            results = []
+            for label, workers in (("serial", 1), ("retry", 3)):
+                result_dir = root / label
+                result_dir.mkdir()
+                patches = {name: result_dir / getattr(lsq, name).name for name in OUTPUTS}
+                with patch.multiple(lsq, **patches):
+                    if workers == 3:
+                        with patch("joblib.Parallel", TimeoutOnceParallel):
+                            results.append(lsq.run_global_least_squares_refinement(
+                                [{"config": initial, "chromatogram_csv": source}],
+                                unlocked_paths=paths, max_nfev=2,
+                                parallel_workers=workers))
+                    else:
+                        results.append(lsq.run_global_least_squares_refinement(
+                            [{"config": initial, "chromatogram_csv": source}],
+                            unlocked_paths=paths, max_nfev=2,
+                            parallel_workers=workers))
+            self.assertGreater(TimeoutOnceParallel.calls, 1)
+            self.assertEqual(results[1]["parallel_workers_used"], 2)
+            np.testing.assert_allclose(results[0]["final_objective"],
+                                       results[1]["final_objective"], rtol=1e-11)
+            for path in paths:
+                field = path.rsplit(".", 1)[-1]
+                np.testing.assert_allclose(
+                    results[0]["fitted_config"]["components"][0][field],
+                    results[1]["fitted_config"]["components"][0][field], rtol=1e-11)
+            self.assertTrue(results[1]["parallel_worker_fallback_used"])
+            settings = json.loads((root / "retry" / lsq.FIT_SETTINGS_JSON.name).read_text())
+            self.assertTrue(settings["parallel_worker_fallback_used"])
 
 
 if __name__ == "__main__":
