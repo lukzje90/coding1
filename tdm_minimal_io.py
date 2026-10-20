@@ -369,9 +369,6 @@ def normalize_config(config: Any) -> Any:
             basis = normalize_load_amount_basis(process.get("load_amount_basis"))
             process["load_amount_basis"] = basis
             if basis == "CAPACITY":
-                if density is None and cv is not None and conc is not None and conc > 0:
-                    density = cv * conc
-                    feed["load_density_mg_mL_resin"] = density
                 if density is not None and density > 0 and conc is not None and conc > 0:
                     process["load_CV"] = density / conc
             elif basis == "VOLUME_ML":
@@ -554,13 +551,12 @@ def normalize_load_material_chemistry_mode(value: Any, *, legacy_control: Any = 
 
 def load_material_chemistry_is_explicit(process: dict[str, Any]) -> bool:
     """Return whether the load stage consumes its explicit chemistry fields."""
-    return (
-        normalize_load_material_chemistry_mode(
-            process.get("load_material_chemistry_mode"),
-            legacy_control=process.get("load_chemistry_control"),
-        ) == "EXPLICIT"
-        or _chemistry_control(process.get("load_chemistry_control")) == "ENDPOINT_CHEMISTRY"
-    )
+    # The material-mode selector is authoritative once present. Only old
+    # recipes without that selector inherit the endpoint-control choice.
+    return normalize_load_material_chemistry_mode(
+        process.get("load_material_chemistry_mode"),
+        legacy_control=process.get("load_chemistry_control"),
+    ) == "EXPLICIT"
 
 
 def resolve_initial_equilibration_chemistry(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -1585,7 +1581,7 @@ def ensure_batch_runs_csv(path: Path | str = BATCH_RUNS_CSV) -> Path:
                 base["Load_Amount_Basis"] = "LOAD_VOLUME"
             # Legacy rows did not store a direct load CV. Preserve their old
             # load amount by deriving CV from density / feed concentration.
-            if not str(raw.get("Load_CV", "")).strip():
+            if "Load_CV" not in raw:
                 old_conc = _as_float(raw.get("Feed_Concentration_mg_mL"))
                 old_density = _as_float(raw.get("Load_Density_mg_mL_resin"))
                 if old_conc is not None and old_conc > 0 and old_density is not None:
@@ -1787,13 +1783,21 @@ def batch_row_to_run_config(row: dict[str, Any]) -> dict[str, Any]:
     cfg["feed"]["load_density_mg_mL_resin"] = _as_float(row.get("Load_Density_mg_mL_resin"))
     # Accept display labels written by previous JMP builds as well as tokens.
     p["load_amount_basis"] = normalize_load_amount_basis(row.get("Load_Amount_Basis"))
+    # The selected input is authoritative. A blank cell in a current saved
+    # run must not silently resurrect a stale value from another load basis.
+    authority = {
+        "CAPACITY": ("Load_Density_mg_mL_resin", "Load capacity [g/L resin]"),
+        "LOAD_VOLUME": ("Load_CV", "Load volume [CV]"),
+        "VOLUME_ML": ("Load_Volume_mL", "Load volume [mL]"),
+    }
+    selected_field, selected_label = authority[p["load_amount_basis"]]
+    if selected_field in row and _as_float(row[selected_field]) is None:
+        raise ValueError(f"{selected_label} is required for this saved run's selected load basis.")
     conc = cfg["feed"]["total_concentration_mg_mL"]
     density = cfg["feed"]["load_density_mg_mL_resin"]
     if p["load_amount_basis"] == "CAPACITY":
         if density is not None and conc is not None and conc > 0:
             p["load_CV"] = density / conc
-        elif p["load_CV"] is not None and conc is not None:
-            cfg["feed"]["load_density_mg_mL_resin"] = p["load_CV"] * conc
     elif p["load_amount_basis"] == "LOAD_VOLUME":
         if p["load_CV"] is None and conc is not None and conc > 0 and density is not None:
             p["load_CV"] = density / conc

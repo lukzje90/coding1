@@ -228,7 +228,7 @@ def _salt_input_controls(prefix: str) -> str:
     # A per-load pH/salt/conductivity edit is a direct material measurement.
     # Promote both selectors so an inherited BUFFER_A/B source cannot mask the
     # value the user just changed.
-    load_hook = 'loadMaterialMode << Set(2); loadSource << Set(1); ' if prefix == "load" else ''
+    load_hook = 'loadMaterialMode << Set(2); loadChemControl << Set(2); loadSource << Set(1); ' if prefix == "load" else ''
     return f'''H List Box(Text Box("Salt input", << Set Width(220)), {prefix}SaltMode = Combo Box({{"CONDUCTIVITY", "SALT_M"}}, << Set Width(170), << Set Function(Function({{this}}, If(!isLoading, {load_hook}SaveCurrentRun(); UpdateUI()))))),
         {prefix}SaltRow = H List Box(Text Box("Salt concentration [M salt]", << Set Width(220)), {prefix}Salt = Number Edit Box(., 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, {load_hook}SaveCurrentRun(); UpdateUI())))))'''
 
@@ -626,6 +626,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'loadEndB << Set(Column(dtRuns, "Load_End_Percent_B")[currentRun]);',
         'If(Uppercase(Char(Column(dtRuns, "Load_Chemistry_Control")[currentRun])) == "ENDPOINT_CHEMISTRY", loadChemControl << Set(2), loadChemControl << Set(1));',
         'If(Uppercase(Char(Column(dtRuns, "Load_Material_Chemistry_Mode")[currentRun])) == "EXPLICIT", loadMaterialMode << Set(2), loadMaterialMode << Set(1));',
+        'loadChemControl << Set(If(Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT", 2, 1));',
         'timeStepsBox << Set(Column(dtRuns, "Time_Steps")[currentRun]);',
         'axialPositionsBox << Set(Column(dtRuns, "Axial_Positions")[currentRun]);',
         'SetSourceCombo(loadSource, Char(Column(dtRuns, "Load_Source")[currentRun]));',
@@ -1144,7 +1145,7 @@ ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r,
         loadMaterialMode = Uppercase(Char(Column(runsTable, "Load_Material_Chemistry_Mode")[r]));
         loadMode = Uppercase(Char(Column(runsTable, "Load_Mode")[r]));
         chemControl = Uppercase(Char(Column(runsTable, "Load_Chemistry_Control")[r]));
-        If(loadMaterialMode == "EXPLICIT" | chemControl == "ENDPOINT_CHEMISTRY",
+        If(loadMaterialMode == "EXPLICIT",
             v = ResolvedPHFromRow(runsTable, r, "Load_Source", "Load_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v));
         ,
             If(loadMode != "STEP", v = ResolvedPHFromPercentBRow(runsTable, r, "Load_Start_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
@@ -1216,7 +1217,7 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     bufferADerived << Set Text("Resolved Buffer A salt [M]: " || Char(ResolvedBufferSalt(bufferACond, bufferASalt, bufferASaltMode)) || "   |   ionic strength [M]: " || If(Uppercase(Char(bufferAIonicSource << Get Selected)) == "ION_COMPOSITION", Char({buffer_a_I_expr}), Char(ResolvedBufferSalt(bufferACond, bufferASalt, bufferASaltMode))));
     bufferBDerived << Set Text("Resolved Buffer B salt [M]: " || Char(ResolvedBufferSalt(bufferBCond, bufferBSalt, bufferBSaltMode)) || "   |   ionic strength [M]: " || If(Uppercase(Char(bufferBIonicSource << Get Selected)) == "ION_COMPOSITION", Char({buffer_b_I_expr}), Char(ResolvedBufferSalt(bufferBCond, bufferBSalt, bufferBSaltMode))));
     loadSourceLabel = Uppercase(Char(loadSource << Get Selected));
-    loadSaltValue = If(Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT" | Uppercase(Char(loadChemControl << Get Selected)) == "ENDPOINT_CHEMISTRY",
+    loadSaltValue = If(Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT",
         If(loadSourceLabel == "BUFFER_A", ResolvedBufferSalt(bufferACond, bufferASalt, bufferASaltMode),
            loadSourceLabel == "BUFFER_B", ResolvedBufferSalt(bufferBCond, bufferBSalt, bufferBSaltMode),
            ResolvedBufferSalt(loadCond, loadSalt, loadSaltMode)),
@@ -1227,7 +1228,7 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
         Char(bufferBSaltMode << Get Selected) || "); load start " || Char(loadSaltValue) || " M.");
     loadChemControlRow << Visibility("Visible");
     equilibrationDirectPanel << Visibility(If(Uppercase(Char(equilibrationSource << Get Selected)) == "DIRECT", "Visible", "Collapse"));
-    loadChemPanel << Visibility(If((isCPA | isLangmuir | isWang) & (Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT" | Uppercase(Char(loadChemControl << Get Selected)) == "ENDPOINT_CHEMISTRY"), "Visible", "Collapse"));
+    loadChemPanel << Visibility(If((isCPA | isLangmuir | isWang) & Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT", "Visible", "Collapse"));
     loadPH << Visibility(If(isCPA | isWang, "Visible", "Collapse")); loadPHLabel << Visibility(If(isCPA | isWang, "Visible", "Collapse"));
     loadCond << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse")); loadCondLabel << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse"));
     tdmPanel << Visibility(If(isTDM, "Visible", "Collapse")); edmPanel << Visibility(If(isEDM, "Visible", "Collapse"));
@@ -1421,8 +1422,8 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                         H List Box(Text Box("Load mode", << Set Width(290)), loadMode = Combo Box({{"SET_POINT", "LINEAR", "STEP"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         H List Box(Text Box("Load start / set-point Buffer B [%]", << Set Width(290)), loadStartB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         H List Box(Text Box("Load end Buffer B [%]", << Set Width(290)), loadEndB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-                        loadChemControlRow = H List Box(Text Box("Load chemistry control", << Set Width(290)), loadChemControl = Combo Box({{"BUFFER_B_PERCENT", "ENDPOINT_CHEMISTRY"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(loadChemControl << Get Selected)) == "ENDPOINT_CHEMISTRY", loadMaterialMode << Set(2)); SaveCurrentRun(); UpdateUI()))))),
-                        H List Box(Text Box("Load material chemistry", << Set Width(290)), loadMaterialMode = Combo Box({{"BUFFER_RECIPE", "EXPLICIT"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+                        loadChemControlRow = H List Box(Text Box("Load chemistry control", << Set Width(290)), loadChemControl = Combo Box({{"BUFFER_B_PERCENT", "ENDPOINT_CHEMISTRY"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "ENDPOINT_CHEMISTRY", loadMaterialMode << Set(2), loadMaterialMode << Set(1)); SaveCurrentRun(); UpdateUI()))))),
+                        H List Box(Text Box("Load material chemistry", << Set Width(290)), loadMaterialMode = Combo Box({{"BUFFER_RECIPE", "EXPLICIT"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "BUFFER_RECIPE", loadChemControl << Set(1), loadChemControl << Set(2)); SaveCurrentRun(); UpdateUI()))))),
                         Text Box("Select load capacity [g/L resin], load volume [CV], or load volume [mL] as the input. Capacity is numerically equal to mg/mL resin; CV = capacity ÷ feed concentration or mL ÷ column volume. The model applies the resulting total feed volume = CV × column volume. BUFFER_RECIPE resolves chemistry from the load Buffer B % program. EXPLICIT uses the load material source, pH, salt input and conductivity fields below, so feed chemistry reaches the solver even when the load %B display is retained.", << Set Wrap(700), << Set Font Style("Italic")),
                         {_nrow("Number of time steps", "timeStepsBox", 700)},
                         {_nrow("Number of axial positions", "axialPositionsBox", 20)},
@@ -1430,10 +1431,10 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                         Text Box("This shared CPU limit runs independent saved batch chromatograms in parallel when launched by standalone Python. JMP's embedded Python safely uses one batch worker because it cannot start joblib child processes. A single selected run stays one coupled trajectory; native numerical libraries may use the selected thread limit where supported.", << Set Wrap(700)),
                         Text Box("Numerical resolution is stored per run. Time steps set the reported time grid and cap the adaptive integration step; axial positions set the finite-volume cells along the column. For comparing subtle peak shifts from b or k_s changes, use at least 300 reported time steps; 50 points may hide a shift between adjacent samples.", << Set Wrap(700), << Set Font Style("Italic")),
                         loadChemPanel = V List Box(
-                            H List Box(Text Box("Load chemistry source", << Set Width(220)), loadSource = Combo Box({{"DIRECT", "BUFFER_A", "BUFFER_B"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); ApplyChemSource(loadSource, loadPH, loadCond); SaveCurrentRun(); UpdateUI()))))),
-                            loadPHRow = H List Box(loadPHLabel = Text Box("Process / load pH", << Set Width(220)), loadPH = Number Edit Box(6, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI()))))),
+                            H List Box(Text Box("Load chemistry source", << Set Width(220)), loadSource = Combo Box({{"DIRECT", "BUFFER_A", "BUFFER_B"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); ApplyChemSource(loadSource, loadPH, loadCond); SaveCurrentRun(); UpdateUI()))))),
+                            loadPHRow = H List Box(loadPHLabel = Text Box("Process / load pH", << Set Width(220)), loadPH = Number Edit Box(6, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI()))))),
                             {_salt_input_controls("load")},
-                            loadCondRow = H List Box(loadCondLabel = Text Box("Load conductivity [mS/cm]", << Set Width(220)), loadCond = Number Edit Box(5, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI())))))
+                            loadCondRow = H List Box(loadCondLabel = Text Box("Load conductivity [mS/cm]", << Set Width(220)), loadCond = Number Edit Box(5, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI())))))
                         ),
                         Outline Box("Initial column equilibration (before load)", V List Box(
                             Text Box("Choose the chemistry initially filling the buffer mixer, column liquid, and TDM particle pores. Match load preserves existing results. Buffer A/B use this run's saved buffer definitions; Direct uses the measured starting pH and one authoritative salt input. This is an initial condition, not an added CV step.", << Set Wrap(700)),

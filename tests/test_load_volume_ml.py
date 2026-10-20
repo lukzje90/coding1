@@ -9,7 +9,8 @@ import tdm_bridge
 
 from tdm_jmp import _validate_jsl, build_jsl
 from tdm_minimal_io import (
-    MODEL_EDM_LANGMUIR, MODEL_TDM_CPA, MODEL_TDM_WANG,
+    MODEL_EDM_CPA, MODEL_EDM_LANGMUIR, MODEL_TDM_CPA,
+    MODEL_TDM_LANGMUIR, MODEL_TDM_WANG,
     LSQ_MODEL_SOURCE_BATCH, LSQ_MODEL_SOURCE_INDEPENDENT,
     apply_batch_shared_parameters, batch_row_to_run_config,
     batch_run_fields, batch_run_numeric_fields, batch_shared_parameter_snapshot,
@@ -23,6 +24,151 @@ from verify_model import make_config
 
 
 class LoadVolumeMLTests(unittest.TestCase):
+    def test_all_models_consume_equivalent_saved_load_and_salt_inputs(self):
+        models = (MODEL_TDM_CPA, MODEL_TDM_WANG, MODEL_TDM_LANGMUIR,
+                  MODEL_EDM_CPA, MODEL_EDM_LANGMUIR)
+        load_inputs = (
+            ("CAPACITY", {"Load_Density_mg_mL_resin": 6.0,
+                          "Load_CV": 99.0, "Load_Volume_mL": 99.0}),
+            ("LOAD_VOLUME", {"Load_Density_mg_mL_resin": 99.0,
+                             "Load_CV": 3.0, "Load_Volume_mL": 99.0}),
+            ("VOLUME_ML", {"Load_Density_mg_mL_resin": 99.0,
+                           "Load_CV": 99.0, "Load_Volume_mL": 6.0}),
+        )
+        rows = []
+        for index, (basis, amounts) in enumerate(load_inputs, start=1):
+            row = default_batch_row(index)
+            row.update(Load_Amount_Basis=basis, Feed_Concentration_mg_mL=2.0,
+                       Load_Material_Chemistry_Mode="EXPLICIT",
+                       Load_Chemistry_Control="ENDPOINT_CHEMISTRY",
+                       Load_Source="DIRECT", Load_pH=6.0,
+                       Load_Salt_Input_Mode="SALT_M", Load_Salt_M=0.2,
+                       Load_Conductivity_mS_cm=20.0,
+                       PLW_Count=0, Elution_Count=1, Elution1_CV=0.2,
+                       Time_Steps=50, Axial_Positions=6, **amounts)
+            rows.append(row)
+        conductivity_row = dict(rows[0], Run_Number=4,
+                                Load_Salt_Input_Mode="CONDUCTIVITY",
+                                Load_Salt_M=0.9)
+        rows.append(conductivity_row)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runs.csv"
+            save_batch_rows(rows, path)
+            saved = load_batch_rows(path)[:4]
+            for model in models:
+                with self.subTest(model=model):
+                    shared = make_config(model, 0, multistep=False)
+                    shared["column"]["volume_mL"] = 2.0
+                    if model == MODEL_TDM_WANG:
+                        shared["chromatography_mode"] = "HIC"
+                    configs = [apply_batch_shared_parameters(
+                        shared, batch_row_to_run_config(row))[0] for row in saved]
+                    for cfg in configs:
+                        self.assertEqual(validate_operating_conditions(cfg), [])
+                        self.assertAlmostEqual(cfg["process"]["load_CV"], 3.0)
+                        self.assertAlmostEqual(cfg["process"]["load_volume_mL"], 6.0)
+                        self.assertAlmostEqual(cfg["feed"]["load_density_mg_mL_resin"], 6.0)
+                        program = _build_program(cfg, np.zeros(1))
+                        self.assertAlmostEqual(program.stages[0].duration_CV, 3.0)
+                        self.assertAlmostEqual(program.stages[0].start_salt_M, 0.2)
+                        self.assertAlmostEqual(program.stages[0].start_conductivity_mS_cm, 20.0)
+                    results = [simulate(cfg) for cfg in configs]
+                    for result in results:
+                        used = result["parameter_receipt"]["load_input_used"]
+                        self.assertAlmostEqual(used["required_feed_volume_CV"], 3.0)
+                        self.assertAlmostEqual(used["required_feed_volume_mL"], 6.0)
+                        self.assertAlmostEqual(used["capacity_g_L_resin"], 6.0)
+                        self.assertAlmostEqual(used["total_protein_input_g"], 0.012)
+                        self.assertAlmostEqual(used["material_salt_M"], 0.2)
+                        self.assertAlmostEqual(used["material_conductivity_mS_cm"], 20.0)
+                    outputs = [result["trace"] for result in results]
+                    for trace in outputs[1:]:
+                        for key in ("CV", "uv_mAU", "conductivity_mS_cm",
+                                    "binding_salt_concentration_M"):
+                            np.testing.assert_allclose(trace[key], outputs[0][key], rtol=1e-10, atol=1e-10)
+
+    def test_cleared_selected_load_input_does_not_reuse_stale_other_basis(self):
+        selected = (
+            ("CAPACITY", "Load_Density_mg_mL_resin", "Load capacity"),
+            ("LOAD_VOLUME", "Load_CV", "Load volume [CV]"),
+            ("VOLUME_ML", "Load_Volume_mL", "Load volume [mL]"),
+        )
+        for basis, field, label in selected:
+            with self.subTest(basis=basis), tempfile.TemporaryDirectory() as directory:
+                row = default_batch_row(1)
+                row["Load_Amount_Basis"] = basis
+                row[field] = ""
+                path = Path(directory) / "runs.csv"
+                save_batch_rows([row], path)
+                saved = load_batch_rows(path)[0]
+                self.assertEqual(saved[field], "")
+                with self.assertRaisesRegex(ValueError, label.replace("[", r"\[").replace("]", r"\]")):
+                    batch_row_to_run_config(saved)
+
+    def test_saved_load_material_selector_controls_salt_source(self):
+        shared = make_config(MODEL_TDM_CPA, 0, multistep=False)
+        row = default_batch_row(1)
+        row.update(Load_Amount_Basis="LOAD_VOLUME", Load_CV=1.0,
+                   Load_Chemistry_Control="ENDPOINT_CHEMISTRY",
+                   Load_Material_Chemistry_Mode="BUFFER_RECIPE",
+                   Load_Source="DIRECT", Load_Salt_Input_Mode="SALT_M",
+                   Load_Salt_M=0.2, Load_Conductivity_mS_cm=20.0,
+                   Load_Start_Percent_B=0.0, Load_End_Percent_B=0.0)
+        recipe, _ = apply_batch_shared_parameters(shared, batch_row_to_run_config(row))
+        self.assertAlmostEqual(_build_program(recipe, np.zeros(1)).stages[0].start_salt_M, 0.05)
+        row["Load_Material_Chemistry_Mode"] = "EXPLICIT"
+        explicit, _ = apply_batch_shared_parameters(shared, batch_row_to_run_config(row))
+        self.assertAlmostEqual(_build_program(explicit, np.zeros(1)).stages[0].start_salt_M, 0.2)
+        row.pop("Load_Material_Chemistry_Mode")
+        legacy, _ = apply_batch_shared_parameters(shared, batch_row_to_run_config(row))
+        self.assertAlmostEqual(_build_program(legacy, np.zeros(1)).stages[0].start_salt_M, 0.2)
+        jsl = build_jsl(shared)
+        self.assertIn('If(loadMaterialMode == "EXPLICIT",', jsl)
+        self.assertIn('If(Uppercase(Char(this << Get Selected)) == "BUFFER_RECIPE", loadChemControl << Set(1), loadChemControl << Set(2))', jsl)
+
+    def test_salt_molarity_without_conductivity_still_reaches_load_stage(self):
+        shared = make_config(MODEL_TDM_CPA, 0, multistep=False)
+        row = default_batch_row(1)
+        row.update(Load_Material_Chemistry_Mode="EXPLICIT",
+                   Load_Source="DIRECT", Load_Salt_Input_Mode="SALT_M",
+                   Load_Salt_M=0.2, Load_Conductivity_mS_cm="")
+        config, _ = apply_batch_shared_parameters(shared, batch_row_to_run_config(row))
+        self.assertEqual(validate_operating_conditions(config), [])
+        stage = _build_program(config, np.zeros(1)).stages[0]
+        self.assertAlmostEqual(stage.start_salt_M, 0.2)
+        self.assertAlmostEqual(stage.start_conductivity_mS_cm, 20.0)
+
+    def test_lsq_selected_batch_or_independent_run_keeps_its_own_load_and_salt(self):
+        shared = make_config(MODEL_TDM_CPA, 0, multistep=False)
+        shared["column"]["volume_mL"] = 2.0
+        batch = [default_batch_row(i) for i in range(1, 3)]
+        for row, salt in zip(batch, (0.2, 0.3)):
+            row.update(Feed_Concentration_mg_mL=2.0,
+                       Load_Material_Chemistry_Mode="EXPLICIT", Load_Source="DIRECT",
+                       Load_Salt_Input_Mode="SALT_M", Load_Salt_M=salt,
+                       Load_Conductivity_mS_cm=salt / 0.01)
+        batch[0].update(Load_Amount_Basis="CAPACITY", Load_Density_mg_mL_resin=6.0)
+        batch[1].update(Load_Amount_Basis="VOLUME_ML", Load_Volume_mL=8.0)
+        lsq_batch = default_batch_row(1)
+        lsq_batch.update(LSQ_Model_Source=LSQ_MODEL_SOURCE_BATCH,
+                         LSQ_Model_Run_Number=2)
+        lsq_independent = default_batch_row(2)
+        lsq_independent.update(LSQ_Model_Source=LSQ_MODEL_SOURCE_INDEPENDENT,
+                               Feed_Concentration_mg_mL=2.0,
+                               Load_Amount_Basis="LOAD_VOLUME", Load_CV=5.0,
+                               Load_Material_Chemistry_Mode="EXPLICIT",
+                               Load_Source="DIRECT", Load_Salt_Input_Mode="SALT_M",
+                               Load_Salt_M=0.4, Load_Conductivity_mS_cm=40.0)
+        for profile, row, expected in ((1, lsq_batch, (2, 4.0, 0.3)),
+                                       (2, lsq_independent, (2, 5.0, 0.4))):
+            cfg, source = tdm_bridge._lsq_model_run_config(shared, profile, row, batch)
+            stage = _build_program(cfg, np.zeros(1)).stages[0]
+            self.assertEqual(source["model_run_number"], expected[0])
+            self.assertAlmostEqual(stage.duration_CV, expected[1])
+            self.assertAlmostEqual(stage.start_salt_M, expected[2])
+            self.assertAlmostEqual(cfg["feed"]["load_density_mg_mL_resin"], expected[1] * 2)
+            self.assertAlmostEqual(cfg["process"]["load_volume_mL"], expected[1] * 2)
+
     def test_independent_run_recipes_share_model_volume_and_parameters(self):
         shared = make_config(MODEL_TDM_CPA, 1, multistep=False)
         shared["column"]["volume_mL"] = 2.5

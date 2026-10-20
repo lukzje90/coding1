@@ -1,4 +1,16 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25b)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25c)
+
+LOAD INPUT AND CHEMISTRY HANDOFF (R25c)
+For each saved normal or independent LSQ run, the selected capacity [g/L
+resin], load volume [CV], or load volume [mL] is the authority. The other
+two values are derived using that run's feed concentration and the shared
+column volume. A selected load input left blank now stops with a clear error
+instead of silently reusing an old value from another load basis. The direct
+load salt/conductivity setting and Buffer A/B recipe selection now agree in
+the JMP controls and the solver, including after changing modes. SALT_M uses
+the entered molarity for binding; CONDUCTIVITY uses the entered conductivity
+times the shared conversion factor. The output receipt records the resolved
+capacity, CV, mL, salt, conductivity, and source for each run.
 
 OVERNIGHT FIT AUDIT (R25b)
 The LSQ optimizer-evaluation safety cap remains adjustable from 2 to 10000.
@@ -25,7 +37,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25b_package.marker beside the launcher and Python files. Run the saved
+tdm_r25c_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 JMP LEAST-SQUARES WORKER STARTUP FIX (R24y)
