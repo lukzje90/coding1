@@ -1,4 +1,10 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24s)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R24y)
+
+JMP LEAST-SQUARES WORKER STARTUP FIX (R24y)
+JMP's embedded Python runs least-squares refinement with one worker even if
+more were requested. This prevents JMP from interpreting joblib's Windows
+worker command as a file path. The fit calculations and model solver are
+unchanged. Standalone Python still supports multiple process workers.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)
 The output chromatogram shows its generation time in UK local time, using GMT
@@ -19,21 +25,31 @@ from the same extracted folder when prompted. Keep all extracted files together.
 SEPARATE NORMAL AND LEAST-SQUARES CPU LIMITS (R24q)
 Process Setup now shows Normal prediction CPU limit directly below time steps
 and axial positions. This setting is shared across the normal batch. Run
-saved batch evaluates independent chromatograms in separate CPU processes,
-up to the entered limit and the number of runs. Run selected keeps its coupled
-time trajectory intact; the setting also caps native numerical-library
+saved batch evaluates independent chromatograms in separate CPU processes
+when launched by standalone Python, up to the entered limit and the number
+of runs. JMP's embedded Python runs batch chromatograms sequentially with one
+worker. Run selected keeps its coupled time trajectory intact; the setting
+also caps native numerical-library
 threads, but a single run may use fewer cores and may not become faster.
 Least-Squares Refinement has its own independent CPU worker setting. Enter
-12 there to permit up to 12 parallel run or parameter-trial evaluations when
-there is enough independent work. Both settings accept whole numbers 1–64;
-the actual process count is capped by available logical CPUs and work items.
+12 there to permit up to 12 parallel run or parameter-trial evaluations in
+standalone Python when there is enough independent work. Both settings accept
+whole numbers 1–64; the actual process count is capped by available logical
+CPUs and work items.
 Fit workers each use one native numerical thread to avoid nested CPU pools.
 The model equations, solver methods, tolerances and time/axial grids are
-unchanged. The JMP launcher installs joblib and threadpoolctl as needed.
+unchanged. The JMP launcher installs threadpoolctl as needed.
+
+JMP 19 embeds Python in JMP.exe. Joblib's Windows child-process command is
+interpreted by JMP as a file name, causing a "File not found: from
+joblib.externals.loky..." alert. The model detects this host and does not
+launch joblib workers. The effective LSQ and batch worker count is one in JMP
+regardless of a higher saved request; status and fit settings show the actual
+count. Standalone Python still uses the requested process parallelism.
 
 PARALLEL CPU REFINEMENT (R24p)
 In Least-Squares Refinement, set CPU workers from 1 to 64. The
-default of 1 retains serial fitting. With multiple selected runs, separate
+default of 1 retains serial fitting. In standalone Python, with multiple selected runs, separate
 Python processes simulate those runs at each objective evaluation. With two
 or more unlocked parameters, numerical Jacobian parameter trials also run
 in parallel, including for a single selected run. All workers use the same
@@ -44,9 +60,8 @@ history and outputs. If one run and at most one parameter is unlocked, only
 one worker can be used. More workers increase CPU and memory use; they do
 not reduce the number of solver evaluations or change the least-squares
 objective. The fit report and settings JSON show the actual worker count.
-Parallel fitting needs joblib, installed by the JMP launcher on first use
-of this release. If worker startup fails in a JMP installation, select one
-worker to retain serial fitting. The JMP UI waits while a fit runs; check
+Parallel fitting needs joblib when using standalone Python. JMP automatically
+uses one worker. The JMP UI waits while a fit runs; check
 least_squares_objective_history.csv for progress.
 If the operating system terminates a worker during fitting, the refinement
 retries only unfinished trials with fewer processes: first two, then one.

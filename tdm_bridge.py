@@ -704,13 +704,18 @@ def main() -> int:
                 return 0
             unlocked_paths = _lsq_unlocked_paths_from_jmp()
             from tdm_least_squares import FIT_HISTORY_CSV, fit_parameter_specs
+            from tdm_minimal_model import can_spawn_model_workers
             fitted_paths = fit_parameter_specs(profiles[0]["config"], unlocked_paths=unlocked_paths,
                                                fit_conductivity=any(p["fit_conductivity"] for p in profiles))
+            requested_lsq_workers = int(shared_raw["least_squares"]["parallel_workers"])
+            jmp_worker_note = (" JMP's embedded Python cannot launch joblib child processes; "
+                               "this fit will use one worker."
+                               if requested_lsq_workers > 1 and not can_spawn_model_workers() else "")
             _write_status(
                 f"Least-squares refinement running: {len(profiles)} profile(s), "
                 f"{len(fitted_paths)} unlocked parameters, "
                 f"{shared_raw['least_squares']['max_nfev']} optimizer-evaluation safety cap; "
-                f"up to {shared_raw['least_squares']['parallel_workers']} CPU worker(s).\n"
+                f"up to {requested_lsq_workers} requested CPU worker(s).{jmp_worker_note}\n"
                 f"Each numerical Jacobian needs about {len(profiles) * (len(fitted_paths) + 1)} column solves. "
                 f"Progress: {FIT_HISTORY_CSV}. If this file is locked, the fit continues "
                 "and reports a recovered history path when complete."
@@ -735,6 +740,9 @@ def main() -> int:
                              if fit["initial_weighted_rmse"] is not None else "")
             with open(fit["improved_parameters_txt"], encoding="utf-8") as fh:
                 improved_list = fh.read()
+            completed_worker_note = (
+                "JMP embedded Python used one worker because child-process commands open as files in JMP.\n"
+                if requested_lsq_workers > 1 and not fit["parallel_process_workers_available"] else "")
             _write_status(
                 "Least-squares refinement completed.\n"
                 f"Global profiles fitted: {len(fit['profile_metrics'])} (objective: {shared_raw['least_squares']['objective']}).\n{profile_summary}\n"
@@ -742,7 +750,7 @@ def main() -> int:
                 f"{weighted_line}"
                 f"Objective improvement: {fit['improvement_percent']:.4g}%\n"
                 f"Optimizer function evaluations: {fit['nfev']}; actual residual evaluations: {fit['residual_evaluations']}\n"
-                f"CPU worker processes used: {fit['parallel_workers_used']}\n"
+                f"CPU worker processes used: {fit['parallel_workers_used']}\n{completed_worker_note}"
                 f"Optimizer converged: {fit['success']}; {fit['message']}\n"
                 f"Accepted/applied to shared batch parameters: {fit['accepted']}\n"
                 f"Improved parameters:\n{improved_list}\n"
@@ -818,8 +826,11 @@ def main() -> int:
             recipe_lines = "\n".join(
                 _result_recipe_line(run["manifest"]) for run in info.get("runs", [])
             )
+            batch_worker_note = (
+                "JMP embedded Python used one worker because child-process commands open as files in JMP.\n"
+                if int(shared["numerics"]["cpu_threads"]) > 1 and not info["cpu_worker_processes_available"] else "")
             _write_status(
-                f"Batch completed: {batch_count} run(s); CPU worker processes used: {info['cpu_workers_used']}.\n"
+                f"Batch completed: {batch_count} run(s); CPU worker processes used: {info['cpu_workers_used']}.\n{batch_worker_note}"
                 f"Recipes used:\n{recipe_lines}\n"
                 f"Shared model fingerprint: {info['shared_parameter_fingerprint']}\n"
                 f"Batch result folder: {batch_output_dir}\n"

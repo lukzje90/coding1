@@ -7,7 +7,9 @@ import csv
 import json
 from multiprocessing import TimeoutError as ProcessTimeoutError
 from pathlib import Path
+import sys
 import tempfile
+from types import ModuleType
 import unittest
 from unittest.mock import patch
 
@@ -141,6 +143,51 @@ class ParallelCpuFitTests(unittest.TestCase):
                     results[1]["fitted_config"]["components"][0][parameter], rtol=1e-11)
             self.assertEqual(results[0]["parallel_workers_used"], 1)
             self.assertEqual(results[1]["parallel_workers_used"], 2)
+
+    def test_jmp_embedded_python_refines_without_starting_joblib(self):
+        truth = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        truth["numerics"].update(time_steps=50, axial_positions=6)
+        trace = simulate(truth)["trace"]
+        initial = copy.deepcopy(truth)
+        initial["components"][0]["qmax_g_L"] *= 1.2
+        initial["components"][0]["b_L_g"] *= 0.8
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV 280 [mAU]"])
+                writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
+            results = []
+            for label, workers in (("standalone", 1), ("embedded", 3)):
+                result_dir = root / label
+                result_dir.mkdir()
+                with patch.multiple(lsq, **{name: result_dir / getattr(lsq, name).name
+                                            for name in OUTPUTS}):
+                    if label == "embedded":
+                        with patch.object(sys, "executable", r"C:\Program Files\JMP\JMP\19\jmp.exe"), \
+                             patch.dict(sys.modules, {"jmp": ModuleType("jmp")}), \
+                             patch("joblib.Parallel", side_effect=AssertionError("joblib must not run in JMP")):
+                            results.append(lsq.run_global_least_squares_refinement(
+                                [{"config": initial, "chromatogram_csv": source}],
+                                unlocked_paths=["components[0].qmax_g_L", "components[0].b_L_g"],
+                                max_nfev=3, parallel_workers=workers))
+                    else:
+                        results.append(lsq.run_global_least_squares_refinement(
+                            [{"config": initial, "chromatogram_csv": source}],
+                            unlocked_paths=["components[0].qmax_g_L", "components[0].b_L_g"],
+                            max_nfev=3, parallel_workers=workers))
+                settings = json.loads((result_dir / lsq.FIT_SETTINGS_JSON.name).read_text())
+                if label == "embedded":
+                    self.assertEqual(settings["parallel_workers_requested"], 3)
+                    self.assertEqual(settings["parallel_workers_used"], 1)
+                    self.assertFalse(settings["parallel_process_workers_available"])
+            for key in ("initial_objective", "final_objective"):
+                np.testing.assert_allclose(results[0][key], results[1][key], rtol=1e-11, atol=1e-11)
+            for parameter in ("qmax_g_L", "b_L_g"):
+                np.testing.assert_allclose(
+                    results[0]["fitted_config"]["components"][0][parameter],
+                    results[1]["fitted_config"]["components"][0][parameter], rtol=1e-11)
 
     def test_tdm_cpa_parallel_trials_match_serial_with_mass_and_conductivity(self):
         truth = make_config(MODEL_TDM_CPA, 1, multistep=False)

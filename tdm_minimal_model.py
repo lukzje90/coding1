@@ -7,6 +7,7 @@ import html
 import json
 import math
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2251,6 +2252,18 @@ def run_and_write(
     result = simulate(config)
     return write_outputs(config, result, output_dir, run_context=run_context)
 
+def can_spawn_model_workers() -> bool:
+    """Return whether the host can run joblib's Python worker command.
+
+    JMP embeds Python in JMP.exe. On Windows, loky passes a ``python -c``
+    worker command to sys.executable; JMP treats that code as a file name and
+    displays a File not found alert. An installed standalone Python keeps the
+    existing process-based parallel path.
+    """
+    return (Path(sys.executable or "").stem.lower().startswith("python")
+            and sys.modules.get("jmp") is None)
+
+
 def run_batch(
     base_config: dict[str, Any],
     run_configs: list[dict[str, Any]],
@@ -2278,6 +2291,9 @@ def run_batch(
         raise ValueError(f"Prediction CPU threads must be a whole number from 1 to {MAX_CPU_THREADS}.")
     requested_workers = int(worker_number)
     workers_used = min(requested_workers, len(run_configs), os.cpu_count() or 1)
+    process_workers_available = can_spawn_model_workers()
+    if not process_workers_available:
+        workers_used = 1
     expected_fingerprint = batch_parameter_fingerprint(base_config)
     effective_runs: list[tuple[dict[str, Any], list[str]]] = []
     for index, requested in enumerate(run_configs, start=1):
@@ -2302,13 +2318,15 @@ def run_batch(
             for effective, _ in effective_runs
         )
     else:
-        simulations = [simulate(effective, native_threads=requested_workers)
+        native_threads = 1 if not process_workers_available else requested_workers
+        simulations = [simulate(effective, native_threads=native_threads)
                        for effective, _ in effective_runs]
     results: list[dict[str, Any]] = []
     for index, ((effective, attempted_overrides), result) in enumerate(zip(effective_runs, simulations), start=1):
         result["batch"] = {
             "run_number": index,
             "cpu_workers_used": workers_used,
+            "cpu_worker_processes_available": process_workers_available,
             "shared_parameter_fingerprint": expected_fingerprint,
             "shared_parameters": batch_shared_parameter_snapshot(base_config),
             "attempted_shared_overrides_ignored": attempted_overrides,
@@ -2361,5 +2379,6 @@ def run_batch_and_write(
         "gallery_html": str(gallery_path),
         "shared_parameter_fingerprint": batch_parameter_fingerprint(base_config),
         "cpu_workers_used": batch_results[0]["result"]["batch"]["cpu_workers_used"],
+        "cpu_worker_processes_available": batch_results[0]["result"]["batch"]["cpu_worker_processes_available"],
         "runs": rows,
     }

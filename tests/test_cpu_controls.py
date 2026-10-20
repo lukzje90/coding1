@@ -5,8 +5,10 @@ import copy
 import csv
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
+from types import ModuleType
 import unittest
 from unittest.mock import patch
 
@@ -148,6 +150,37 @@ class CpuControlTests(unittest.TestCase):
                     receipt = json.loads((root / f"run_{run_number:03d}"
                                           / "latest_results_manifest.json").read_text())
                     self.assertEqual(receipt["run_number"], run_number)
+
+    def test_jmp_embedded_python_runs_batch_without_starting_joblib(self):
+        cfg = sanitize_config_for_selected_model(
+            make_config(MODEL_EDM_LANGMUIR, 0, multistep=False))
+        cfg["numerics"].update(time_steps=50, axial_positions=6, cpu_threads=3)
+        runs = [copy.deepcopy(cfg), copy.deepcopy(cfg)]
+        runs[1]["process"]["load_CV"] = 0.3
+        runs[1]["feed"]["load_density_mg_mL_resin"] = 0.6
+        expected = model.run_batch(cfg, runs, parallel_workers=1)
+        with patch.object(sys, "executable", r"C:\Program Files\JMP\JMP\19\jmp.exe"), \
+             patch.dict(sys.modules, {"jmp": ModuleType("jmp")}), \
+             patch("joblib.Parallel", side_effect=AssertionError("joblib must not run in JMP")):
+            self.assertFalse(model.can_spawn_model_workers())
+            actual = model.run_batch(cfg, runs, parallel_workers=3)
+        for baseline, embedded in zip(expected, actual):
+            self.assertEqual(embedded["result"]["batch"]["cpu_workers_used"], 1)
+            self.assertFalse(embedded["result"]["batch"]["cpu_worker_processes_available"])
+            for channel in ("CV", "uv_mAU", "conductivity_mS_cm", "component_g_L"):
+                np.testing.assert_array_equal(baseline["result"]["trace"][channel],
+                                              embedded["result"]["trace"][channel])
+            self.assertEqual(baseline["result"]["mass_balance"],
+                             embedded["result"]["mass_balance"])
+
+    def test_embedded_worker_detection_checks_host_and_jmp_module(self):
+        with patch.object(sys, "executable", r"C:\Program Files\JMP\JMP\19\jmp.exe"):
+            self.assertFalse(model.can_spawn_model_workers())
+        with patch.object(sys, "executable", "/usr/bin/python3"), \
+             patch.dict(sys.modules, {"jmp": ModuleType("jmp")}):
+            self.assertFalse(model.can_spawn_model_workers())
+        with patch.object(sys, "executable", "/usr/bin/python3"):
+            self.assertTrue(model.can_spawn_model_workers())
 
 
 if __name__ == "__main__":

@@ -57,7 +57,7 @@ from tdm_minimal_io import (
     validate_config,
     is_hic,
 )
-from tdm_minimal_model import simulate, _build_program, _svg_plot, _stage_receipt
+from tdm_minimal_model import simulate, _build_program, _svg_plot, _stage_receipt, can_spawn_model_workers
 
 PROJECT_DIR = Path(__file__).resolve().parent
 ATTACHED_CHROMATOGRAM_CSV = PROJECT_DIR / "least_squares_reference_chromatogram.csv"
@@ -2142,6 +2142,9 @@ def run_global_least_squares_refinement(
         candidate_paths=candidate_paths,
     )
     workers_used = min(int(requested_workers), max(len(profiles), len(specs)), os.cpu_count() or 1)
+    process_workers_available = can_spawn_model_workers()
+    if not process_workers_available:
+        workers_used = 1
     worker_fallback_used = False
     parallel = None
     delayed = None
@@ -2658,6 +2661,7 @@ def run_global_least_squares_refinement(
         "max_nfev": int(max_nfev),
         "parallel_workers_requested": int(requested_workers),
         "parallel_workers_used": workers_used,
+        "parallel_process_workers_available": process_workers_available,
         "parallel_worker_fallback_used": worker_fallback_used,
         "composition_profile_metrics": composition_profile_metrics,
         "objective_history_csv": str(history_path) if history_path else None,
@@ -2730,7 +2734,7 @@ def run_global_least_squares_refinement(
 <meta charset="utf-8"><title>Global least-squares refinement</title>
 <style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
 <h1>Global least-squares refinement</h1>
-<p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}; <b>CPU worker processes:</b> {workers_used} (requested {int(requested_workers)}; stalled-pool fallback: {worker_fallback_used})</p>
+<p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}; <b>CPU worker processes:</b> {workers_used} (requested {int(requested_workers)}; stalled-pool fallback: {worker_fallback_used}; process workers available: {process_workers_available})</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
 <b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Unlocked parameters:</b> {len(specs)}.</p>
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise UV equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor. Conductivity, when enabled for a run, adds measured detector residuals normalized by that run's conductivity signal scale and sample count; in RAW_SSE these are rescaled to the measured UV scale.</p>
@@ -2754,6 +2758,7 @@ def run_global_least_squares_refinement(
         "nfev": opt_nfev,
         "residual_evaluations": eval_count,
         "parallel_workers_used": workers_used,
+        "parallel_process_workers_available": process_workers_available,
         "parallel_worker_fallback_used": worker_fallback_used,
         "composition_profile_metrics": composition_profile_metrics,
         "mode": mode,
