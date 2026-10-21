@@ -41,7 +41,7 @@ class LoadVolumeMLTests(unittest.TestCase):
             row.update(Load_Amount_Basis=basis, Feed_Concentration_mg_mL=2.0,
                        Load_Material_Chemistry_Mode="EXPLICIT",
                        Load_Chemistry_Control="ENDPOINT_CHEMISTRY",
-                       Load_Source="DIRECT", Load_pH=6.0,
+                       Load_Source="DIRECT", Load_pH=7.2,
                        Load_Salt_Input_Mode="SALT_M", Load_Salt_M=0.2,
                        Load_Conductivity_mS_cm=20.0,
                        PLW_Count=0, Elution_Count=1, Elution1_CV=0.2,
@@ -59,6 +59,10 @@ class LoadVolumeMLTests(unittest.TestCase):
                 with self.subTest(model=model):
                     shared = make_config(model, 0, multistep=False)
                     shared["column"]["volume_mL"] = 2.0
+                    if model in (MODEL_TDM_CPA, MODEL_EDM_CPA):
+                        shared["components"][0].update(
+                            pH_ref=6.0, Z1_per_pH=0.0, Z2_per_pH2=0.0,
+                            Z3_per_pH3=0.0, delta_pH_slope_m2_C=0.0)
                     if model == MODEL_TDM_WANG:
                         shared["chromatography_mode"] = "HIC"
                     configs = [apply_batch_shared_parameters(
@@ -70,6 +74,7 @@ class LoadVolumeMLTests(unittest.TestCase):
                         self.assertAlmostEqual(cfg["feed"]["load_density_mg_mL_resin"], 6.0)
                         program = _build_program(cfg, np.zeros(1))
                         self.assertAlmostEqual(program.stages[0].duration_CV, 3.0)
+                        self.assertAlmostEqual(program.stages[0].start_pH, 7.2)
                         self.assertAlmostEqual(program.stages[0].start_salt_M, 0.2)
                         self.assertAlmostEqual(program.stages[0].start_conductivity_mS_cm, 20.0)
                     results = [simulate(cfg) for cfg in configs]
@@ -78,6 +83,7 @@ class LoadVolumeMLTests(unittest.TestCase):
                         self.assertAlmostEqual(used["required_feed_volume_CV"], 3.0)
                         self.assertAlmostEqual(used["required_feed_volume_mL"], 6.0)
                         self.assertAlmostEqual(used["capacity_g_L_resin"], 6.0)
+                        self.assertAlmostEqual(used["material_pH"], 7.2)
                         self.assertAlmostEqual(used["total_protein_input_g"], 0.012)
                         self.assertAlmostEqual(used["material_salt_M"], 0.2)
                         self.assertAlmostEqual(used["material_conductivity_mS_cm"], 20.0)
@@ -306,7 +312,18 @@ class LoadVolumeMLTests(unittest.TestCase):
         self.assertEqual(normalize_load_amount_basis("Load volume [mL]"), "VOLUME_ML")
         jsl = build_jsl(cfg)
         _validate_jsl(jsl)
-        self.assertIn('loadAmountBasis = Combo Box({"Capacity [g/L resin]", "Load volume [CV]", "Load volume [mL]"}', jsl)
+        self.assertNotIn('loadAmountBasis = Combo Box', jsl)
+        self.assertIn('Column(dtRuns, "Load_Amount_Basis")[currentRun] = "CAPACITY";', jsl)
+        self.assertIn('Calculated load volume [CV]', jsl)
+        self.assertIn('Calculated load volume [mL]', jsl)
+        self.assertIn('loadCV = Number Edit Box(., 9, << Set Width(92), << Enable(0))', jsl)
+        self.assertIn('loadVolumeML = Number Edit Box(., 9, << Set Width(92), << Enable(0))', jsl)
+        self.assertIn('loadBasis == "LOAD_VOLUME"', jsl)
+        self.assertIn('loadBasis == "VOLUME_ML"', jsl)
+        self.assertIn('cv = If(Is Missing(capacity) | Is Missing(concentration)', jsl)
+        self.assertIn('loadChemPanel << Visibility("Visible")', jsl)
+        self.assertIn('Load material pH', jsl)
+        self.assertIn('Load material conductivity [mS/cm]', jsl)
         self.assertIn('Column(dtRuns, "Load_Volume_mL")[currentRun] = loadVolumeML << Get;', jsl)
         self.assertIn('loadVolumeML << Set(Column(dtRuns, "Load_Volume_mL")[currentRun]);', jsl)
         self.assertIn('Return(Char(Round(volume / columnVol, 0.0001)))', jsl)

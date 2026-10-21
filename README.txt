@@ -1,4 +1,14 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25f)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25g)
+
+LOAD INPUTS IN JMP (R25g)
+Enter feed concentration and load capacity for each run. The JMP window
+calculates load volume in CV and mL as read-only values using the shared column
+volume. Opening an older CV- or mL-based saved run converts its existing load
+amount to capacity before saving, so the programmed load amount is preserved.
+Older CSV and Python recipes still accept their saved load basis. Load material
+pH, conductivity and salt are now visible in Process Setup; editing them
+selects explicit load chemistry for that run. The buffer-recipe load mode is
+still available for existing runs.
 
 CLEARER JMP INTERFACE (R25f)
 The JMP window now uses shorter labels and essential setup guidance. Repeated
@@ -39,10 +49,10 @@ CPU settings are ignored when a project is loaded. The mechanistic solver,
 residuals, numerical grids and optimizer equations are unchanged.
 
 LOAD INPUT AND CHEMISTRY HANDOFF (R25c)
-For each saved normal or independent LSQ run, the selected capacity [g/L
-resin], load volume [CV], or load volume [mL] is the authority. The other
-two values are derived using that run's feed concentration and the shared
-column volume. A selected load input left blank now stops with a clear error
+R25c allowed each saved normal or independent LSQ run to select capacity
+[g/L resin], load volume [CV], or load volume [mL] as the authority. R25g
+keeps those saved recipes readable but uses capacity as the only editable
+load amount in JMP. A selected load input left blank stops with a clear error
 instead of silently reusing an old value from another load basis. The direct
 load salt/conductivity setting and Buffer A/B recipe selection now agree in
 the JMP controls and the solver, including after changing modes. SALT_M uses
@@ -72,7 +82,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25f_package.marker beside the launcher and Python files. Run the saved
+tdm_r25g_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)
@@ -111,14 +121,11 @@ you want and rerun the normal simulation or least-squares fit with the saved
 process recipes. Earlier saved model choices remain selected when the JMP
 window opens.
 
-Each normal or least-squares run can specify its load amount as capacity
-[g/L resin], load volume [CV], or load volume [mL]. Select the basis in that
-run's Process Setup and enter its value. For mL loading, load CV is the entered
-volume divided by the shared column volume; changing the column volume updates
-CV and loaded capacity while keeping the entered mL fixed. The batch and LSQ
-run tables store independent values. Existing CV and capacity recipes keep
-their original meaning. Older saved run tables gain the new mL column when
-opened, without changing their selected load basis.
+The JMP Process Setup takes load capacity [g/L resin] and feed concentration
+[mg/mL] for each run. It calculates CV = capacity / feed concentration and
+mL = CV × column volume. Older saved CV and mL recipes remain readable;
+opening one in JMP converts its current load amount to capacity. The batch
+and LSQ run tables still store independent values.
 The LSQ run summary calculates mL-based CV from the current column volume,
 including runs that have not been opened since the column volume changed.
 Each normal and independent LSQ run keeps its own load, wash, elution and

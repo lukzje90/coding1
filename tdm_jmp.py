@@ -576,7 +576,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'Column(dtRuns, "Run_Name")[currentRun] = runNameBox << Get Text;',
         'Column(dtRuns, "Load_Flow_mL_min")[currentRun] = loadFlow << Get;',
         'Column(dtRuns, "Feed_Concentration_mg_mL")[currentRun] = feedConcentration << Get;',
-        'Column(dtRuns, "Load_Amount_Basis")[currentRun] = LoadBasisToken(loadAmountBasis);',
+        'Column(dtRuns, "Load_Amount_Basis")[currentRun] = "CAPACITY";',
         'Column(dtRuns, "Load_CV")[currentRun] = loadCV << Get;',
         'Column(dtRuns, "Load_Volume_mL")[currentRun] = loadVolumeML << Get;',
         'Column(dtRuns, "Load_Density_mg_mL_resin")[currentRun] = loadDensity << Get;',
@@ -604,10 +604,12 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'runNameBox << Set Text(Char(Column(dtRuns, "Run_Name")[currentRun]));',
         'loadFlow << Set(Column(dtRuns, "Load_Flow_mL_min")[currentRun]);',
         'feedConcentration << Set(Column(dtRuns, "Feed_Concentration_mg_mL")[currentRun]);',
-        'SetLoadBasisCombo(loadAmountBasis, Char(Column(dtRuns, "Load_Amount_Basis")[currentRun]));',
         'loadCV << Set(Column(dtRuns, "Load_CV")[currentRun]);',
         'loadVolumeML << Set(Column(dtRuns, "Load_Volume_mL")[currentRun]);',
         'loadDensity << Set(Column(dtRuns, "Load_Density_mg_mL_resin")[currentRun]);',
+        'loadBasis = Uppercase(Char(Column(dtRuns, "Load_Amount_Basis")[currentRun]));',
+        'If(loadBasis == "LOAD_VOLUME" | loadBasis == "LOAD VOLUME [CV]", loadDensity << Set(If(Is Missing(loadCV << Get) | Is Missing(feedConcentration << Get), ., (loadCV << Get) * (feedConcentration << Get))));',
+        'If(loadBasis == "VOLUME_ML" | loadBasis == "LOAD VOLUME [ML]", loadDensity << Set(If(Is Missing(loadVolumeML << Get) | Is Missing(columnVolume << Get) | (columnVolume << Get) <= 0 | Is Missing(feedConcentration << Get), ., (loadVolumeML << Get) / (columnVolume << Get) * (feedConcentration << Get))));',
         'SetModeCombo(loadMode, Char(Column(dtRuns, "Load_Mode")[currentRun]));',
         'loadStartB << Set(Column(dtRuns, "Load_Start_Percent_B")[currentRun]);',
         'loadEndB << Set(Column(dtRuns, "Load_End_Percent_B")[currentRun]);',
@@ -801,39 +803,17 @@ SetSourceCombo = Function({{box, txt}}, {{}},
 SetAllFitLocks = Function({{state}}, {{}},
     {set_all_lock_lines}
 );
-SetLoadBasisCombo = Function({{box, txt}}, {{}},
-    If(Uppercase(txt) == "VOLUME_ML" | Uppercase(txt) == "LOAD VOLUME [ML]", box << Set(3),
-       Uppercase(txt) == "LOAD_VOLUME" | Uppercase(txt) == "LOAD VOLUME [CV]", box << Set(2), box << Set(1));
-);
-LoadBasisToken = Function({{box}}, {{label}},
-    label = Uppercase(Char(box << Get Selected));
-    If(label == "CAPACITY [G/L RESIN]", "CAPACITY", label == "LOAD VOLUME [ML]", "VOLUME_ML", "LOAD_VOLUME");
-);
-SyncLoadAmount = Function({{}}, {{basis, concentration, capacity, cv, volume, columnVol}},
+SyncLoadAmount = Function({{}}, {{concentration, capacity, cv, volume, columnVol}},
     If(isLoading, Return());
-    basis = Uppercase(Char(loadAmountBasis << Get Selected));
     concentration = feedConcentration << Get;
+    capacity = loadDensity << Get;
     columnVol = columnVolume << Get;
-    If(basis == "CAPACITY [G/L RESIN]",
-        capacity = loadDensity << Get;
-        If(!Is Missing(capacity) & !Is Missing(concentration) & concentration > 0,
-            isLoading = 1; loadCV << Set(capacity / concentration); isLoading = 0
-        ),
-        If(basis == "LOAD VOLUME [ML]",
-            volume = loadVolumeML << Get;
-            If(!Is Missing(volume) & !Is Missing(columnVol) & columnVol > 0,
-                isLoading = 1; loadCV << Set(volume / columnVol); isLoading = 0
-            )
-        )
-    );
-    cv = loadCV << Get;
-    If(basis != "LOAD VOLUME [ML]" & !Is Missing(cv) & !Is Missing(columnVol),
-        isLoading = 1; loadVolumeML << Set(cv * columnVol); isLoading = 0
-    );
-    If(basis != "CAPACITY [G/L RESIN]" & !Is Missing(cv) & !Is Missing(concentration) & concentration > 0,
-        isLoading = 1; loadDensity << Set(cv * concentration); isLoading = 0
-    );
-    loadVolumeSummary << Set Text("Capacity: " || Char(loadDensity << Get) || " g/L resin; required feed volume: " || Char(loadVolumeML << Get) || " mL (" || Char(loadCV << Get) || " CV)");
+    cv = If(Is Missing(capacity) | Is Missing(concentration) | concentration <= 0, ., capacity / concentration);
+    volume = If(Is Missing(cv) | Is Missing(columnVol) | columnVol <= 0, ., cv * columnVol);
+    isLoading = 1;
+    loadCV << Set(cv);
+    loadVolumeML << Set(volume);
+    isLoading = 0;
     SaveCurrentRun(); UpdateUI();
 );
 RunNumberFromLabel = Function({{label}}, {{n}},
@@ -900,7 +880,7 @@ SaveCurrentRun = Function({{}}, {{}},
     UpdateLSQRunSummary();
 );
 
-LoadRun = Function({{n}}, {{}},
+LoadRun = Function({{n}}, {{loadBasis}},
     If(isLSQSetup & n > {MAX_LSQ_PROFILES}, n = 1);
     isLoading = 1; currentRun = n;
     {''.join(load_run_lines)}
@@ -1167,7 +1147,6 @@ ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r,
 
 UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLangmuir, isWang, isHIC, plwCount, elutionCount, stepMode, stepControl, startPct, endPct, startSalt, endSalt, activeStart, activeEnd, batchPHSpan, fitPHSpan, reqText, lsqUsesComposition, lsqRefCount, loadSaltValue, loadSourceLabel, stationaryFraction, nominalCapacity, targetDose, speciesName}},
     modelLabel = Char(modelBox << Get Selected);
-    loadVolumeSummary << Set Text("Capacity: " || Char(loadDensity << Get) || " g/L resin; required feed volume: " || Char(loadVolumeML << Get) || " mL (" || Char(loadCV << Get) || " CV)");
     SyncLangmuirDerived();
     impurityCount = Num(impurityCountBox << Get Selected); If(Is Missing(impurityCount), impurityCount = 0);
     isTDM = Contains(modelLabel, "TDM") > 0; isEDM = Contains(modelLabel, "EDM") > 0;
@@ -1212,10 +1191,10 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
         " M (" || Char(bufferASaltMode << Get Selected) || "); Buffer B " ||
         Char(ResolvedBufferSalt(bufferBCond, bufferBSalt, bufferBSaltMode)) || " M (" ||
         Char(bufferBSaltMode << Get Selected) || "); load start " || Char(loadSaltValue) || " M.");
-    loadChemControlRow << Visibility("Visible");
+    loadChemControlRow << Visibility("Collapse");
     equilibrationDirectPanel << Visibility(If(Uppercase(Char(equilibrationSource << Get Selected)) == "DIRECT", "Visible", "Collapse"));
-    loadChemPanel << Visibility(If((isCPA | isLangmuir | isWang) & Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT", "Visible", "Collapse"));
-    loadPH << Visibility(If(isCPA | isWang, "Visible", "Collapse")); loadPHLabel << Visibility(If(isCPA | isWang, "Visible", "Collapse"));
+    loadChemPanel << Visibility("Visible");
+    loadPH << Visibility("Visible"); loadPHLabel << Visibility("Visible");
     loadCond << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse")); loadCondLabel << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse"));
     tdmPanel << Visibility(If(isTDM, "Visible", "Collapse")); edmPanel << Visibility(If(isEDM, "Visible", "Collapse"));
     cpaSystemPanel << Visibility(If(isCPA & !isHIC, "Visible", "Collapse"));
@@ -1401,27 +1380,26 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                         {_trow("Run name", "runNameBox", "")},
         {_nrow("Load flow [mL/min]", "loadFlow", None, 290, "If(!isLoading, SaveCurrentRun(); UpdateUI())")},
                         {_nrow("Feed concentration [mg/mL]", "feedConcentration", None, 290, "If(!isLoading, SyncLoadAmount())")},
-                        H List Box(Text Box("Load amount specified by", << Set Width(290)), loadAmountBasis = Combo Box({{"Capacity [g/L resin]", "Load volume [CV]", "Load volume [mL]"}}, << Set Width(180), << Set Function(Function({{this}}, If(!isLoading, SyncLoadAmount()))))),
                         {_nrow("Load capacity [g/L resin]", "loadDensity", 10.0, 290, "If(!isLoading, SyncLoadAmount())")},
-                        {_nrow("Required load volume [CV]", "loadCV", 10.0, 290, "If(!isLoading, SyncLoadAmount())")},
-                        {_nrow("Required load volume [mL]", "loadVolumeML", None, 290, "If(!isLoading, SyncLoadAmount())")},
-                        loadVolumeSummary = Text Box("Capacity and total feed volume are calculated from the selected load basis.", << Set Wrap(680)),
+                        H List Box(Text Box("Calculated load volume [CV]", << Set Width(290)), loadCV = Number Edit Box(., 9, << Set Width(92), << Enable(0))),
+                        H List Box(Text Box("Calculated load volume [mL]", << Set Width(290)), loadVolumeML = Number Edit Box(., 9, << Set Width(92), << Enable(0))),
                         loadSaturationStatus = Text Box("", << Set Wrap(680)),
                         H List Box(Text Box("Load mode", << Set Width(290)), loadMode = Combo Box({{"SET_POINT", "LINEAR", "STEP"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         H List Box(Text Box("Load start / set-point Buffer B [%]", << Set Width(290)), loadStartB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         H List Box(Text Box("Load end Buffer B [%]", << Set Width(290)), loadEndB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         loadChemControlRow = H List Box(Text Box("Load chemistry control", << Set Width(290)), loadChemControl = Combo Box({{"BUFFER_B_PERCENT", "ENDPOINT_CHEMISTRY"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "ENDPOINT_CHEMISTRY", loadMaterialMode << Set(2), loadMaterialMode << Set(1)); SaveCurrentRun(); UpdateUI()))))),
-                        H List Box(Text Box("Load material chemistry", << Set Width(290)), loadMaterialMode = Combo Box({{"BUFFER_RECIPE", "EXPLICIT"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "BUFFER_RECIPE", loadChemControl << Set(1), loadChemControl << Set(2)); SaveCurrentRun(); UpdateUI()))))),
-                        Text Box("Choose capacity, CV or mL for load amount. EXPLICIT uses the load chemistry entered below.", << Set Wrap(700)),
+                        H List Box(Text Box("Load chemistry mode", << Set Width(290)), loadMaterialMode = Combo Box({{"BUFFER_RECIPE", "EXPLICIT"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "BUFFER_RECIPE", loadChemControl << Set(1), loadChemControl << Set(2)); If(Uppercase(Char(this << Get Selected)) == "EXPLICIT", loadSource << Set(1)); SaveCurrentRun(); UpdateUI()))))),
+                        Text Box("Load volume is calculated from capacity, feed concentration and column volume.", << Set Wrap(700)),
                         {_nrow("Number of time steps", "timeStepsBox", 700)},
                         {_nrow("Number of axial positions", "axialPositionsBox", 20)},
                         Text Box("Time steps and axial positions control this run's resolution.", << Set Wrap(700)),
-                        loadChemPanel = V List Box(
+                        loadChemPanel = Outline Box("Load material pH and salt", V List Box(
+                            Text Box("Editing pH, conductivity or salt selects explicit load chemistry.", << Set Wrap(700)),
                             H List Box(Text Box("Load chemistry source", << Set Width(220)), loadSource = Combo Box({{"DIRECT", "BUFFER_A", "BUFFER_B"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); ApplyChemSource(loadSource, loadPH, loadCond); SaveCurrentRun(); UpdateUI()))))),
-                            loadPHRow = H List Box(loadPHLabel = Text Box("Process / load pH", << Set Width(220)), loadPH = Number Edit Box(6, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI()))))),
+                            loadPHRow = H List Box(loadPHLabel = Text Box("Load material pH", << Set Width(220)), loadPH = Number Edit Box(6, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI()))))),
                             {_salt_input_controls("load")},
-                            loadCondRow = H List Box(loadCondLabel = Text Box("Load conductivity [mS/cm]", << Set Width(220)), loadCond = Number Edit Box(5, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI())))))
-                        ),
+                            loadCondRow = H List Box(loadCondLabel = Text Box("Load material conductivity [mS/cm]", << Set Width(220)), loadCond = Number Edit Box(5, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI())))))
+                        )),
                         Outline Box("Initial column equilibration (before load)", V List Box(
                             Text Box("Initial column chemistry before load; this does not add CV.", << Set Wrap(700)),
                             H List Box(Text Box("Initial equilibration source", << Set Width(290)), equilibrationSource = Combo Box({{"MATCH_LOAD", "BUFFER_A", "BUFFER_B", "DIRECT"}}, << Set(1), << Set Width(175), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),

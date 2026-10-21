@@ -116,7 +116,7 @@ def _check_generated_contract(config: dict) -> dict:
         raise AssertionError("An LSQ association field is not saved with its profile")
     if not re.search(r"SaveCurrentRun\(\);\s*UpdateLSQRunSummary\(\);\s*SendSharedModel\(\);", jsl):
         raise AssertionError("Run action must save the current profile before sending shared model inputs")
-    if "saltFactorStatus << Set Text" not in jsl or "In CONDUCTIVITY mode, a 0 mS/cm endpoint stays at 0 M" not in jsl:
+    if "saltFactorStatus << Set Text" not in jsl or "This factor converts conductivity inputs to salt molarity" not in jsl:
         raise AssertionError("The factor's active modes and resolved salt must be visible in JMP")
     if "loadSaturationStatus << Set Text" not in jsl or "Above saturation: protein can break through" not in jsl:
         raise AssertionError("The load must show stationary-phase saturation and overload in JMP")
