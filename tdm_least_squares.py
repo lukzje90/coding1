@@ -2097,8 +2097,12 @@ def run_global_least_squares_refinement(
         for profile in normalized_profiles:
             profile["config"]["least_squares"]["unlocked_paths"] = list(unlocked_paths)
         seed["least_squares"]["unlocked_paths"] = list(unlocked_paths)
+    # A later selected run may have a pH programme even when the first run is
+    # isocratic. Use the recipe with the broadest active parameter contract to
+    # build fit specs; all profiles already share the same mechanistic values.
+    spec_config = max(normalized_profiles, key=lambda p: len(required_parameter_paths(p["config"])))["config"]
     specs = fit_parameter_specs(
-        seed,
+        spec_config,
         fit_conductivity=any(p["fit_conductivity"] for p in normalized_profiles),
         unlocked_paths=unlocked_paths,
         candidate_paths=candidate_paths,

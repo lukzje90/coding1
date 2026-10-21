@@ -105,6 +105,7 @@ from tdm_minimal_io import (
     normalize_config,
     canonical_fit_parameter_path,
     required_parameter_values,
+    required_parameter_paths,
     sanitize_config_for_selected_model,
     save_batch_rows,
     save_lsq_rows,
@@ -760,7 +761,8 @@ def main() -> int:
                 return 0
             unlocked_paths = _lsq_unlocked_paths_from_jmp()
             from tdm_least_squares import FIT_HISTORY_CSV, fit_parameter_specs
-            fitted_paths = fit_parameter_specs(profiles[0]["config"], unlocked_paths=unlocked_paths,
+            spec_config = max(profiles, key=lambda p: len(required_parameter_paths(p["config"])))
+            fitted_paths = fit_parameter_specs(spec_config["config"], unlocked_paths=unlocked_paths,
                                                fit_conductivity=any(p["fit_conductivity"] for p in profiles))
             _write_status(
                 f"Least-squares refinement running: {len(profiles)} profile(s), "

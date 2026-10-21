@@ -1,4 +1,13 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25d)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25e)
+
+TDM + CPA MULTI-RUN pH REFINEMENT (R25e)
+Least-squares fitting now builds its unlocked parameter list from the selected
+run whose recipe requires the broadest set of model parameters. If run 1 has
+constant pH but a later selected run changes pH, the pH-dependent CPA
+parameters shown in JMP are included in optimization and applied to the
+shared fitted model. Each run still uses its own process recipe and reference
+chromatogram. A two-run synthetic test verifies that the later run's CPA pH
+coefficient is fitted and written to the JMP parameter update file.
 
 FITTED-MODEL HANDOFF AND LSQ EVALUATION CAP (R25d)
 After an accepted least-squares fit, a normal Run now recovers the fitted
@@ -57,7 +66,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25d_package.marker beside the launcher and Python files. Run the saved
+tdm_r25e_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

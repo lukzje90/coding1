@@ -351,9 +351,9 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Current Window() << Get Path', launcher)
         self.assertIn('Current Window() << Get File Name', launcher)
         self.assertIn('Get Default Directory()', launcher)
-        self.assertIn('packageMarker = "tdm_r25d_package.marker"', launcher)
+        self.assertIn('packageMarker = "tdm_r25e_package.marker"', launcher)
         self.assertIn('File Exists( candidateDir || packageMarker )', launcher)
-        self.assertTrue((ROOT / "tdm_r25d_package.marker").is_file())
+        self.assertTrue((ROOT / "tdm_r25e_package.marker").is_file())
         self.assertLess(launcher.index('Get Script Name()'),
                         launcher.index('Current Window() << Get Path'))
         self.assertLess(launcher.index('Current Window() << Get File Name'),

@@ -4,7 +4,7 @@ Names Default To Here( 1 );
 // JMP's default directory may differ from the folder containing this script.
 launcherName = "00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl";
 setupName = "open_tdm_setup.py";
-packageMarker = "tdm_r25d_package.marker";
+packageMarker = "tdm_r25e_package.marker";
 
 // JMP can report either a full script path, an editor-window path, or only a
 // working directory. Accept a folder only when this package marker and the
@@ -65,7 +65,7 @@ If( !File Exists( dependencyMarker ),
     Save Text File( dependencyMarker, "checked" );
 );
 
-// Allow the normal predictor to cap native numerical-library CPU threads.
+// Keep native numerical-library threading deterministic for solver reproducibility.
 nativeThreadMarker = "$USER_APPDATA/tdm22_classic_direct_dependencies_r24q_checked.txt";
 If( !File Exists( nativeThreadMarker ),
     Python Install Packages( "threadpoolctl" );

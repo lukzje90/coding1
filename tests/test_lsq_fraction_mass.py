@@ -11,12 +11,78 @@ import numpy as np
 import tdm_bridge
 import tdm_least_squares as lsq
 from tdm_jmp import build_jsl, _validate_jsl
-from tdm_minimal_io import MODEL_EDM_LANGMUIR, MODEL_TDM_CPA, default_batch_row, load_lsq_mass_rows
+from tdm_minimal_io import MODEL_EDM_LANGMUIR, MODEL_TDM_CPA, default_batch_row, load_lsq_mass_rows, normalize_config
 from tdm_minimal_model import simulate
 from verify_model import make_config
 
 
 class FractionMassTests(unittest.TestCase):
+    def test_tdm_cpa_four_species_uv_and_mass_fit_reproduces_saved_trace(self):
+        truth = normalize_config(make_config(MODEL_TDM_CPA, 3, multistep=False))
+        truth["numerics"].update(time_steps=50, axial_positions=6)
+        truth["process"]["load_CV"] = 3.0
+        truth["process"]["plw_count"] = 0
+        truth["process"]["elution_steps"][0]["CV"] = 10.0
+        truth["least_squares"]["objective"] = "NORMALIZED_MSE"
+        measured = simulate(truth)["trace"]
+        initial = copy.deepcopy(truth)
+        initial["components"][3]["D_ax_mm2_s"] *= 5.0
+        initial["conversion"]["uv_to_protein_mAU_L_g"] *= 0.65
+        cv = np.asarray(measured["CV"])
+        concentrations = np.asarray(measured["component_g_L"])
+        names = [row["name"] for row in truth["components"][:4]]
+        intervals = ((.35, .45), (.45, .55), (.55, .65), (.65, .75),
+                     (.75, .85), (3.65, 3.75), (3.85, 3.95))
+        fractions = []
+        for number, (start, end) in enumerate(intervals, start=1):
+            values = lsq._predicted_mass_percent_at_cv(
+                cv, concentrations, (start + end) / 2, 4)
+            fractions.append({"fraction_index": number, "start": start, "end": end,
+                              "x_unit": "CV", "mass_percent": dict(zip(names, map(float, values)))})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV 280 [mAU]", "Conductivity [mS/cm]"])
+                writer.writerows(zip(cv, measured["uv_mAU"], measured["conductivity_mS_cm"]))
+            output_names = ("FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
+                            "FIT_CONDUCTIVITY_CSV", "FIT_REPORT_HTML", "FIT_CONFIG_JSON",
+                            "FIT_APPLY_JSL", "FIT_SETTINGS_JSON", "FIT_HISTORY_CSV",
+                            "FIT_IMPROVED_CSV", "FIT_IMPROVED_TXT", "CONFIG_PATH")
+            with patch.multiple(lsq, **{name: root / getattr(lsq, name).name
+                                        for name in output_names}):
+                fit = lsq.run_global_least_squares_refinement(
+                    [{"config": initial, "chromatogram_csv": source,
+                      "composition_references": fractions, "fit_conductivity": True}],
+                    mode=lsq.MODE_CHROMATOGRAM_AND_COMPOSITION,
+                    unlocked_paths=["components[3].D_ax_mm2_s",
+                                    "conversion.uv_to_protein_mAU_L_g"],
+                    max_nfev=20, max_model_evaluations=60)
+                with lsq.FIT_TRACE_CSV.open(newline="", encoding="utf-8") as stream:
+                    uv_rows = list(csv.DictReader(stream))
+                with lsq.FIT_COMPOSITION_CSV.open(newline="", encoding="utf-8") as stream:
+                    mass_rows = list(csv.DictReader(stream))
+                with lsq.FIT_CONDUCTIVITY_CSV.open(newline="", encoding="utf-8") as stream:
+                    conductivity_rows = list(csv.DictReader(stream))
+            fitted = fit["fitted_config"]
+            reproduced = simulate(fitted)["trace"]
+            self.assertTrue(fit["accepted"])
+            self.assertLess(fit["final_objective"], fit["initial_objective"] * 1e-5)
+            self.assertAlmostEqual(fitted["components"][3]["D_ax_mm2_s"],
+                                   truth["components"][3]["D_ax_mm2_s"], delta=0.01)
+            self.assertAlmostEqual(fitted["conversion"]["uv_to_protein_mAU_L_g"],
+                                   truth["conversion"]["uv_to_protein_mAU_L_g"], delta=0.01)
+            np.testing.assert_allclose(
+                [float(row["Predicted_Detector_Signal"]) for row in uv_rows],
+                np.interp([float(row["CV"]) for row in uv_rows],
+                          reproduced["CV"], reproduced["uv_mAU"]), rtol=1e-9, atol=1e-9)
+            self.assertEqual(len(mass_rows), 28)
+            self.assertEqual(len(conductivity_rows), len(cv))
+            self.assertLess(fit["profile_metrics"][0]["conductivity_rmse_mS_cm"], 1e-8)
+            self.assertLess(max(abs(float(row["Residual_mass_percent"]))
+                                for row in mass_rows), 0.02)
+
     def test_tdm_cpa_four_species_fraction_profile_refines_wrong_parameter(self):
         truth = make_config(MODEL_TDM_CPA, 3, multistep=False)
         truth["numerics"].update(time_steps=60, axial_positions=6)
