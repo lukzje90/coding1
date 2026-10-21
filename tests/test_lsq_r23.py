@@ -351,9 +351,9 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Current Window() << Get Path', launcher)
         self.assertIn('Current Window() << Get File Name', launcher)
         self.assertIn('Get Default Directory()', launcher)
-        self.assertIn('packageMarker = "tdm_r25e_package.marker"', launcher)
+        self.assertIn('packageMarker = "tdm_r25f_package.marker"', launcher)
         self.assertIn('File Exists( candidateDir || packageMarker )', launcher)
-        self.assertTrue((ROOT / "tdm_r25e_package.marker").is_file())
+        self.assertTrue((ROOT / "tdm_r25f_package.marker").is_file())
         self.assertLess(launcher.index('Get Script Name()'),
                         launcher.index('Current Window() << Get Path'))
         self.assertLess(launcher.index('Current Window() << Get File Name'),
@@ -376,13 +376,14 @@ class RefinementTests(unittest.TestCase):
                          "lsqSheet", "lsqXColumn", "lsqSignalColumn", "lsqXUnit", "lsqXOrigin",
                          "Number of runs to fit [1–10]", "Fit settings", "SaveAllLSQReferences"]:
             self.assertIn(expected, jsl)
-        self.assertLess(jsl.index("Number of runs to fit [1–10]"), jsl.index("Run section 1"))
-        self.assertLess(jsl.index("Run section 10"), jsl.index('Outline Box("Fit settings"'))
+        self.assertLess(jsl.index("Number of runs to fit [1–10]"), jsl.index("LSQ run 1"))
+        self.assertLess(jsl.index("LSQ run 10"), jsl.index('Outline Box("Fit settings"'))
         self.assertIn('Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(LSQPathText(slot)))', jsl)
         self.assertIn('Column(dtLSQRuns, "LSQ_X_Origin")[r] = LSQOriginSelected(slot)', jsl)
         self.assertIn('Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot]', jsl)
         self.assertIn('Safety cap: model evaluations', jsl)
-        self.assertIn('Refinement running. The JMP window will respond', jsl)
+        self.assertIn('Refinement running. Progress:', jsl)
+        self.assertNotIn('Set Font Style("Italic")', jsl)
         self.assertIn('condDeadVolumeFitLock', jsl)
         self.assertNotIn('LoadLSQReference(1);', jsl)
         self.assertNotIn('lsqRunBoxes[', jsl)

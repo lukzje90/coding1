@@ -22,7 +22,7 @@ class TenRunMassTests(unittest.TestCase):
     def test_ten_slots_and_mass_rows_remain_keyed_to_run_number(self):
         jsl = build_jsl()
         _validate_jsl(jsl)
-        self.assertEqual(jsl.count('Row = Outline Box("Run section '), 10)
+        self.assertEqual(jsl.count('Row = Outline Box("LSQ run '), 10)
         self.assertEqual(jsl.count('Text Box("Use this run\'s fraction mass%"'), 10)
         self.assertIn('lsqMassEnabled10 = Combo Box', jsl)
         self.assertIn('SaveLSQMassReference(lsqMassEditorRun)', jsl)

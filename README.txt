@@ -1,4 +1,10 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25e)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25f)
+
+CLEARER JMP INTERFACE (R25f)
+The JMP window now uses shorter labels and essential setup guidance. Repeated
+explanatory text was removed, the required-parameters list starts collapsed,
+and no UI text uses italic styling. Model calculations and saved inputs are
+unchanged.
 
 TDM + CPA MULTI-RUN pH REFINEMENT (R25e)
 Least-squares fitting now builds its unlocked parameter list from the selected
@@ -66,7 +72,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25e_package.marker beside the launcher and Python files. Run the saved
+tdm_r25f_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

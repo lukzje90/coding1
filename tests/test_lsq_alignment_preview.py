@@ -289,7 +289,7 @@ class AlignmentPreviewTests(unittest.TestCase):
         self.assertIn('SendAndRun("PREVIEW_LSQ_ALIGNMENT")', open_preview)
         self.assertNotIn('Web(lsqPreviewReport)', open_preview)
         self.assertIn('If(actionText == "FIT_LSQ" | actionText == "PREVIEW_LSQ_ALIGNMENT" | actionText == "ATTACH_LSQ_CSV", If(!SaveAllLSQReferences(), Return()));', jsl)
-        self.assertEqual(jsl.count('Text Box("Model run for UV comparison"'), 10)
+        self.assertEqual(jsl.count('Text Box("Model run"'), 10)
         self.assertIn('Column(dtLSQRuns, "LSQ_Model_Source")[r] = If(modelChoice', jsl)
         self.assertIn('Column(dtLSQRuns, "LSQ_Model_Run_Number")[r] = If(modelChoice', jsl)
         self.assertIn('modelChoice = LSQModelRunSelected(slot);', jsl)

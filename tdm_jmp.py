@@ -122,7 +122,7 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
               fit_path=f"components[{i-1}].uv_response_factor_mAU_L_g", fit_lock_vars=fit_lock_vars,
               default_unlocked_paths=default_unlocked_paths)
         if i > 1 else
-        'Text Box("Target protein uses the shared UV response factor in Model Parameters.", << Set Wrap(620), << Set Font Style("Italic"))'
+        'Text Box("Uses the shared target UV response factor.", << Set Wrap(620))'
     )
     body = f'''{p}Panel = Outline Box({_q(title)},
         V List Box(
@@ -139,11 +139,7 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
             {p}Langmuir = V List Box(
                 {_nrow("Saturation capacity qmax,i [g/L stationary phase]", f"{p}Qmax", qmax, 360, "If(!isLoading, SyncLangmuirDerived(); UpdateUI())", fit_path=f"components[{i-1}].qmax_g_L", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {_nrow("Competitive Langmuir b_i [L/g]", f"{p}B", b_value, 290, "If(!isLoading, SyncLangmuirDerived(); UpdateUI())", fit_path=f"components[{i-1}].b_L_g", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
-                Text Box("Salt-modified Langmuir affinity: b_eff,i = b_i × exp(k_s,i × salt concentration). Positive k_s means stronger binding at higher salt; estimate it for this protein, resin and salt system.", << Set Wrap(680), << Set Font Style("Italic")),
-                Text Box("After Run selected, the status and result show the b and k_s received plus effective b at each stage. A STEP to very low salt can release protein at nearly the same CV despite different affinities; a LINEAR salt ramp makes retention changes easier to distinguish.", << Set Wrap(680), << Set Font Style("Italic")),
-                H List Box(Text Box("Derived Henry constant H_i = qmax,i × b_i [-]", << Set Width(360)), {p}H = Number Edit Box({_num(h_value)}, 9, << Set Width(92), << Enable(0))),
-                Text Box("The displayed H_i is the zero-salt reference. At local salt, H_eff,i = qmax,i × b_eff,i; both numerator and shared competitive denominator use their local salt-dependent affinities.", << Set Wrap(680), << Set Font Style("Italic")),
-                Text Box("qmax uses stationary-phase volume. 1 mg/mL = 1 g/L. Packed-bed capacity also includes the stationary-phase volume fraction.", << Set Wrap(520), << Set Font Style("Italic"))
+                H List Box(Text Box("Derived Henry constant H_i = qmax,i × b_i [-]", << Set Width(360)), {p}H = Number Edit Box({_num(h_value)}, 9, << Set Width(92), << Enable(0)))
             ),
             {p}Wang = V List Box(
                 {_nrow("Wang K′kin,i [s]", f"{p}WangKkin", row.get("wang_K_kin_s"), fit_path=f"components[{i-1}].wang_K_kin_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
@@ -153,8 +149,7 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
                 {_nrow("Wang β0,i [-]", f"{p}WangBeta0", row.get("wang_beta0"), fit_path=f"components[{i-1}].wang_beta0", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {_nrow("Wang β1,i [M⁻¹]", f"{p}WangBeta1", row.get("wang_beta1_per_M"), fit_path=f"components[{i-1}].wang_beta1_per_M", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {_nrow("Wang β2,i [L/g]", f"{p}WangBeta2", row.get("wang_beta2_L_g"), fit_path=f"components[{i-1}].wang_beta2_L_g", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
-                {_nrow("Wang β3,i [pH⁻¹]", f"{p}WangBeta3", row.get("wang_beta3_per_pH"), fit_path=f"components[{i-1}].wang_beta3_per_pH", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
-                Text Box("Modified Wang kinetic Eq. (4): local pore protein, salt and pH enter β2, β1 and β3. Starting values are illustrative.", << Set Wrap(680))
+                {_nrow("Wang β3,i [pH⁻¹]", f"{p}WangBeta3", row.get("wang_beta3_per_pH"), fit_path=f"components[{i-1}].wang_beta3_per_pH", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}
             ),
             {p}CPA = V List Box(
                 {_nrow("Protein diameter [nm] (a_i = diameter/2)", f"{p}Diameter", row.get("diameter_nm"), fit_path=f"components[{i-1}].diameter_nm", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
@@ -246,10 +241,9 @@ def _buffer_panel(prefix: str, title: str) -> str:
         H List Box(Text Box("pH", << Set Width(220)), {prefix}PH = Number Edit Box(6, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         {_salt_input_controls(prefix)},
         H List Box(Text Box("Conductivity [mS/cm]", << Set Width(220)), {prefix}Cond = Number Edit Box(5, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-        Text Box("CONDUCTIVITY uses conductivity × the calibrated conversion factor. SALT_M uses the entered salt molarity directly for binding; conductivity is then optional and used for the overlay. If blank, conductivity is estimated using the factor. The factor and HIC sensitivity depend on the salt and solution conditions.", << Set Wrap(690), << Set Font Style("Italic")),
         {prefix}IonicSourceRow = H List Box(Text Box("Ionic strength source", << Set Width(220)), {prefix}IonicSource = Combo Box({{"SALT_PROXY", "ION_COMPOSITION"}}, << Set Width(170), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         {prefix}IonSection = Outline Box("Buffer ion composition", V List Box(
-        Text Box("ION_COMPOSITION uses I = 0.5 Σ cᵢzᵢ² for either CPA ion-exchange model. Enter individual ion molarities, including counterions. For 1 M ammonium sulfate: NH4+ = 2 M, z = +1; SO4-- = 1 M, z = -2; I = 3 M. HIC uses 1 M salt, not 3 M ionic strength. SALT_PROXY assumes I = salt, suitable only as a monovalent approximation.", << Set Wrap(680)),
+        Text Box("For CPA ion exchange, enter ion concentrations and charges to calculate ionic strength. SALT_PROXY uses salt molarity as an approximation.", << Set Wrap(680)),
             {', '.join(ion_rows)}
         )),
         {prefix}Derived = Text Box("", << Set Wrap(680))
@@ -265,14 +259,10 @@ def _step_panel(prefix: str, i: int, title: str) -> str:
         {v}StartBRow = H List Box(Text Box("Start / set-point Buffer B [%]", << Set Width(220)), {v}StartB = Number Edit Box(0, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         {v}EndBRow = H List Box(Text Box("End Buffer B [%]", << Set Width(220)), {v}EndB = Number Edit Box(100, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         {v}BlendDerived = Text Box("", << Set Wrap(680)),
-        Text Box("Pump salt is the blend of BOTH buffers: (1 − %B/100) × Buffer A salt + (%B/100) × Buffer B salt. SET_POINT uses Start, STEP uses End, and LINEAR ramps between them. The preview below shows the salt and target affinity actually commanded for this step; the column responds after mixer and transport delay.", << Set Wrap(680), << Set Font Style("Italic")),
         {v}ChemPanel = V List Box(
             H List Box(Text Box("Chemistry control", << Set Width(220)), {v}ChemControl = Combo Box({{"BUFFER_B_PERCENT", "ENDPOINT_CHEMISTRY"}}, << Set Width(170), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-            {v}PercentPanel = V List Box(
-                Text Box("Buffer A = 0% B and Buffer B = 100% B. The %B values above resolve pH, salt concentration and ionic strength from the current Buffer A/B definitions. pH interpolation is a process approximation, not a buffer-speciation calculation.", << Set Wrap(680))
-            ),
+            {v}PercentPanel = V List Box(Spacer Box(Size(1, 1))),
             {v}EndpointPanel = Outline Box("Advanced explicit endpoint chemistry", V List Box(
-                Text Box("Use this only when the process cannot be represented by Buffer A/B %. When selected, the %B rows above remain stored but the explicit endpoint chemistry below is used for this step.", << Set Wrap(680), << Set Font Style("Italic")),
                 {v}StartChem = Outline Box("Start chemistry", V List Box(
                     H List Box(Text Box("Source", << Set Width(220)), {v}StartSource = Combo Box({{"DIRECT", "BUFFER_A", "BUFFER_B"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, ApplyChemSource({v}StartSource, {v}StartPH, {v}StartCond); SaveCurrentRun(); UpdateUI()))))),
                     H List Box({v}StartPHLabel = Text Box("Start pH", << Set Width(220)), {v}StartPH = Number Edit Box(6, 8, << Set Width(92))),
@@ -499,10 +489,10 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     initial_runs.extend(run for run in range(1, MAX_LSQ_PROFILES + 1) if run not in initial_runs)
     for slot in range(1, MAX_LSQ_PROFILES + 1):
         selected_run = initial_runs[slot - 1]
-        lsq_run_sections.append(f'''lsqRunSlot{slot}Row = Outline Box("Run section {slot}", V List Box(
+        lsq_run_sections.append(f'''lsqRunSlot{slot}Row = Outline Box("LSQ run {slot}", V List Box(
             H List Box(Text Box("Process recipe", << Set Width(180)), lsqRunSlot{slot} = Combo Box({run_choices}, << Set({selected_run}), << Set Width(140), << Set Function(Function({{this}}, If(!isLoading, ChangeLSQSlot({slot}, RunNumberFromLabel(this << Get Selected))))))),
             lsqRunSummary{slot} = Text Box("", << Set Wrap(720)),
-            H List Box(Text Box("Model run for UV comparison", << Set Width(180)), lsqModelRun{slot} = Combo Box({model_run_choices}, << Set(1), << Set Width(210), << Set Function(Function({{this}}, If(!isLoading, UpdateUI(); UpdateLSQRunSummary()))))),
+            H List Box(Text Box("Model run", << Set Width(180)), lsqModelRun{slot} = Combo Box({model_run_choices}, << Set(1), << Set Width(210), << Set Function(Function({{this}}, If(!isLoading, UpdateUI(); UpdateLSQRunSummary()))))),
             H List Box(Text Box("Excel / CSV file", << Set Width(180)), lsqCsvPath{slot} = Text Edit Box("", << Set Width(440))),
             H List Box(Text Box("X units", << Set Width(180)), lsqXUnit{slot} = Combo Box({{"AUTO", "CV", "ML", "MIN", "S", "H", "INDEX"}}, << Set(1), << Set Width(150))),
             H List Box(Text Box("X = 0 at", << Set Width(180)), lsqXOrigin{slot} = Combo Box({{"RUN_START", "ELUTION_START"}}, << Set(1), << Set Width(170))),
@@ -1036,8 +1026,8 @@ SwitchProcessScope = Function({{useLSQ, runNum}}, {{}},
     activeRunsFile = If(isLSQSetup, lsqRunsFile, batchRunsFile);
     copiedRun = 0;
     scopeStatus << Set Text(If(isLSQSetup,
-        "Editing INDEPENDENT LSQ process setup (1–{MAX_LSQ_PROFILES}). Saving does not modify the normal batch.",
-        "Editing NORMAL batch process setup (1–30). LSQ setups remain unchanged."));
+        "Editing LSQ run recipes (1–{MAX_LSQ_PROFILES}).",
+        "Editing batch run recipes (1–30)."));
     LoadRun(If(isLSQSetup, Max(1, Min({MAX_LSQ_PROFILES}, runNum)), Max(1, Min({MAX_RUNS}, runNum))));
 );
 
@@ -1105,18 +1095,17 @@ UpdateLSQRunSummary = Function({{}}, {{slot, r, n, attached, massEnabled, nPLW, 
             If(slot <= n & LSQMassEnabledSelected(slot) == "On", massEnabled++);
             If(modelChoice == "Independent LSQ recipe",
                 summary = "LSQ Run " || Char(r) || " — " || LSQRunCellText(r, "Run_Name") ||
-                    ": load " || LSQRunLoadCVText(r) || " CV, " || Char(nPLW) || " wash(es), " ||
-                    Char(nElution) || " elution step(s); column " || Char(columnVolume << Get) || " mL. Model UV uses this independent LSQ recipe.",
+                    ": load " || LSQRunLoadCVText(r) || " CV, " || Char(nPLW) || " washes, " ||
+                    Char(nElution) || " elution steps; model: LSQ recipe.",
                 modelNumber = RunNumberFromLabel(modelChoice);
-                summary = "LSQ Run " || Char(r) || " measured UV vs normal batch " || modelChoice ||
-                    " — " || Char(Column(dtBatchRuns, "Run_Name")[modelNumber]) ||
-                    ". The saved normal batch recipe is re-simulated for preview and refinement."
+                summary = "LSQ Run " || Char(r) || " — " || LSQRunCellText(r, "Run_Name") ||
+                    "; model: batch " || modelChoice || " — " || Char(Column(dtBatchRuns, "Run_Name")[modelNumber])
             );
-            summary = summary || If(Is Empty(path), " No chromatogram attached.", " Chromatogram entered.");
+            summary = summary || If(Is Empty(path), "; no UV file.", "; UV file attached.");
             LSQSetRunSummary(slot, summary)
         )
     );
-    lsqProfilesStatus << Set Text(Char(n) || " run(s) selected; " || Char(attached) || " chromatogram(s) entered; " || Char(massEnabled) || " run(s) selected for fraction mass%. Each selected LSQ profile needs its own measured UV file and chosen model run.");
+    lsqProfilesStatus << Set Text("Selected: " || Char(n) || " runs, " || Char(attached) || " UV files, " || Char(massEnabled) || " mass% fits.");
 );
 
 ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r, i, mn, mx, v, c, stepMode, chemControl, loadMaterialMode, loadMode, modelChoice, initialSource}},
@@ -1237,7 +1226,7 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     tdmSaltRow << Visibility("Collapse");
     {''.join(component_vis)}
     {''.join(process_vis)}
-    speciesStatus << Set Text("Showing target protein + " || Char(impurityCount) || If(impurityCount == 1, " impurity", " impurities") || ". Only these species are sent to the solver.");
+    speciesStatus << Set Text("Target protein + " || Char(impurityCount) || If(impurityCount == 1, " impurity", " impurities"));
     reqText = "";
     If(modelLabel == {_q(MODEL_LABELS[MODEL_EDM_LANGMUIR])}, reqText = {req_edm_l});
     If(isWang, reqText = {req_wang});
@@ -1279,11 +1268,11 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     Python Send(projectDir, Python Name("tdm_project_dir"));
     Python Send(projectDir, Python Name("tdm_project_dir_posix"));
     If(actionText == "FIT_LSQ",
-        lsqStatusText << Set Text("Refinement running. The JMP window will respond when Python finishes. Progress is appended to least_squares_objective_history.csv; if that file is locked, a recovered history path is reported after the fit. Each numerical Jacobian needs additional column solves for unlocked parameters.");
+        lsqStatusText << Set Text("Refinement running. Progress: least_squares_objective_history.csv. JMP will respond when the fit finishes.");
         Wait(0.01)
     );
     If(actionText == "PREVIEW_LSQ_ALIGNMENT",
-        lsqStatusText << Set Text("Previewing measured and model UV, enabled conductivity, and entered fraction mass%. One fresh simulation runs for each chosen model run; no optimization is performed.");
+        lsqStatusText << Set Text("Building alignment preview for the selected runs.");
         Wait(0.01)
     );
     If(actionText == "CHECK_RESULT_CURRENT", Save Text File(statusFile, "CHECK_RESULT_CURRENT pending"));
@@ -1376,7 +1365,7 @@ PasteRun = Function({{}}, {{i, nm}},
     );
 );
 
-modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inputs — {RESULT_GUARD_BUILD}",
+modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
     V List Box(
         V List Box(
             H List Box(
@@ -1396,14 +1385,13 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
             Button Box("Edit LSQ process setup", SwitchProcessScope(1, lsqLoadedRuns[1]); mainTabs << Set(1)),
             Button Box("Save current process recipe", SaveCurrentRun(); copyStatus << Set Text("Saved recipe in " || If(isLSQSetup, "independent LSQ runs", "normal batch runs")))
         ),
-        scopeStatus = Text Box("Editing NORMAL batch process setup. The independent LSQ runs are kept separately.", << Set Wrap(780)),
+        scopeStatus = Text Box("Editing batch run recipes (1–30).", << Set Wrap(780)),
         mainTabs = Tab Box(
             "Process Setup",
             V Scroll Box(Size(850, 690), V List Box(
-                Text Box("This restores the original run-oriented workflow. Operating conditions are entered directly; there are no process templates. Up to 30 saved runs share the selected mechanistic parameter set.", << Set Wrap(760), << Set Font Style("Italic")),
                 bufferSection = V List Box(
-                    Text Box("Buffer A / Buffer B definitions (current run)", << Set Font Style("Bold")),
-                    Text Box("Buffer A is the 0% B endpoint and Buffer B is the 100% B endpoint. Select conductivity or direct salt molarity for each buffer. HIC binding uses local salt molarity; CPA ion exchange uses ionic strength. Every model reads the selected run's load, PLW and elution chemistry. Result receipts show the resolved inputs reaching the solver.", << Set Wrap(720)),
+                    Text Box("Buffers for this run", << Set Font Style("Bold")),
+                    Text Box("Buffer A = 0% B; Buffer B = 100% B. Choose conductivity or salt molarity as the salt input.", << Set Wrap(720)),
                     {buffer_a_panel},
                     {buffer_b_panel}
                 ),
@@ -1424,10 +1412,10 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                         H List Box(Text Box("Load end Buffer B [%]", << Set Width(290)), loadEndB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         loadChemControlRow = H List Box(Text Box("Load chemistry control", << Set Width(290)), loadChemControl = Combo Box({{"BUFFER_B_PERCENT", "ENDPOINT_CHEMISTRY"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "ENDPOINT_CHEMISTRY", loadMaterialMode << Set(2), loadMaterialMode << Set(1)); SaveCurrentRun(); UpdateUI()))))),
                         H List Box(Text Box("Load material chemistry", << Set Width(290)), loadMaterialMode = Combo Box({{"BUFFER_RECIPE", "EXPLICIT"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "BUFFER_RECIPE", loadChemControl << Set(1), loadChemControl << Set(2)); SaveCurrentRun(); UpdateUI()))))),
-                        Text Box("Select load capacity [g/L resin], load volume [CV], or load volume [mL] as the input. Capacity is numerically equal to mg/mL resin; CV = capacity ÷ feed concentration or mL ÷ column volume. The model applies the resulting total feed volume = CV × column volume. BUFFER_RECIPE resolves chemistry from the load Buffer B % program. EXPLICIT uses the load material source, pH, salt input and conductivity fields below, so feed chemistry reaches the solver even when the load %B display is retained.", << Set Wrap(700), << Set Font Style("Italic")),
+                        Text Box("Choose capacity, CV or mL for load amount. EXPLICIT uses the load chemistry entered below.", << Set Wrap(700)),
                         {_nrow("Number of time steps", "timeStepsBox", 700)},
                         {_nrow("Number of axial positions", "axialPositionsBox", 20)},
-                        Text Box("Numerical resolution is stored per run. Time steps set the reported time grid and cap the adaptive integration step; axial positions set the finite-volume cells along the column. For comparing subtle peak shifts from b or k_s changes, use at least 300 reported time steps; 50 points may hide a shift between adjacent samples.", << Set Wrap(700), << Set Font Style("Italic")),
+                        Text Box("Time steps and axial positions control this run's resolution.", << Set Wrap(700)),
                         loadChemPanel = V List Box(
                             H List Box(Text Box("Load chemistry source", << Set Width(220)), loadSource = Combo Box({{"DIRECT", "BUFFER_A", "BUFFER_B"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); ApplyChemSource(loadSource, loadPH, loadCond); SaveCurrentRun(); UpdateUI()))))),
                             loadPHRow = H List Box(loadPHLabel = Text Box("Process / load pH", << Set Width(220)), loadPH = Number Edit Box(6, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI()))))),
@@ -1435,7 +1423,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                             loadCondRow = H List Box(loadCondLabel = Text Box("Load conductivity [mS/cm]", << Set Width(220)), loadCond = Number Edit Box(5, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(2); loadChemControl << Set(2); loadSource << Set(1); SaveCurrentRun(); UpdateUI())))))
                         ),
                         Outline Box("Initial column equilibration (before load)", V List Box(
-                            Text Box("Choose the chemistry initially filling the buffer mixer, column liquid, and TDM particle pores. Match load preserves existing results. Buffer A/B use this run's saved buffer definitions; Direct uses the measured starting pH and one authoritative salt input. This is an initial condition, not an added CV step.", << Set Wrap(700)),
+                            Text Box("Initial column chemistry before load; this does not add CV.", << Set Wrap(700)),
                             H List Box(Text Box("Initial equilibration source", << Set Width(290)), equilibrationSource = Combo Box({{"MATCH_LOAD", "BUFFER_A", "BUFFER_B", "DIRECT"}}, << Set(1), << Set Width(175), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                             equilibrationDirectPanel = V List Box(
                                 H List Box(Text Box("Initial column pH", << Set Width(290)), equilibrationPH = Number Edit Box(., 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
@@ -1451,7 +1439,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     V List Box(
                         H List Box(Text Box("Post-load washes [0-5]", << Set Width(220)), plwCountBox = Combo Box({count_items}, << Set Width(75), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         H List Box(Text Box("Elution steps [0-5]", << Set Width(220)), elutionCountBox = Combo Box({count_items}, << Set Width(75), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-                        Text Box("Load and every PLW/Elution step store Start and End %B. Buffer A = 0% B and Buffer B = 100% B. SET_POINT holds Start %B, LINEAR interpolates across the CV, and STEP switches to End %B. TDM–Wang uses the resulting local pore salt and pH in its kinetic law.", << Set Wrap(740))
+                        Text Box("SET_POINT holds Start %B; LINEAR ramps to End; STEP switches to End.", << Set Wrap(740))
                     )
                 ),
                 Spacer Box(Size(1,8)),
@@ -1466,15 +1454,15 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     H List Box(Text Box("Number of impurities [0-5]", << Set Width(275)), impurityCountBox = Combo Box({imp_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI())))),
                     speciesStatus = Text Box("", << Set Wrap(760)), batchPHStatus = Text Box("", << Set Wrap(760))
                 )),
-                Outline Box("Required parameters for the selected combination", requiredList = Text Box("", << Set Wrap(760), << Set Height(250))),
+                Outline Box("Required parameters", << Close(1), requiredList = Text Box("", << Set Wrap(760), << Set Height(250))),
                 Outline Box("Column geometry — direct inputs", V List Box(
                     {_nrow("Column volume V_col [mL]", "columnVolume", c.get("volume_mL"), 360, "If(!isLoading, SyncLoadAmount())")},
                     {_nrow("Column length L_C [mm]", "columnLength", c.get("length_mm"), 360)}
                 )),
                 Outline Box("HIC / ion exchange and system response", V List Box(
                     H List Box(Text Box("Chromatography mode", << Set Width(360)), chromatographyMode = Combo Box({{"HIC", "ION_EXCHANGE"}}, << Set({1 if is_hic(cfg) else 2}), << Set Function(Function({{this}}, UpdateUI())))),
-                    legacyModeHelp = Text Box("For 100% B loading followed by a 0% B gradient, Buffer B must be the high-salt endpoint. Native CPA is an ion-exchange model. CPA in HIC mode uses empirical exp(k_s × salt) affinity with CPA surface competition; calibrate it for your protein and resin.", << Set Wrap(740)),
-                    wangModeHelp = Text Box("Modified Wang is available with TDM in HIC mode. Buffer B should be the high-salt endpoint for a descending-salt elution. Calibrate the Wang coefficients for the protein, resin and buffers used.", << Set Wrap(740)),
+                    legacyModeHelp = Text Box("For a descending-salt elution, set Buffer B as the high-salt buffer.", << Set Wrap(740)),
+                    wangModeHelp = Text Box("TDM–Wang uses HIC with Buffer B as the high-salt buffer.", << Set Wrap(740)),
                     {', '.join(system_rows)},
                     H List Box(Text Box("Buffer mixer dispersion", << Set Width(360)), bufferDispersionToggle = Combo Box({{"On", "Off"}}, << Set({1 if sys['buffer_dispersion_enabled'] else 2}))),
                     H List Box(Text Box("Salt axial dispersion", << Set Width(360)), saltDispersionToggle = Combo Box({{"On", "Off"}}, << Set({1 if sys['salt_dispersion_enabled'] else 2}))),
@@ -1489,7 +1477,7 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                            "If(!isLoading, UpdateUI())", fit_path="conversion.conductivity_to_salt_M_per_mS_cm",
                            fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                     saltFactorStatus = Text Box("", << Set Wrap(720)),
-                    Text Box("Only CONDUCTIVITY salt inputs use this factor for binding. SALT_M uses its entered molarity. In CONDUCTIVITY mode, a 0 mS/cm endpoint stays at 0 M for any factor; an elution to that endpoint can release protein. HIC inputs above 10 M are rejected before solving.", << Set Wrap(720), << Set Font Style("Italic"))
+                    Text Box("This factor converts conductivity inputs to salt molarity; direct salt inputs use their entered value.", << Set Wrap(720))
                 )),
                 tdmPanel = Outline Box("TDM parameters", V List Box(
                     {_nrow("Bead radius r_p [µm]", "beadRadius", t.get("bead_radius_um"), 360, fit_path="tdm.bead_radius_um", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
@@ -1506,19 +1494,19 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                     {wang_q0_row},
                     {wang_eta_row}
                 )),
-                Text Box("Every visible numeric box is sent to the solver. For least-squares fitting, each mechanistic field has an adjacent Locked/Unlocked control. Column geometry, feed composition, and each profile's process recipe remain fixed experimental inputs.", << Set Wrap(760), << Set Font Style("Italic")),
+                Text Box("LSQ changes only unlocked model parameters. Run recipes and column geometry stay fixed.", << Set Wrap(760)),
                 {', '.join(component_bodies)}
             )),
             "Least-Squares Refinement",
             V Scroll Box(Size(850, 690), V List Box(
                 H List Box(Text Box("Number of runs to fit [1–{MAX_LSQ_PROFILES}]", << Set Width(240)), lsqRunCount = Combo Box({lsq_run_count_items}, << Set({len(saved_selection)}), << Set Width(100), << Set Function(Function({{this}}, If(!isLoading, UpdateUI(); UpdateLSQRunSummary()))))),
                 lsqProfilesStatus = Text Box("", << Set Wrap(740)),
-                Text Box("Attach one measured CV/mL versus UV chromatogram in each run section. You may also fit a conductivity column from that file by turning on Fit measured conductivity for the run. Choose whether its model trace comes from the independent LSQ recipe or a normal saved batch run. Preview and refinement re-simulate the saved recipe and reread the measured file. UV values in AU are converted to mAU; choose a column when its heading is generic.", << Set Wrap(760)),
+                Text Box("For each run, attach a measured UV file and choose the model run to compare. Conductivity and fraction mass% are optional.", << Set Wrap(760)),
                 {', '.join(lsq_run_sections)},
                 Outline Box("Fit settings", V List Box(
-                    H List Box(Text Box("Refinement mode", << Set Width(200)), lsqModeBox = Combo Box({{"Normal least-squares: chromatogram only", "Least-squares: chromatogram + species mass% by fraction"}}, << Set Width(390), << Set Function(Function({{this}}, UpdateUI())))),
+                    H List Box(Text Box("Fit data", << Set Width(200)), lsqModeBox = Combo Box({{"UV chromatogram", "UV + fraction mass%"}}, << Set Width(220), << Set Function(Function({{this}}, UpdateUI())))),
                     H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
-                    Text Box("Leave objective and weights alone for ordinary pointwise least-squares. The optimizer keeps the best improvement and stops when the objective, gradient, or parameter step converges. Each unlocked parameter adds another column solve per numerical Jacobian for every selected run. Progress is saved to least_squares_objective_history.csv. Set individual parameter locks on Model Parameters.", << Set Wrap(740)),
+                    Text Box("Set parameter locks on Model Parameters. The safety cap counts model evaluations; progress is saved to least_squares_objective_history.csv.", << Set Wrap(740)),
                     {_nrow("Safety cap: model evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 320)},
                     Outline Box("Optional objective and stopping settings", << Close(1), V List Box(
                         H List Box(Text Box("Objective", << Set Width(240)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
@@ -1533,16 +1521,16 @@ modelWindow = New Window("TDM 22 — Classic Process UI / Direct Mechanistic Inp
                 H List Box(Button Box("Open alignment preview", OpenAlignmentPreview()), Button Box("Open fit report", OpenFitReport())),
                 lsqStatusText = Text Box("", << Set Wrap(760), << Set Height(130)),
                 lsqCompositionPanel = Outline Box("Species mass% reference points", V List Box(
-                    lsqTargetRunRow = H List Box(Text Box("Edit mass% for LSQ run", << Set Width(200)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(140), << Set Function(Function({{this}}, ChangeLSQMassEditorRun(RunNumberFromLabel(this << Get Selected))))), Text Box("Turn on fraction mass% in that run's section to include it in fitting.", << Set Wrap(390))),
+                    lsqTargetRunRow = H List Box(Text Box("Edit mass% for LSQ run", << Set Width(200)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(140), << Set Function(Function({{this}}, ChangeLSQMassEditorRun(RunNumberFromLabel(this << Get Selected))))), Text Box("Turn on mass% for this run above to fit it.", << Set Wrap(390))),
                     lsqMassEditorStatus = Text Box("", << Set Wrap(740)),
-                    Text Box("Each LSQ run keeps its own fraction table. Choose the run above, then enter fraction start and end in CV or mL from run start. The midpoint is compared with that run's model species mass%. Blank cells create gaps; 0 is a measured zero.", << Set Wrap(740)),
+                    Text Box("Enter fraction start and end from run start. Fit uses each midpoint; blank species cells are skipped, while 0 is measured.", << Set Wrap(740)),
                     H List Box(Text Box("Fraction rows [1-30]", << Set Width(240)), lsqReferenceCountBox = Combo Box({ref_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI()))), Text Box("Fraction axis"), lsqFractionUnit = Combo Box({{"CV", "mL"}}, << Set(1), << Set Width(90))),
                     {ref_table}
                 ))
             )),
             "Run / Results",
             V Scroll Box(Size(850, 690), V List Box(
-                Text Box("The result buttons verify the selected run and its settings before opening a file. If status says RESULT_STALE, run the selected model again. All models export UV, conductivity, programmed salt, column salt, and local binding salt / ionic strength. For TDM, binding chemistry is the pore-phase chemistry.", << Set Wrap(760)),
+                Text Box("If a result is stale, rerun the selected model.", << Set Wrap(760)),
                 H List Box(
                     Button Box("Open latest chromatogram", OpenCurrentResult(0)),
                     Button Box("Open latest result data", OpenCurrentResult(1))
@@ -1597,7 +1585,7 @@ def _validate_jsl(jsl: str) -> None:
     required = [
         "Post-load washes [0-5]", "Elution steps [0-5]", "Runs in batch",
         "Run saved batch", "Model combination", "Number of impurities [0-5]",
-        "Normal least-squares: chromatogram only", "species mass% by fraction",
+        "UV chromatogram", "UV + fraction mass%",
         "Feed composition mass% of total protein", "UV → protein response factor",
         "Conductivity → salt factor", "Number of time steps", "Number of axial positions", "Number Edit Box", "tdm_batch_runs.csv",
         "Chemistry control", "Start / set-point Buffer B [%]", "End Buffer B [%]",
