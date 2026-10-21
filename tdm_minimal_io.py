@@ -42,7 +42,6 @@ LABEL_TO_MODEL = {v: k for k, v in MODEL_LABELS.items()}
 MAX_IMPURITIES = 5
 MAX_RUNS = 30
 MAX_LSQ_PROFILES = 10
-MAX_CPU_THREADS = 64
 MAX_LSQ_FRACTIONS = 30
 LSQ_MODEL_SOURCE_INDEPENDENT = "INDEPENDENT_LSQ"
 LSQ_MODEL_SOURCE_BATCH = "NORMAL_BATCH"
@@ -200,7 +199,7 @@ def blank_config() -> dict[str, Any]:
         "chromatography_mode": "ION_EXCHANGE",
         "wang": {"q0_g_L": 20.0, "eta": 1.0},
         "system": system_defaults(),
-        "least_squares": {"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120, "parallel_workers": 1,
+        "least_squares": {"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
                           "unlocked_paths": None, "selected_run_numbers": None},
         "impurity_count": 0,
         "column": {
@@ -219,7 +218,6 @@ def blank_config() -> dict[str, Any]:
             # axial_positions is the number of finite-volume axial cells.
             "time_steps": 700,
             "axial_positions": 40,
-            "cpu_threads": 1,
         },
         "process": {
             "buffer_A": _blank_buffer("Buffer A"),
@@ -345,9 +343,11 @@ def normalize_config(config: Any) -> Any:
             if str(out["model"]) == MODEL_TDM_CPA and legacy_salt_d is not None:
                 defaults["salt_dispersion_mm2_s"] = legacy_salt_d
             out["system"] = deep_merge(defaults, out.get("system", {}))
-            out["least_squares"] = deep_merge({"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120, "parallel_workers": 1,
+            out["least_squares"] = deep_merge({"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
                                                 "unlocked_paths": None, "selected_run_numbers": None}, out.get("least_squares", {}))
-            out["numerics"] = deep_merge({"time_steps": 700, "axial_positions": 40, "cpu_threads": 1}, out.get("numerics", {}))
+            out["least_squares"].pop("parallel_workers", None)
+            out["numerics"] = deep_merge({"time_steps": 700, "axial_positions": 40}, out.get("numerics", {}))
+            out["numerics"].pop("cpu_threads", None)
         # Migrate legacy projects and initialize new impurity factors from
         # the shared target response. Each impurity remains independently
         # editable after this default is written into its component row.
@@ -952,9 +952,6 @@ def apply_batch_shared_parameters(base_config: dict[str, Any], run_config: dict[
     run_config = normalize_config(run_config)
     effective = deep_merge(blank_config(), base_config)
     effective = deep_merge(effective, run_config)
-    # CPU budget belongs to the normal predictor, not the saved process recipe.
-    # A run's time/axial grid may differ, but it must not reset this control.
-    effective["numerics"]["cpu_threads"] = base_config["numerics"]["cpu_threads"]
     overridden: list[str] = []
     for path in batch_shared_parameter_paths(base_config):
         base_value = _get_path(base_config, path)
@@ -1059,9 +1056,6 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
     max_nfev = _number(lsq.get("max_nfev"), "Least-squares maximum solver evaluations", errors, lower=2, upper=10000)
     if max_nfev is not None and not max_nfev.is_integer():
         errors.append("Least-squares maximum solver evaluations must be a whole number.")
-    workers = _number(lsq.get("parallel_workers"), "Least-squares CPU workers", errors, lower=1, upper=MAX_CPU_THREADS)
-    if workers is not None and not workers.is_integer():
-        errors.append("Least-squares CPU workers must be a whole number.")
     conv = config.get("conversion", {})
     _number(conv.get("uv_to_protein_mAU_L_g"), "Target UV → protein response factor [mAU·L/g]", errors, positive=True)
     epsp: float | None = None
@@ -1241,13 +1235,10 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
     numerics = config.get("numerics", {})
     nt = _number(numerics.get("time_steps"), "Number of time steps", errors, lower=50, upper=20000)
     nx = _number(numerics.get("axial_positions"), "Number of axial positions", errors, lower=5, upper=250)
-    cpu_threads = _number(numerics.get("cpu_threads"), "Prediction CPU threads", errors, lower=1, upper=MAX_CPU_THREADS)
     if nt is not None and abs(nt - round(nt)) > 1e-9:
         errors.append("Number of time steps must be an integer.")
     if nx is not None and abs(nx - round(nx)) > 1e-9:
         errors.append("Number of axial positions must be an integer.")
-    if cpu_threads is not None and not cpu_threads.is_integer():
-        errors.append("Prediction CPU threads must be an integer.")
     needs_process_salt = uses_cpa(model) or uses_langmuir(model) or uses_wang(model)
     hic_salt_sources: list[tuple[str, dict[str, Any]]] = []
     if needs_process_salt:
@@ -1360,7 +1351,6 @@ def derived_input_summary(config: dict[str, Any]) -> dict[str, Any]:
         "required_load_volume_mL": load_volume_mL,
         "time_steps": config.get("numerics", {}).get("time_steps"),
         "axial_positions": config.get("numerics", {}).get("axial_positions"),
-        "normal_prediction_cpu_limit": config.get("numerics", {}).get("cpu_threads"),
         "pH_span": process_pH_span(config),
         "buffers": {
             key: {
@@ -1519,7 +1509,7 @@ def batch_run_numeric_fields() -> tuple[str, ...]:
 
 def _write_csv_atomically(path: Path, fields: tuple[str, ...] | list[str],
                           rows: list[dict[str, Any]], *, skip_unchanged: bool = False) -> None:
-    """Publish a complete table at once, including during parallel worker import."""
+    """Publish a complete table at once for readers in other processes."""
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()

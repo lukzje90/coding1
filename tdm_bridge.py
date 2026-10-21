@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import copy
 import html
 import importlib
 import json
@@ -80,11 +81,12 @@ from tdm_minimal_io import (
     LSQ_RUNS_CSV,
     BATCH_SUMMARY_CSV,
     CONFIG_PATH,
+    _get_path,
+    _set_path,
     LABEL_TO_MODEL,
     LSQ_MODEL_SOURCE_BATCH,
     LSQ_MODEL_SOURCE_INDEPENDENT,
     MAX_LSQ_PROFILES,
-    MAX_CPU_THREADS,
     MAX_LSQ_FRACTIONS,
     MAX_RUNS,
     MODEL_TDM_CPA,
@@ -97,6 +99,7 @@ from tdm_minimal_io import (
     batch_row_to_run_config,
     blank_config,
     load_batch_rows,
+    load_config,
     load_lsq_rows,
     load_lsq_mass_rows,
     normalize_config,
@@ -111,6 +114,7 @@ from tdm_minimal_io import (
 )
 
 BATCH_RESULTS_ROOT = PROJECT_DIR / "batch_results"
+FIT_HANDOFF_JSON = PROJECT_DIR / "least_squares_fit_handoff.json"
 
 
 def _new_batch_results_dir() -> Path:
@@ -138,6 +142,65 @@ def _text(name: str) -> str:
     return str(_g(name, "") or "").strip()
 
 
+def _same_fit_value(left: Any, right: Any) -> bool:
+    try:
+        return math.isclose(float(left), float(right), rel_tol=1e-8, abs_tol=1e-10)
+    except (TypeError, ValueError):
+        return left == right
+
+
+def _restore_fitted_model_if_ui_stale(shared: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Keep an accepted fit from being overwritten by stale open JMP boxes.
+
+    The JSL fit-apply script normally updates the boxes immediately. If JMP
+    missed that update, the next Run sends the pre-fit values again. Recover
+    only when every changed fitted path still matches its old or fitted value;
+    any other value is treated as an intentional user edit.
+    """
+    if not FIT_HANDOFF_JSON.is_file() or not CONFIG_PATH.is_file():
+        return shared, False
+    try:
+        receipt = json.loads(FIT_HANDOFF_JSON.read_text(encoding="utf-8"))
+        active = load_config(CONFIG_PATH)
+        if (shared["model"] != receipt["model"] or
+                int(shared["impurity_count"]) != receipt["impurity_count"] or
+                active["model"] != receipt["model"]):
+            return shared, False
+        changed = receipt["changed_parameters"]
+        if not changed or any(
+            not _same_fit_value(_get_path(active, path), item["fitted"])
+            for path, item in changed.items()
+        ):
+            return shared, False
+        if any(
+            not (_same_fit_value(_get_path(shared, path), item["initial"]) or
+                 _same_fit_value(_get_path(shared, path), item["fitted"]))
+            for path, item in changed.items()
+        ):
+            return shared, False
+        stale = [path for path, item in changed.items()
+                 if not _same_fit_value(_get_path(shared, path), item["fitted"])]
+        if not stale:
+            return shared, False
+        restored = copy.deepcopy(shared)
+        for path in stale:
+            _set_path(restored, path, changed[path]["fitted"])
+        return normalize_config(restored), True
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return shared, False
+
+
+def _save_fit_handoff(initial: dict[str, Any], fitted: dict[str, Any], paths: list[str]) -> None:
+    changed: dict[str, dict[str, float]] = {}
+    for path in paths:
+        before, after = float(_get_path(initial, path)), float(_get_path(fitted, path))
+        if not _same_fit_value(before, after):
+            changed[path] = {"initial": before, "fitted": after}
+    receipt = {"model": fitted["model"], "impurity_count": int(fitted["impurity_count"]),
+               "changed_parameters": changed}
+    FIT_HANDOFF_JSON.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+
+
 def _write_status(text: str) -> None:
     STATUS_PATH.write_text(text.rstrip() + "\n", encoding="utf-8")
     print(text)
@@ -163,23 +226,13 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
     config["least_squares"]["objective"] = _text("tdm_ui_lsq_objective") or "RAW_SSE"
     config["least_squares"]["baseline_mode"] = _text("tdm_ui_lsq_baseline_mode") or "NONE"
     config["least_squares"]["detector_baseline"] = _num("tdm_ui_lsq_detector_baseline") or 0.0
-    if "tdm_ui_prediction_cpu_threads" in globals():
-        normal_threads = _num("tdm_ui_prediction_cpu_threads")
-        if normal_threads is None or not normal_threads.is_integer() or not 1 <= normal_threads <= MAX_CPU_THREADS:
-            raise ValueError(f"Normal prediction CPU limit must be a whole number from 1 to {MAX_CPU_THREADS}.")
-        config["numerics"]["cpu_threads"] = int(normal_threads)
     # Older bridge callers may not send this field. Once the JMP box exists,
     # reject an empty, fractional or out-of-range cap instead of resetting it.
     if "tdm_ui_lsq_max_nfev" in globals():
         cap = _num("tdm_ui_lsq_max_nfev")
         if cap is None or not cap.is_integer() or not 2 <= cap <= 10000:
-            raise ValueError("Safety cap must be a whole number from 2 to 10000 optimizer evaluations.")
+            raise ValueError("Safety cap must be a whole number from 2 to 10000 model evaluations.")
         config["least_squares"]["max_nfev"] = int(cap)
-    if "tdm_ui_lsq_parallel_workers" in globals():
-        workers = _num("tdm_ui_lsq_parallel_workers")
-        if workers is None or not workers.is_integer() or not 1 <= workers <= MAX_CPU_THREADS:
-            raise ValueError(f"Least-squares CPU workers must be a whole number from 1 to {MAX_CPU_THREADS}.")
-        config["least_squares"]["parallel_workers"] = int(workers)
     locks = _lsq_unlocked_paths_from_jmp()
     if locks is not None:
         config["least_squares"]["unlocked_paths"] = sorted(locks)
@@ -554,6 +607,7 @@ def main() -> int:
     action = _text("tdm_ui_action").upper() or "SAVE_MODEL"
     try:
         shared_raw = build_shared_config_from_jmp()
+        shared_raw, fitted_handoff_restored = _restore_fitted_model_if_ui_stale(shared_raw)
         current_run_number = _run_number()
         if action in {"FIT_LSQ", "PREVIEW_LSQ_ALIGNMENT"} and _num("tdm_ui_lsq_run_count") is not None:
             run_number = _selected_lsq_run_numbers()[0]
@@ -634,7 +688,9 @@ def main() -> int:
             from tdm_minimal_model import check_result_freshness
             context = _selected_run_context(current_run_number)
             valid, message = check_result_freshness(current_effective, context)
-            _write_status(("RESULT_CURRENT: " if valid else "RESULT_STALE: ") + message)
+            _write_status(("FITTED_PARAMETERS_RESTORED: Reapplied accepted fitted parameters from the model file.\n"
+                           if fitted_handoff_restored else "")
+                          + ("RESULT_CURRENT: " if valid else "RESULT_STALE: ") + message)
             return 0
 
         if action in {"FIT_LSQ", "PREVIEW_LSQ_ALIGNMENT"}:
@@ -704,18 +760,13 @@ def main() -> int:
                 return 0
             unlocked_paths = _lsq_unlocked_paths_from_jmp()
             from tdm_least_squares import FIT_HISTORY_CSV, fit_parameter_specs
-            from tdm_minimal_model import can_spawn_model_workers
             fitted_paths = fit_parameter_specs(profiles[0]["config"], unlocked_paths=unlocked_paths,
                                                fit_conductivity=any(p["fit_conductivity"] for p in profiles))
-            requested_lsq_workers = int(shared_raw["least_squares"]["parallel_workers"])
-            jmp_worker_note = (" JMP's embedded Python cannot launch joblib child processes; "
-                               "this fit will use one worker."
-                               if requested_lsq_workers > 1 and not can_spawn_model_workers() else "")
             _write_status(
                 f"Least-squares refinement running: {len(profiles)} profile(s), "
                 f"{len(fitted_paths)} unlocked parameters, "
-                f"{shared_raw['least_squares']['max_nfev']} optimizer-evaluation safety cap; "
-                f"up to {requested_lsq_workers} requested CPU worker(s).{jmp_worker_note}\n"
+                f"{shared_raw['least_squares']['max_nfev']} model-evaluation safety cap (including Jacobian probes and final verification); "
+                "serial model evaluations.\n"
                 f"Each numerical Jacobian needs about {len(profiles) * (len(fitted_paths) + 1)} column solves. "
                 f"Progress: {FIT_HISTORY_CSV}. If this file is locked, the fit continues "
                 "and reports a recovered history path when complete."
@@ -725,11 +776,12 @@ def main() -> int:
                 mode=mode,
                 unlocked_paths=unlocked_paths,
                 max_nfev=int(shared_raw["least_squares"]["max_nfev"]),
-                parallel_workers=int(shared_raw["least_squares"]["parallel_workers"]),
+                max_model_evaluations=int(shared_raw["least_squares"]["max_nfev"]),
             )
             if fit["accepted"]:
                 fitted_shared = sanitize_config_for_selected_model(fit["fitted_config"])
                 save_config(fitted_shared, CONFIG_PATH)
+                _save_fit_handoff(shared_raw, fitted_shared, fit["parameters"])
             profile_summary = "\n".join(
                 f"LSQ Run {p['run_number']} — {p['run_name']} vs {p['model_run_label']}: {p['overlap_points']} points, weighted RMSE {p['weighted_rmse']:.6g}; run weight {p['run_weight']:.6g}"
                 + (f"; conductivity RMSE {p['conductivity_rmse_mS_cm']:.6g} mS/cm"
@@ -740,9 +792,8 @@ def main() -> int:
                              if fit["initial_weighted_rmse"] is not None else "")
             with open(fit["improved_parameters_txt"], encoding="utf-8") as fh:
                 improved_list = fh.read()
-            completed_worker_note = (
-                "JMP embedded Python used one worker because child-process commands open as files in JMP.\n"
-                if requested_lsq_workers > 1 and not fit["parallel_process_workers_available"] else "")
+            fit_warning_line = (f"Fit quality warning: {fit['fit_quality_warning']}\n"
+                                if fit["fit_quality_warning"] else "")
             _write_status(
                 "Least-squares refinement completed.\n"
                 f"Elapsed fit time: {fit['fit_elapsed_hms']} ({fit['fit_elapsed_seconds']:.1f} seconds).\n"
@@ -750,9 +801,10 @@ def main() -> int:
                 f"Mode: {mode}\nInitial objective: {fit['initial_objective']:.7g}\nFinal objective: {fit['final_objective']:.7g}\n"
                 f"{weighted_line}"
                 f"Objective improvement: {fit['improvement_percent']:.4g}%\n"
-                f"Optimizer function evaluations: {fit['nfev']}; actual residual evaluations: {fit['residual_evaluations']}\n"
-                f"CPU worker processes used: {fit['parallel_workers_used']}\n{completed_worker_note}"
+                f"Optimizer candidate evaluations: {fit['nfev']}; total fitted residual evaluations: {fit['residual_evaluations']} "
+                f"of {shared_raw['least_squares']['max_nfev']} allowed; cap reached: {fit['evaluation_cap_reached']}\n"
                 f"Optimizer converged: {fit['success']}; {fit['message']}\n"
+                f"{fit_warning_line}"
                 f"Accepted/applied to shared batch parameters: {fit['accepted']}\n"
                 f"Improved parameters:\n{improved_list}\n"
                 f"Report: {fit['fit_report_html']}\nParameter list CSV: {fit['improved_parameters_csv']}\nObjective history CSV: {fit['latest_fit_history_csv'] or 'unavailable; history is plotted in the fit report'}"
@@ -793,10 +845,12 @@ def main() -> int:
                     + ".\n"
                 )
             _write_status(
-                f"Run {run_number} — {context['run_name']} completed successfully.\n"
+                ("FITTED_PARAMETERS_RESTORED: JMP sent the pre-fit values; this run used the accepted "
+                 "least-squares parameters from the fitted model file. The parameter boxes are refreshed.\n"
+                 if fitted_handoff_restored else "")
+                + f"Run {run_number} — {context['run_name']} completed successfully.\n"
                 f"Recipe used: {_result_recipe_line(paths['manifest'])}\n"
                 f"Active mechanistic inputs consumed: {len(required_parameter_values(current_effective))}\n"
-                f"Normal prediction CPU limit: {min(int(current_effective['numerics']['cpu_threads']), os.cpu_count() or 1)}; a single coupled run may use fewer native threads.\n"
                 + peak_line
                 + affinity_line
                 + ("Run warnings:\n- " + "\n- ".join(run_warnings) + "\n" if run_warnings else "") +
@@ -821,17 +875,15 @@ def main() -> int:
                 run_configs.append(run_cfg)
             from tdm_minimal_model import run_batch_and_write
             batch_output_dir = _new_batch_results_dir()
-            info = run_batch_and_write(shared, run_configs, batch_output_dir,
-                                       parallel_workers=int(shared["numerics"]["cpu_threads"]))
+            info = run_batch_and_write(shared, run_configs, batch_output_dir)
             _save_batch_summary_to_root(info)
             recipe_lines = "\n".join(
                 _result_recipe_line(run["manifest"]) for run in info.get("runs", [])
             )
-            batch_worker_note = (
-                "JMP embedded Python used one worker because child-process commands open as files in JMP.\n"
-                if int(shared["numerics"]["cpu_threads"]) > 1 and not info["cpu_worker_processes_available"] else "")
             _write_status(
-                f"Batch completed: {batch_count} run(s); CPU worker processes used: {info['cpu_workers_used']}.\n{batch_worker_note}"
+                ("FITTED_PARAMETERS_RESTORED: JMP sent pre-fit values; the batch used the accepted fitted model.\n"
+                 if fitted_handoff_restored else "")
+                + f"Batch completed: {batch_count} run(s).\n"
                 f"Recipes used:\n{recipe_lines}\n"
                 f"Shared model fingerprint: {info['shared_parameter_fingerprint']}\n"
                 f"Batch result folder: {batch_output_dir}\n"

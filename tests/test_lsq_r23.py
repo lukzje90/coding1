@@ -125,7 +125,7 @@ class RefinementTests(unittest.TestCase):
 
     def test_safety_cap_is_visible_and_passed_from_jmp_as_an_integer(self):
         jsl = build_jsl()
-        self.assertLess(jsl.index('Safety cap: optimizer evaluations'),
+        self.assertLess(jsl.index('Safety cap: model evaluations'),
                         jsl.index('Outline Box("Optional objective and stopping settings"'))
         self.assertIn('Python Send(lsqMaxEvaluations << Get, Python Name("tdm_ui_lsq_max_nfev"));', jsl)
         with patch.dict(tdm_bridge.__dict__, {"tdm_ui_lsq_max_nfev": 37}):
@@ -139,6 +139,84 @@ class RefinementTests(unittest.TestCase):
             with self.subTest(invalid=invalid), patch.dict(tdm_bridge.__dict__, {"tdm_ui_lsq_max_nfev": invalid}):
                 with self.assertRaisesRegex(ValueError, "Safety cap must be a whole number"):
                     tdm_bridge.build_shared_config_from_jmp()
+
+    def test_model_evaluation_cap_counts_serial_jacobian_and_final_verification(self):
+        true = config_for()
+        true["numerics"] = {"time_steps": 50, "axial_positions": 6}
+        trace = simulate(true)["trace"]
+        initial = copy.deepcopy(true)
+        initial["components"][0]["qmax_g_L"] *= 1.8
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.csv"
+            with source.open("w", newline="") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV_mAU"])
+                writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
+            outputs = ["FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
+                       "FIT_CONDUCTIVITY_CSV", "FIT_REPORT_HTML", "FIT_CONFIG_JSON",
+                       "FIT_APPLY_JSL", "FIT_SETTINGS_JSON", "FIT_HISTORY_CSV",
+                       "FIT_IMPROVED_CSV", "FIT_IMPROVED_TXT", "CONFIG_PATH"]
+            with patch.multiple(ls, **{name: root / getattr(ls, name).name for name in outputs}):
+                with self.assertRaisesRegex(ValueError, "at least 3"):
+                    ls.run_global_least_squares_refinement(
+                        [{"config": initial, "chromatogram_csv": source}],
+                        unlocked_paths=["components[0].qmax_g_L"],
+                        max_nfev=2, max_model_evaluations=2)
+                result = ls.run_global_least_squares_refinement(
+                    [{"config": initial, "chromatogram_csv": source}],
+                    unlocked_paths=["components[0].qmax_g_L"],
+                    max_nfev=10, max_model_evaluations=3)
+                with (root / ls.FIT_HISTORY_CSV.name).open(newline="") as stream:
+                    rows = list(csv.DictReader(stream))
+            self.assertTrue(result["evaluation_cap_reached"])
+            self.assertEqual(result["residual_evaluations"], 3)
+            self.assertEqual([row["phase"] for row in rows],
+                             ["initial", "optimizer", "jacobian", "final verification"])
+            self.assertEqual(max(int(row["evaluation"]) for row in rows), 3)
+
+    def test_accepted_fit_survives_stale_jmp_boxes_on_next_run(self):
+        initial = config_for()
+        initial["numerics"] = {"time_steps": 50, "axial_positions": 6}
+        fitted = copy.deepcopy(initial)
+        path = "components[0].qmax_g_L"
+        fitted["components"][0]["qmax_g_L"] *= 0.45
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(tdm_bridge, "CONFIG_PATH", root / "model.json"), patch.object(
+                    tdm_bridge, "FIT_HANDOFF_JSON", root / "handoff.json"):
+                save_config(fitted, tdm_bridge.CONFIG_PATH)
+                tdm_bridge._save_fit_handoff(initial, fitted, [path])
+                restored, was_stale = tdm_bridge._restore_fitted_model_if_ui_stale(initial)
+                self.assertTrue(was_stale)
+                self.assertAlmostEqual(ls._get_path(restored, path), ls._get_path(fitted, path))
+                np.testing.assert_allclose(simulate(restored)["trace"]["uv_mAU"],
+                                           simulate(fitted)["trace"]["uv_mAU"])
+                intentional = copy.deepcopy(initial)
+                ls._set_path(intentional, path, ls._get_path(initial, path) * 0.8)
+                edited, was_stale = tdm_bridge._restore_fitted_model_if_ui_stale(intentional)
+                self.assertFalse(was_stale)
+                self.assertEqual(ls._get_path(edited, path), ls._get_path(intentional, path))
+                manifest = root / "run_manifest.json"
+                manifest.write_text(json.dumps({"warnings": [], "target_peak": {}}))
+                with patch.dict(tdm_bridge.__dict__, {"tdm_ui_action": "RUN_SELECTED"}), \
+                     patch.object(tdm_bridge, "build_shared_config_from_jmp", return_value=initial), \
+                     patch.object(tdm_bridge, "_run_number", return_value=1), \
+                     patch.object(tdm_bridge, "_batch_count", return_value=1), \
+                     patch.object(tdm_bridge, "_effective_run", side_effect=lambda shared, _run: shared), \
+                     patch.object(tdm_bridge, "_selected_run_context", return_value={"run_name": "Run 1"}), \
+                     patch.object(tdm_bridge, "_result_recipe_line", return_value="test recipe"), \
+                     patch.object(tdm_bridge, "BATCH_COUNT_FILE", root / "count.txt"), \
+                     patch.object(tdm_bridge, "_write_status") as status, \
+                     patch("tdm_minimal_model.run_and_write", return_value={
+                         "manifest": str(manifest), "html": "run.html", "csv": "run.csv", "svg": "run.svg"}) as run:
+                    self.assertEqual(tdm_bridge.main(), 0)
+                self.assertAlmostEqual(ls._get_path(run.call_args.args[0], path),
+                                       ls._get_path(fitted, path))
+                self.assertAlmostEqual(ls._get_path(load_config(tdm_bridge.CONFIG_PATH), path),
+                                       ls._get_path(fitted, path))
+                self.assertIn("FITTED_PARAMETERS_RESTORED", status.call_args.args[0])
+        self.assertIn('Contains(statusValue, "FITTED_PARAMETERS_RESTORED:")', build_jsl())
 
     def test_jacobian_reuses_current_residual_without_skipping_perturbations(self):
         evaluated = []
@@ -273,9 +351,9 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Current Window() << Get Path', launcher)
         self.assertIn('Current Window() << Get File Name', launcher)
         self.assertIn('Get Default Directory()', launcher)
-        self.assertIn('packageMarker = "tdm_r25c_package.marker"', launcher)
+        self.assertIn('packageMarker = "tdm_r25d_package.marker"', launcher)
         self.assertIn('File Exists( candidateDir || packageMarker )', launcher)
-        self.assertTrue((ROOT / "tdm_r25c_package.marker").is_file())
+        self.assertTrue((ROOT / "tdm_r25d_package.marker").is_file())
         self.assertLess(launcher.index('Get Script Name()'),
                         launcher.index('Current Window() << Get Path'))
         self.assertLess(launcher.index('Current Window() << Get File Name'),
@@ -303,7 +381,7 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(LSQPathText(slot)))', jsl)
         self.assertIn('Column(dtLSQRuns, "LSQ_X_Origin")[r] = LSQOriginSelected(slot)', jsl)
         self.assertIn('Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot]', jsl)
-        self.assertIn('Safety cap: optimizer evaluations', jsl)
+        self.assertIn('Safety cap: model evaluations', jsl)
         self.assertIn('Refinement running. The JMP window will respond', jsl)
         self.assertIn('condDeadVolumeFitLock', jsl)
         self.assertNotIn('LoadLSQReference(1);', jsl)

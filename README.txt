@@ -1,4 +1,27 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25c)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25d)
+
+FITTED-MODEL HANDOFF AND LSQ EVALUATION CAP (R25d)
+After an accepted least-squares fit, a normal Run now recovers the fitted
+mechanistic values if JMP still sends the pre-fit parameter boxes. The fit
+updates the active model file and records the changed values, so a stale
+window cannot silently replace the accepted fit on the next prediction.
+The boxes are refreshed when the stale handoff is detected. An intentional
+new value outside the pre-fit/fitted pair remains under the user's control.
+The LSQ safety cap now counts every residual evaluation, including finite-
+difference Jacobian probes and final verification. The initial reference
+calculation is displayed as evaluation 0. A fit with 42 unlocked parameters
+needs about 43 evaluations per complete numerical Jacobian for each set of
+runs, so a cap of 200 permits only a few optimizer steps. The fit report and
+status warn when the best saved candidate still matches UV poorly. An
+accepted candidate means the tested objective did not worsen; convergence
+and chromatogram quality are reported separately. Model equations and
+residual definitions are unchanged.
+
+CPU WORKER CONTROLS REMOVED (R25d)
+Normal batch runs and least-squares evaluations execute serially. The two
+CPU-worker inputs and joblib process pools have been removed. Existing saved
+CPU settings are ignored when a project is loaded. The mechanistic solver,
+residuals, numerical grids and optimizer equations are unchanged.
 
 LOAD INPUT AND CHEMISTRY HANDOFF (R25c)
 For each saved normal or independent LSQ run, the selected capacity [g/L
@@ -13,17 +36,14 @@ times the shared conversion factor. The output receipt records the resolved
 capacity, CV, mL, salt, conductivity, and source for each run.
 
 OVERNIGHT FIT AUDIT (R25b)
-The LSQ optimizer-evaluation safety cap remains adjustable from 2 to 10000.
+The LSQ safety cap remains adjustable from 2 to 10000.
 The fit still stops on normal convergence, a solver error, or the selected cap.
 Check that value in the LSQ tab before an overnight run; the start message and
 fit report state the setting used.
-Saved run tables now publish whole CSV files atomically, so standalone worker
-startup cannot read a half-written run table. Opening an unchanged table no
+Saved run tables now publish whole CSV files atomically, so other processes
+cannot read a half-written run table. Opening an unchanged table no
 longer rewrites it, which also avoids needless OneDrive/Excel file-lock errors.
-The model equations and fraction mass% residuals are unchanged. In JMP, both
-normal batch and LSQ work use one process worker because JMP cannot launch
-joblib child processes. Normal Run selected respects its native math-library
-thread limit; the LSQ worker setting does not parallelize a JMP fit.
+The model equations and fraction mass% residuals are unchanged.
 
 LEAST-SQUARES FIT DURATION (R25a)
 After refinement finishes, the JMP status shows elapsed fit time in hours,
@@ -37,14 +57,8 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25c_package.marker beside the launcher and Python files. Run the saved
+tdm_r25d_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
-
-JMP LEAST-SQUARES WORKER STARTUP FIX (R24y)
-JMP's embedded Python runs least-squares refinement with one worker even if
-more were requested. This prevents JMP from interpreting joblib's Windows
-worker command as a file path. The fit calculations and model solver are
-unchanged. Standalone Python still supports multiple process workers.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)
 The output chromatogram shows its generation time in UK local time, using GMT
@@ -59,53 +73,6 @@ LAUNCHER FOLDER DETECTION (R24r)
 Open 00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl from the extracted ZIP folder.
 The launcher uses its own folder even when JMP's default directory points
 somewhere else. Keep all extracted files together.
-
-SEPARATE NORMAL AND LEAST-SQUARES CPU LIMITS (R24q)
-Process Setup now shows Normal prediction CPU limit directly below time steps
-and axial positions. This setting is shared across the normal batch. Run
-saved batch evaluates independent chromatograms in separate CPU processes
-when launched by standalone Python, up to the entered limit and the number
-of runs. JMP's embedded Python runs batch chromatograms sequentially with one
-worker. Run selected keeps its coupled time trajectory intact; the setting
-also caps native numerical-library
-threads, but a single run may use fewer cores and may not become faster.
-Least-Squares Refinement has its own independent CPU worker setting. Enter
-12 there to permit up to 12 parallel run or parameter-trial evaluations in
-standalone Python when there is enough independent work. Both settings accept
-whole numbers 1–64; the actual process count is capped by available logical
-CPUs and work items.
-Fit workers each use one native numerical thread to avoid nested CPU pools.
-The model equations, solver methods, tolerances and time/axial grids are
-unchanged. The JMP launcher installs threadpoolctl as needed.
-
-JMP 19 embeds Python in JMP.exe. Joblib's Windows child-process command is
-interpreted by JMP as a file name, causing a "File not found: from
-joblib.externals.loky..." alert. The model detects this host and does not
-launch joblib workers. The effective LSQ and batch worker count is one in JMP
-regardless of a higher saved request; status and fit settings show the actual
-count. Standalone Python still uses the requested process parallelism.
-
-PARALLEL CPU REFINEMENT (R24p)
-In Least-Squares Refinement, set CPU workers from 1 to 64. The
-default of 1 retains serial fitting. In standalone Python, with multiple selected runs, separate
-Python processes simulate those runs at each objective evaluation. With two
-or more unlocked parameters, numerical Jacobian parameter trials also run
-in parallel, including for a single selected run. All workers use the same
-shared candidate parameter vector and each run's own fixed process recipe,
-UV file, conductivity choice and fraction mass% observations. The parent
-process combines residuals in run and parameter order and writes the fit
-history and outputs. If one run and at most one parameter is unlocked, only
-one worker can be used. More workers increase CPU and memory use; they do
-not reduce the number of solver evaluations or change the least-squares
-objective. The fit report and settings JSON show the actual worker count.
-Parallel fitting needs joblib when using standalone Python. JMP automatically
-uses one worker. The JMP UI waits while a fit runs; check
-least_squares_objective_history.csv for progress.
-If the operating system terminates a worker during fitting, the refinement
-retries only unfinished trials with fewer processes: first two, then one.
-The same trial vectors and solver are used; the fit settings record the final
-worker count and whether fallback occurred. A TDM-CPA fit with large grids
-and many unlocked parameters may need one or two workers on a 16 GB laptop.
 
 The JMP model selector retains all four original combinations and adds
 TDM – Modified Wang. Wang is paired only with TDM and uses HIC mode. The
@@ -282,16 +249,10 @@ If Excel or OneDrive locks the objective-history CSV, the fit continues and
 writes the complete history to a uniquely named recovered CSV. The completion
 message, settings JSON and report identify the actual file. If progress files
 cannot be written, the report still plots the in-memory history.
-Parallel Jacobian rows are written as each parameter trial completes, with its
-parameter path in the status column; their completion order may differ from
-the parameter list. The Jacobian columns themselves retain parameter order.
-If a worker pool stops making progress, unfinished trials are retried with
-two CPU workers using the same parameter values and solver. A trial that still
-exceeds its time limit raises an error naming the unfinished parameters instead
-of leaving JMP waiting indefinitely. The safety cap counts optimizer candidate
-evaluations, not the additional parameter trials needed for each Jacobian.
-For example, 44 unlocked parameters require up to 44 additional full-model
-simulations for each numerical Jacobian, so a cap of 100 is not 100 solves.
+The safety cap counts optimizer candidates, numerical Jacobian probes, and
+final verification. For example, 44 unlocked parameters require about 45
+model evaluations per full Jacobian and candidate, so a cap of 100 permits
+only a few optimizer steps.
 The supplied 1400-step/100-cell LSQ recipe can still take considerable time with
 all parameters unlocked. For a diagnostic fit, edit the separate LSQ recipe to
 use fewer time steps/cells; check the final result at full resolution.

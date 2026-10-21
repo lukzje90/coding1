@@ -24,6 +24,46 @@ OUTPUTS = ("FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
 
 
 class HistoryRecoveryTests(unittest.TestCase):
+    def test_fitted_mechanistic_shape_and_uv_response_reproduce_exported_trace(self):
+        truth = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        truth["numerics"].update(time_steps=50, axial_positions=6)
+        truth_trace = simulate(truth)["trace"]
+        initial = copy.deepcopy(truth)
+        initial["components"][0]["qmax_g_L"] *= 3
+        initial["conversion"]["uv_to_protein_mAU_L_g"] *= 0.5
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV 280 [mAU]"])
+                writer.writerows(zip(truth_trace["CV"], truth_trace["uv_mAU"]))
+            result_dir = root / "result"
+            result_dir.mkdir()
+            patched_outputs = {name: result_dir / getattr(lsq, name).name for name in OUTPUTS}
+            with patch.multiple(lsq, **patched_outputs):
+                result = lsq.run_global_least_squares_refinement(
+                    [{"config": initial, "chromatogram_csv": source}],
+                    unlocked_paths=["components[0].qmax_g_L",
+                                    "conversion.uv_to_protein_mAU_L_g"],
+                    max_nfev=15, max_model_evaluations=40)
+            fitted = result["fitted_config"]
+            reproduced = simulate(fitted)["trace"]
+            before = simulate(initial)["trace"]
+            self.assertTrue(result["accepted"])
+            self.assertLess(result["final_objective"], result["initial_objective"] * 1e-5)
+            self.assertAlmostEqual(fitted["components"][0]["qmax_g_L"],
+                                   truth["components"][0]["qmax_g_L"], delta=1)
+            self.assertAlmostEqual(fitted["conversion"]["uv_to_protein_mAU_L_g"],
+                                   truth["conversion"]["uv_to_protein_mAU_L_g"], delta=1)
+            self.assertGreater(np.max(np.abs(before["uv_mAU"] - reproduced["uv_mAU"])), 0.001)
+            with patched_outputs["FIT_TRACE_CSV"].open(newline="", encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+            np.testing.assert_allclose(
+                [float(row["Predicted_Detector_Signal"]) for row in rows],
+                np.interp([float(row["CV"]) for row in rows],
+                          reproduced["CV"], reproduced["uv_mAU"]), rtol=1e-8, atol=1e-8)
+
     def test_locked_progress_csv_keeps_mass_percent_fit_and_complete_history(self):
         truth = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
         truth["numerics"].update(time_steps=50, axial_positions=6)
@@ -62,8 +102,7 @@ class HistoryRecoveryTests(unittest.TestCase):
                 with patch.multiple(lsq, **patched_outputs), patch.object(Path, "open", controlled_open):
                     result = lsq.run_global_least_squares_refinement(
                         profiles, mode=lsq.MODE_CHROMATOGRAM_AND_COMPOSITION,
-                        unlocked_paths=["components[0].qmax_g_L"], max_nfev=2,
-                        parallel_workers=1)
+                        unlocked_paths=["components[0].qmax_g_L"], max_nfev=2)
                 history_path = Path(result["latest_fit_history_csv"])
                 self.assertTrue(history_path.is_file())
                 with history_path.open(newline="", encoding="utf-8") as stream:
@@ -116,8 +155,7 @@ class HistoryRecoveryTests(unittest.TestCase):
             with patch.multiple(lsq, **patched_outputs), patch.object(Path, "open", deny_history):
                 result = lsq.run_global_least_squares_refinement(
                     [{"config": truth, "chromatogram_csv": source}],
-                    unlocked_paths=["components[0].qmax_g_L"], max_nfev=2,
-                    parallel_workers=1)
+                    unlocked_paths=["components[0].qmax_g_L"], max_nfev=2)
             self.assertIsNone(result["latest_fit_history_csv"])
             settings = json.loads(patched_outputs["FIT_SETTINGS_JSON"].read_text())
             self.assertIsNone(settings["objective_history_csv"])

@@ -18,14 +18,12 @@ Optional composition observations add normalized composition residuals.
 
 from dataclasses import dataclass
 import codecs
-from concurrent.futures.process import BrokenProcessPool
 import copy
 import csv
 import html
 import io
 import json
 import math
-from multiprocessing import TimeoutError as ProcessTimeoutError
 import os
 from pathlib import Path
 import re
@@ -47,7 +45,6 @@ from tdm_minimal_io import (
     MODEL_TDM_LANGMUIR,
     MODEL_TDM_WANG,
     MAX_LSQ_PROFILES,
-    MAX_CPU_THREADS,
     active_components,
     canonical_fit_parameter_path,
     normalize_config,
@@ -57,7 +54,7 @@ from tdm_minimal_io import (
     validate_config,
     is_hic,
 )
-from tdm_minimal_model import simulate, _build_program, _svg_plot, _stage_receipt, can_spawn_model_workers
+from tdm_minimal_model import simulate, _build_program, _svg_plot, _stage_receipt
 
 PROJECT_DIR = Path(__file__).resolve().parent
 ATTACHED_CHROMATOGRAM_CSV = PROJECT_DIR / "least_squares_reference_chromatogram.csv"
@@ -1471,9 +1468,7 @@ def _objective_parts(
     composition_refs: list[dict[str, Any]],
     fit_conductivity: bool = False,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    # The fit's own worker count is the total CPU budget. Prevent each fit
-    # worker from spawning an additional native numerical thread pool.
-    result = simulate(cfg, native_threads=1)
+    result = simulate(cfg)
     chrom_r, chrom_info = _chromatogram_residuals(cfg, ref, result["trace"])
     cond_r = np.empty(0, dtype=float)
     cond_info = None
@@ -1505,43 +1500,8 @@ def _objective_parts(
     }
 
 
-class ParallelExecutionError(RuntimeError):
-    """A CPU worker failed outside the model objective; stop the fit."""
-
-
-def _objective_worker(cfg, ref, mode, composition_refs, fit_conductivity, detailed):
-    """Evaluate one run without writing fit state in a child process."""
-    try:
-        residual, info = _objective_parts(cfg, ref, mode, composition_refs, fit_conductivity)
-        return residual, info if detailed else None, None
-    except Exception as exc:
-        # Model errors remain candidate penalties; process startup/crash errors
-        # are raised by joblib itself and must stop the fit instead.
-        return None, None, f"{type(exc).__name__}: {exc}"
-
-
-def _trial_objective_worker(vector, base_configs, specs, profile_inputs, mode,
-                            scale_factors):
-    """One finite-difference parameter trial, evaluated in a CPU process."""
-    try:
-        blocks = []
-        for cfg, (ref, composition_refs, fit_conductivity), scale in zip(
-                base_configs, profile_inputs, scale_factors):
-            trial_cfg = _apply_vector(cfg, specs, vector)
-            residual, _ = _objective_parts(trial_cfg, ref, mode, composition_refs,
-                                           fit_conductivity)
-            blocks.append(residual * scale)
-        return np.concatenate(blocks), None
-    except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"
-
-
-def _indexed_trial_objective_worker(index, vector, base_configs, specs,
-                                    profile_inputs, mode, scale_factors):
-    """Return the trial index so unordered CPU results retain Jacobian columns."""
-    values, error = _trial_objective_worker(
-        vector, base_configs, specs, profile_inputs, mode, scale_factors)
-    return index, values, error
+class EvaluationBudgetReached(RuntimeError):
+    """Stop optimization before the selected model-evaluation budget is exceeded."""
 
 
 def _write_apply_jsl(config: dict[str, Any], specs: list[FitParameter]) -> None:
@@ -2024,7 +1984,7 @@ def run_global_least_squares_refinement(
     mode: str = MODE_CHROMATOGRAM,
     unlocked_paths: Iterable[str] | None = None,
     max_nfev: int = 60,
-    parallel_workers: int = 1,
+    max_model_evaluations: int | None = None,
 ) -> dict[str, Any]:
     """Fit one shared mechanistic parameter vector against selected run profiles.
 
@@ -2036,12 +1996,6 @@ def run_global_least_squares_refinement(
     profiles = list(profiles)
     if not 1 <= len(profiles) <= MAX_LSQ_PROFILES:
         raise ValueError(f"Global least-squares fitting requires 1–{MAX_LSQ_PROFILES} attached chromatogram profiles.")
-    try:
-        requested_workers = float(parallel_workers)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"CPU workers must be a whole number from 1 to {MAX_CPU_THREADS}.") from exc
-    if not math.isfinite(requested_workers) or not requested_workers.is_integer() or not 1 <= requested_workers <= MAX_CPU_THREADS:
-        raise ValueError(f"CPU workers must be a whole number from 1 to {MAX_CPU_THREADS}.")
     mode = str(mode or "").strip().upper()
     if mode not in SUPPORTED_MODES:
         raise ValueError("Least-squares mode must be CHROMATOGRAM or CHROMATOGRAM_AND_COMPOSITION.")
@@ -2149,21 +2103,19 @@ def run_global_least_squares_refinement(
         unlocked_paths=unlocked_paths,
         candidate_paths=candidate_paths,
     )
-    workers_used = min(int(requested_workers), max(len(profiles), len(specs)), os.cpu_count() or 1)
-    process_workers_available = can_spawn_model_workers()
-    if not process_workers_available:
-        workers_used = 1
-    worker_fallback_used = False
-    parallel = None
-    delayed = None
-    SingleWorkerExecutor = None
-    if workers_used > 1:
-        try:
-            from joblib import Parallel, delayed
-            from joblib.externals.loky import ProcessPoolExecutor as SingleWorkerExecutor
-        except ImportError as exc:
-            raise ParallelExecutionError("Parallel fitting requires joblib. Install requirements.txt or select one CPU worker.") from exc
-        parallel = Parallel(n_jobs=workers_used, backend="loky")
+    if max_model_evaluations is not None:
+        if int(max_model_evaluations) != max_model_evaluations or max_model_evaluations < 2:
+            raise ValueError("Model-evaluation safety cap must be a whole number of at least 2.")
+        # One candidate and a complete numerical Jacobian are needed before
+        # SciPy can make a meaningful parameter step. Keep one evaluation for
+        # final verification, which is included in the displayed count.
+        required = len(specs) + 2 if specs else 1
+        if max_model_evaluations < required:
+            raise ValueError(
+                f"Model-evaluation safety cap {max_model_evaluations} is too small for "
+                f"{len(specs)} unlocked parameters. Select at least {required} to allow "
+                "one complete Jacobian and final verification."
+            )
     x0, lo, hi = _encode_initial(specs)
     n_profiles = len(normalized_profiles)
     normalized_objective = first["least_squares"]["objective"] == "NORMALIZED_MSE"
@@ -2173,69 +2125,20 @@ def run_global_least_squares_refinement(
     for profile in normalized_profiles:
         if profile["config"]["least_squares"]["objective"] != first["least_squares"]["objective"] or profile["config"]["chromatography_mode"] != first["chromatography_mode"]:
             raise ValueError("Global profiles must use the same objective and chromatography mode.")
-    comp_refs_by_profile: list[list[dict[str, Any]]] = [p["composition_references"] for p in normalized_profiles]
-
     def evaluate(configs: list[dict[str, Any]], *, detailed: bool = True) -> tuple[np.ndarray, list[dict[str, Any] | None]]:
-        nonlocal workers_used, parallel, worker_fallback_used
         residual_blocks = []
         infos = []
-        if worker_fallback_used:
-            # Keep a worker crash isolated from JMP, including if the same
-            # perturbed parameters trigger a native-library segmentation fault.
-            try:
-                with SingleWorkerExecutor(max_workers=1) as executor:
-                    parts = [executor.submit(
-                        _objective_worker, cfg, prof["reference"], mode,
-                        comp_refs, prof["fit_conductivity"], detailed,
-                    ).result() for cfg, prof, comp_refs in zip(
-                        configs, normalized_profiles, comp_refs_by_profile)]
-            except BrokenProcessPool as exc:
-                raise ParallelExecutionError(
-                    "A model-evaluation worker terminated even after reducing CPU use. "
-                    "No fitted parameters were applied; inspect the objective history and "
-                    "retry with fewer unlocked parameters or a smaller grid."
-                ) from exc
-        elif parallel is None or n_profiles == 1:
-            parts = [(*_objective_parts(cfg, prof["reference"], mode, comp_refs, prof["fit_conductivity"]), None)
-                     for cfg, prof, comp_refs in zip(configs, normalized_profiles, comp_refs_by_profile)]
-        else:
-            try:
-                parts = parallel(
-                    delayed(_objective_worker)(cfg, prof["reference"], mode, comp_refs,
-                                               prof["fit_conductivity"], detailed)
-                    for cfg, prof, comp_refs in zip(configs, normalized_profiles, comp_refs_by_profile)
-                )
-            except BrokenProcessPool:
-                # A terminated worker can leave a multi-run objective pool
-                # unusable. Re-evaluate the same configs with fewer processes.
-                worker_fallback_used = True
-                workers_used = 2 if workers_used > 2 else 1
-                parallel = Parallel(n_jobs=workers_used, backend="loky") if workers_used > 1 else None
-                return evaluate(configs, detailed=detailed)
-            except Exception as exc:
-                raise ParallelExecutionError(
-                    f"CPU worker execution failed: {type(exc).__name__}: {exc}. Select one CPU worker to run serially."
-                ) from exc
-        for (r, info, error), normalized_weight in zip(parts, run_weights):
-            if error is not None:
-                raise ValueError(error)
-            # WEIGHTED_RMSE: sum_r alpha_r * (sum_j w_rj e_rj² / sum_j w_rj).
-            # Minimizing its square root is equivalent to minimizing its SSE
-            # residual vector (SciPy's least_squares contract).
+        for cfg, profile, normalized_weight in zip(configs, normalized_profiles, run_weights):
+            r, info = _objective_parts(cfg, profile["reference"], mode,
+                                       profile["composition_references"], profile["fit_conductivity"])
+            # Preserve the original objective and run weighting exactly.
             scale_factor = math.sqrt(float(normalized_weight)) if weighted_objective else (1.0 / math.sqrt(n_profiles) if normalized_objective else 1.0)
             residual_blocks.append(r * scale_factor)
             infos.append(info if detailed else None)
         return np.concatenate(residual_blocks), infos
 
     base_configs = [copy.deepcopy(p["config"]) for p in normalized_profiles]
-    scale_factors = [math.sqrt(float(weight)) if weighted_objective else
-                     (1.0 / math.sqrt(n_profiles) if normalized_objective else 1.0)
-                     for weight in run_weights]
-    profile_inputs = [(p["reference"], p["composition_references"], p["fit_conductivity"])
-                      for p in normalized_profiles]
-    initial_started = time.perf_counter()
     initial_r, initial_infos = evaluate(base_configs)
-    initial_seconds = time.perf_counter() - initial_started
     initial_obj = float(np.sum(initial_r ** 2))
     fit_started = time.perf_counter()
     best_objective = initial_obj
@@ -2246,6 +2149,9 @@ def run_global_least_squares_refinement(
         "phase": "initial", "status": "ok",
     }]
     eval_count = 0
+    candidate_evaluations = 0
+    budget_reached = False
+    optimizer_budget = None if max_model_evaluations is None else int(max_model_evaluations) - 1
     history_fields = ["evaluation", "elapsed_seconds", "objective", "best_objective", "improvement_percent", "phase", "status"]
     history_path: Path | None = FIT_HISTORY_CSV
     history_backup = FIT_HISTORY_CSV.with_name(
@@ -2307,9 +2213,13 @@ def run_global_least_squares_refinement(
 
     write_history()
 
-    def residual(vector: np.ndarray) -> np.ndarray:
-        nonlocal eval_count, best_vector
+    def residual(vector: np.ndarray, phase: str = "optimizer") -> np.ndarray:
+        nonlocal eval_count, best_vector, candidate_evaluations
+        if optimizer_budget is not None and eval_count >= optimizer_budget:
+            raise EvaluationBudgetReached("Selected model-evaluation safety cap reached.")
         eval_count += 1
+        if phase == "optimizer":
+            candidate_evaluations += 1
         try:
             candidates = [_apply_vector(cfg, specs, vector) for cfg in base_configs]
             values, _infos = evaluate(candidates, detailed=False)
@@ -2318,127 +2228,38 @@ def run_global_least_squares_refinement(
                 raise FloatingPointError("non-finite global residual")
             if objective < best_objective:
                 best_vector = np.asarray(vector).copy()
-            record(objective, "optimizer", "ok")
+            record(objective, phase, "ok")
             return values
-        except ParallelExecutionError:
+        except EvaluationBudgetReached:
             raise
         except Exception as exc:
             penalty = np.full_like(initial_r, 1e6, dtype=float)
-            record(float(np.sum(penalty * penalty)), "optimizer", f"penalty: {type(exc).__name__}: {exc}")
+            record(float(np.sum(penalty * penalty)), phase, f"penalty: {type(exc).__name__}: {exc}")
             return penalty
 
-    def batch_residual(vectors: list[np.ndarray]) -> list[np.ndarray]:
-        """Stream completed trials, preserving their original Jacobian columns."""
-        nonlocal eval_count, best_vector, workers_used, parallel, worker_fallback_used
-        outputs: list[np.ndarray | None] = [None] * len(vectors)
-        pending = set(range(len(vectors)))
-        # A trial can legitimately take longer than the initial solve. Bound
-        # the wait so one stiff trajectory or overloaded worker pool cannot
-        # silently hold the whole Jacobian for days. Retrying uses identical
-        # parameter vectors and the same solver; no derivative is approximated.
-        trial_timeout = max(180.0, min(1200.0, 4.0 * initial_seconds * n_profiles + 120.0))
-
-        def receive(index: int, values: np.ndarray | None, error: str | None) -> None:
-            nonlocal eval_count, best_vector
-            if index not in pending:
-                raise ParallelExecutionError(f"Duplicate Jacobian result for {specs[index].path}.")
-            pending.remove(index)
-            eval_count += 1
-            if error is None:
-                objective = float(np.sum(values * values))
-                if not np.all(np.isfinite(values)) or not math.isfinite(objective):
-                    error = "FloatingPointError: non-finite global residual"
-            if error is not None:
-                values = np.full_like(initial_r, 1e6, dtype=float)
-                objective = float(np.sum(values * values))
-                status = f"penalty: {error}"
-            else:
-                if objective < best_objective:
-                    best_vector = np.asarray(vectors[index]).copy()
-                status = "ok"
-            record(objective, "jacobian", f"{status}; parameter={specs[index].path}")
-            outputs[index] = values
-
-        def dispatch(indices: list[int], count: int, timeout_seconds: float) -> None:
-            if count == 1:
-                with SingleWorkerExecutor(max_workers=1) as executor:
-                    for index in indices:
-                        result = executor.submit(
-                            _indexed_trial_objective_worker, index, vectors[index],
-                            base_configs, specs, profile_inputs, mode,
-                            scale_factors).result(timeout=timeout_seconds)
-                        receive(*result)
-                return
-            stream = Parallel(n_jobs=count, backend="loky", batch_size=1,
-                              pre_dispatch=count, return_as="generator_unordered",
-                              timeout=timeout_seconds)(
-                delayed(_indexed_trial_objective_worker)(
-                    index, vectors[index], base_configs, specs, profile_inputs,
-                    mode, scale_factors)
-                for index in indices
-            )
-            for index, values, error in stream:
-                receive(index, values, error)
-
-        while pending:
-            try:
-                dispatch(sorted(pending), workers_used, trial_timeout)
-            except (TimeoutError, ProcessTimeoutError) as exc:
-                if workers_used <= 2:
-                    paths = ", ".join(specs[i].path for i in sorted(pending))
-                    raise ParallelExecutionError(
-                        f"Jacobian trial exceeded {trial_timeout:.0f} seconds after retrying "
-                        f"with {workers_used} CPU workers. Unfinished parameter(s): {paths}. "
-                        "No fitted parameters were applied; inspect these starting values or "
-                        "lock a problematic parameter before another fit."
-                    ) from exc
-                # A busy pool may stall even when a single solve succeeds.
-                # Retry only unfinished probes with the same vectors.
-                worker_fallback_used = True
-                workers_used = 2
-                parallel = Parallel(n_jobs=workers_used, backend="loky")
-                trial_timeout *= 3.0
-            except BrokenProcessPool as exc:
-                if workers_used == 1:
-                    paths = ", ".join(specs[i].path for i in sorted(pending))
-                    raise ParallelExecutionError(
-                        "A parameter-trial worker terminated even with one isolated CPU process. "
-                        f"Unfinished parameter(s): {paths}. No fitted parameters were applied; "
-                        "inspect those starting values or lock them before another fit."
-                    ) from exc
-                # OOM or another worker crash invalidates the pool. The
-                # initial serial simulation succeeded, so finish the same
-                # Jacobian trials with fewer isolated processes.
-                worker_fallback_used = True
-                workers_used = 2 if workers_used > 2 else 1
-                parallel = Parallel(n_jobs=workers_used, backend="loky") if workers_used > 1 else None
-            except Exception as exc:
-                raise ParallelExecutionError(
-                    f"CPU worker execution failed: {type(exc).__name__}: {exc}. "
-                    "The completed parameter trials are recorded in the objective history."
-                ) from exc
-        if pending:
-            raise ParallelExecutionError(
-                "Jacobian worker results are missing for: "
-                + ", ".join(specs[i].path for i in sorted(pending)))
-        return outputs
+    def serial_jacobian(vectors: list[np.ndarray]) -> list[np.ndarray]:
+        return [residual(vector, "jacobian") for vector in vectors]
 
     if specs:
         cached_residual = _cache_last_evaluation(residual)
-        opt = least_squares(
-            cached_residual,
-            x0,
-            bounds=(lo, hi),
-            jac=_bounded_jacobian(cached_residual, lo, hi,
-                                  batch_residual if parallel is not None and len(specs) > 1 else None),
-            method=_optimizer_method(x0, lo, hi),
-            loss="linear",
-            x_scale="jac",
-            ftol=1e-4,
-            xtol=1e-4,
-            gtol=1e-7,
-            max_nfev=max(2, int(max_nfev)),
-        )
+        try:
+            opt = least_squares(
+                cached_residual,
+                x0,
+                bounds=(lo, hi),
+                jac=_bounded_jacobian(cached_residual, lo, hi, serial_jacobian),
+                method=_optimizer_method(x0, lo, hi),
+                loss="linear",
+                x_scale="jac",
+                ftol=1e-4,
+                xtol=1e-4,
+                gtol=1e-7,
+                max_nfev=max(2, int(max_nfev)),
+            )
+        except EvaluationBudgetReached as exc:
+            budget_reached = True
+            opt = SimpleNamespace(x=x0.copy(), success=False, message=str(exc),
+                                  nfev=candidate_evaluations)
         if best_vector is None:
             fitted_configs = [copy.deepcopy(cfg) for cfg in base_configs]
             opt.x = np.asarray([math.log10(float(_get_path(seed, spec.path))) if spec.transform == "LOG10"
@@ -2459,8 +2280,6 @@ def run_global_least_squares_refinement(
         final_obj = float(np.sum(final_r ** 2))
         if not math.isfinite(final_obj):
             raise FloatingPointError("non-finite final global objective")
-    except ParallelExecutionError:
-        raise
     except Exception as exc:
         fitted_configs = [copy.deepcopy(cfg) for cfg in base_configs]
         final_r, final_infos = initial_r, initial_infos
@@ -2667,10 +2486,8 @@ def run_global_least_squares_refinement(
         "fitted_parameter_paths": [s.path for s in specs],
         "locked_parameter_paths": [p for p in candidate_paths if p not in {s.path for s in specs}],
         "max_nfev": int(max_nfev),
-        "parallel_workers_requested": int(requested_workers),
-        "parallel_workers_used": workers_used,
-        "parallel_process_workers_available": process_workers_available,
-        "parallel_worker_fallback_used": worker_fallback_used,
+        "max_model_evaluations": int(max_model_evaluations) if max_model_evaluations is not None else None,
+        "evaluation_cap_reached": budget_reached,
         "composition_profile_metrics": composition_profile_metrics,
         "objective_history_csv": str(history_path) if history_path else None,
         "objective_history_write_error": history_write_error,
@@ -2725,6 +2542,17 @@ def run_global_least_squares_refinement(
             f' vs {html.escape(profile["run_context"]["model_run_label"])}</h3>' + plot)
     overlays_html = "".join(profile_plots)
     improvement = _objective_improvement_percent(initial_obj, final_obj)
+    fit_quality_warning = ""
+    poor_uv_runs = [str(row["run_number"]) for row in metric_rows
+                    if math.isfinite(row["r_squared"]) and row["r_squared"] < 0.8]
+    if poor_uv_runs:
+        fit_quality_warning = ("Measured and fitted UV remain materially different for run(s) "
+                               + ", ".join(poor_uv_runs)
+                               + " (UV R² below 0.8). Accepted means the best tested objective did not worsen; "
+                               "it does not mean the measured chromatogram was matched.")
+    elif budget_reached:
+        fit_quality_warning = ("The model-evaluation safety cap stopped optimization before convergence. "
+                               "The best tested parameters were retained.")
     history_plot = _objective_history_svg(history)
     if history_path is None:
         history_file_html = "History CSV could not be written; the complete history is plotted below."
@@ -2740,15 +2568,18 @@ def run_global_least_squares_refinement(
     fit_elapsed_hms = _format_elapsed_hms(fit_elapsed_seconds)
     settings["fit_elapsed_seconds"] = fit_elapsed_seconds
     settings["fit_elapsed_hms"] = fit_elapsed_hms
+    settings["model_residual_evaluations"] = eval_count
+    settings["fit_quality_warning"] = fit_quality_warning
     FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
     FIT_REPORT_HTML.write_text(f"""<!doctype html>
 <meta charset="utf-8"><title>Global least-squares refinement</title>
 <style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
 <h1>Global least-squares refinement</h1>
 <p><b>Elapsed fit time:</b> {fit_elapsed_hms} ({fit_elapsed_seconds:.1f} seconds). Measured from loading the selected reference profiles through fitted output preparation.</p>
-<p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}; <b>CPU worker processes:</b> {workers_used} (requested {int(requested_workers)}; stalled-pool fallback: {worker_fallback_used}; process workers available: {process_workers_available})</p>
+<p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
-<b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Evaluation safety cap:</b> {int(max_nfev)}; <b>Unlocked parameters:</b> {len(specs)}.</p>
+<b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Evaluation safety cap:</b> {int(max_model_evaluations) if max_model_evaluations is not None else int(max_nfev)}; <b>Unlocked parameters:</b> {len(specs)}. The model-evaluation cap includes optimizer candidates, finite-difference Jacobian probes, and final verification; the initial reference calculation is logged at evaluation 0.</p>
+{f'<p><b>Fit quality warning:</b> {html.escape(fit_quality_warning)}</p>' if fit_quality_warning else ''}
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise UV equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor. Conductivity, when enabled for a run, adds measured detector residuals normalized by that run's conductivity signal scale and sample count; in RAW_SSE these are rescaled to the measured UV scale.</p>
 <table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>UV RMSE</th><th>Weighted UV RMSE</th><th>Run weight</th><th>UV R²</th><th>Conductivity RMSE [mS/cm]</th></tr></thead><tbody>{profile_rows}</tbody></table>
 {composition_metrics_html}
@@ -2769,11 +2600,10 @@ def run_global_least_squares_refinement(
         "improvement_percent": improvement,
         "nfev": opt_nfev,
         "residual_evaluations": eval_count,
+        "evaluation_cap_reached": budget_reached,
+        "fit_quality_warning": fit_quality_warning,
         "fit_elapsed_seconds": fit_elapsed_seconds,
         "fit_elapsed_hms": fit_elapsed_hms,
-        "parallel_workers_used": workers_used,
-        "parallel_process_workers_available": process_workers_available,
-        "parallel_worker_fallback_used": worker_fallback_used,
         "composition_profile_metrics": composition_profile_metrics,
         "mode": mode,
         "profile_metrics": metric_rows,
