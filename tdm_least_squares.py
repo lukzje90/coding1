@@ -1009,6 +1009,11 @@ def validate_composition_references(
             if not math.isfinite(value) or value < 0 or value > 100:
                 raise ValueError(f"Fraction {k}: mass% for {name} must be between 0 and 100.")
             measured[name] = value
+        # Blank cells intentionally mean unmeasured species, so a partial row
+        # need not total 100%. Even a partial row cannot exceed the available
+        # 100% mass-fraction budget, allowing modest assay rounding.
+        if sum(measured.values()) > 100.5:
+            raise ValueError(f"Fraction {k}: entered species mass% total exceeds 100%. Check the assay basis and species mapping.")
         out.append({"CV": cv, "fraction_index": fraction_index,
                     "start": start, "end": end, "x_unit": unit,
                     "legacy_point": legacy_point,

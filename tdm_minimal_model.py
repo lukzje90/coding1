@@ -1675,8 +1675,16 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
     stage_chemistry_used = _stage_receipt(config, program)
     affinity_used = _langmuir_affinity_receipt(config, stage_chemistry_used)
     nominal_saturation = _nominal_langmuir_saturation(config)
+    bed_length_m, bed_volume_m3, bed_area_m2 = _column_geometry(config)
     parameter_receipt = {
         "required_inputs_used": required_parameter_values(config),
+        "column_geometry_used": {
+            "bed_length_mm": bed_length_m * 1000.0,
+            "column_volume_mL": bed_volume_m3 * 1e6,
+            "cross_sectional_area_mm2": bed_area_m2 * 1e6,
+            "derived_internal_diameter_mm": 2.0 * math.sqrt(bed_area_m2 / math.pi) * 1000.0,
+            "load_residence_time_min": bed_volume_m3 * 1e6 / float(program.stages[0].flow_mL_min),
+        },
         "initial_equilibration_used": dict(program.initial_chemistry or {}),
         "derived_species_feed_concentration_mg_mL": {
             str(r["name"]): float(config["feed"]["total_concentration_mg_mL"]) * float(r["mass_percent"]) / 100.0

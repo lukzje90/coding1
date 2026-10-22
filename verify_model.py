@@ -1595,5 +1595,15 @@ def main() -> None:
 if __name__ == '__main__':
     if '--buttons-only' in sys.argv:
         verify_button_paths()
-    else:
+    elif '--legacy' in sys.argv:
+        # The original 22-step checks refer to older JMP labels and are kept
+        # only for historical comparisons.
         main()
+    else:
+        # This is the maintained verification entry point for the current UI
+        # and all five model combinations.
+        import subprocess
+        raise SystemExit(subprocess.call(
+            [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-q'],
+            cwd=ROOT,
+        ))

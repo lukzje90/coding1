@@ -1274,14 +1274,24 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
     for key, label, max_count in (("plw_steps", "PLW", MAX_PLW_STEPS), ("elution_steps", "Elution", MAX_ELUTION_STEPS)):
         count_key = "plw_count" if key == "plw_steps" else "elution_count"
         try:
-            count = int(float(p.get(count_key, 0)))
-            if not 0 <= count <= max_count:
-                errors.append(f"{label} step count must be 0-{max_count}.")
+            raw_count = float(p.get(count_key, 0))
+            count = int(raw_count)
+            if not math.isfinite(raw_count) or raw_count != count or not 0 <= count <= max_count:
+                errors.append(f"{label} step count must be a whole number from 0-{max_count}.")
                 count = 0
-        except Exception:
-            errors.append(f"{label} step count must be 0-{max_count}.")
+        except (TypeError, ValueError, OverflowError):
+            errors.append(f"{label} step count must be a whole number from 0-{max_count}.")
             count = 0
-        for i, step in enumerate(list(p.get(key, []))[:count], start=1):
+        stored_steps = p.get(key, [])
+        if not isinstance(stored_steps, list):
+            errors.append(f"{label} stages must be stored as a list.")
+            stored_steps = []
+        if len(stored_steps) < count:
+            errors.append(f"{label} declares {count} active stages but only {len(stored_steps)} stage record(s) are stored.")
+        for i, step in enumerate(stored_steps[:count], start=1):
+            if not isinstance(step, dict):
+                errors.append(f"{label} {i} stage record must be a set of process fields.")
+                continue
             mode = str(step.get("mode") or "").upper()
             if mode not in PROCESS_MODES:
                 errors.append(f"{label} {i} mode must be SET_POINT, LINEAR or STEP.")
@@ -1848,8 +1858,21 @@ def batch_row_to_run_config(row: dict[str, Any]) -> dict[str, Any]:
             ion["species"] = str(row.get(f"{prefix}_Ion{i}_Species") or "").strip()
             ion["concentration_M"] = _as_float(row.get(f"{prefix}_Ion{i}_Concentration_M"))
             ion["valency"] = _as_float(row.get(f"{prefix}_Ion{i}_Valency"))
-    p["plw_count"] = min(max(_as_int(row.get("PLW_Count"), 0), 0), MAX_PLW_STEPS)
-    p["elution_count"] = min(max(_as_int(row.get("Elution_Count"), 0), 0), MAX_ELUTION_STEPS)
+    def active_stage_count(field: str, maximum: int) -> int:
+        value = row.get(field)
+        if _missing(value):
+            return 0
+        try:
+            numeric = float(value)
+            count = int(numeric)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{field} must be a whole number from 0-{maximum}.") from exc
+        if not math.isfinite(numeric) or numeric != count or not 0 <= count <= maximum:
+            raise ValueError(f"{field} must be a whole number from 0-{maximum}.")
+        return count
+
+    p["plw_count"] = active_stage_count("PLW_Count", MAX_PLW_STEPS)
+    p["elution_count"] = active_stage_count("Elution_Count", MAX_ELUTION_STEPS)
     for prefix, key, max_count in (("PLW", "plw_steps", MAX_PLW_STEPS), ("Elution", "elution_steps", MAX_ELUTION_STEPS)):
         for i in range(1, max_count + 1):
             step = p[key][i-1]

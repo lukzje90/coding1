@@ -1,4 +1,18 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25h)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25i)
+
+SAVED PROCESS INPUT CHECKS (R25i)
+Active wash and elution counts must be whole numbers within the supported
+range. The model rejects a recipe that declares more active stages than its
+stored stage array contains, including saved run rows with invalid counts.
+The result receipt now lists the bed length, volume, derived cross-section and
+diameter, and load residence time actually used by the solver. Compare these
+against measured column dimensions before fitting; the derived diameter is
+not an independently measured input. Variable-flow fraction integration and
+stage validation are covered by automated tests. Fraction mass% entries are
+also rejected if their populated species sum exceeds 100.5% (a small allowance
+for assay rounding); partial rows remain valid when other species are blank.
+Run verify_model.py for the maintained regression suite; its older 22-step
+checks remain available only with --legacy.
 
 FRACTION MASS% AND CHROMATOGRAPHY MODE (R25h)
 Each entered fraction's predicted species mass% now comes from integrating
@@ -100,7 +114,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25h_package.marker beside the launcher and Python files. Run the saved
+tdm_r25i_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)
