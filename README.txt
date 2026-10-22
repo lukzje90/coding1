@@ -1,4 +1,16 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25i)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25j)
+
+PER-PARAMETER LSQ FIT LIMITS (R25j)
+Each model parameter keeps its LSQ Locked/Unlocked selector and now has an
+optional Fit ±% limit. Choose Limited and enter a percentage greater than zero
+and at most 1000. An unlocked parameter can move only that far from its value
+at the start of refinement, within its existing model bounds. Default
+retains the previous bounds. For a zero-valued linear parameter, the entered
+percentage uses the full previous bound span so it can move away from zero.
+The fit report and parameter CSV show the applied percentage and actual
+allowed minimum and maximum. The former repeated residual-DOF column was
+removed; it did not control fitting. Normal simulations do not use these LSQ
+limits.
 
 SAVED PROCESS INPUT CHECKS (R25i)
 Active wash and elution counts must be whole numbers within the supported
@@ -23,9 +35,7 @@ observations. Overlapping fractions and fractions outside the simulated run
 are rejected. The fit report has a separate chromatogram with measured and
 predicted fraction mass% overlaid on UV, and lists the initial and fitted UV
 RMSE so a joint fit can be assessed channel by channel. Each unlocked
-parameter row has the shared residual degrees of freedom (number of fitted
-observations minus unlocked parameters); this is not a separate independent
-degree of freedom for that parameter. The fit CSV flags fractions below a
+parameter row identifies its protein or impurity. The fit CSV flags fractions below a
 1e-12 g/L numerical concentration floor; this is not an assay detection limit.
 CPA with TDM or EDM is ion
 exchange; Competitive Langmuir with TDM or EDM and TDM Modified Wang are HIC.
@@ -114,7 +124,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25i_package.marker beside the launcher and Python files. Run the saved
+tdm_r25j_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

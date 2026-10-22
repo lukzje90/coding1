@@ -200,7 +200,7 @@ def blank_config() -> dict[str, Any]:
         "wang": {"q0_g_L": 20.0, "eta": 1.0},
         "system": system_defaults(),
         "least_squares": {"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
-                          "unlocked_paths": None, "selected_run_numbers": None},
+                          "unlocked_paths": None, "selected_run_numbers": None, "fit_range_percent": {}},
         "impurity_count": 0,
         "column": {
             "volume_mL": None,
@@ -270,7 +270,10 @@ def deep_merge(base: Any, incoming: Any) -> Any:
         out = dict(base)
         for key, value in incoming.items():
             if key in out:
-                out[key] = deep_merge(out[key], value)
+                # Fit-range keys are parameter paths chosen at runtime, not a
+                # fixed schema. Keep them through load, normalization and the
+                # shared-parameter merge used by every selected LSQ run.
+                out[key] = dict(value) if key == "fit_range_percent" and isinstance(value, dict) else deep_merge(out[key], value)
         return out
     if isinstance(base, list) and isinstance(incoming, list):
         out = list(base)
@@ -344,7 +347,13 @@ def normalize_config(config: Any) -> Any:
                 defaults["salt_dispersion_mm2_s"] = legacy_salt_d
             out["system"] = deep_merge(defaults, out.get("system", {}))
             out["least_squares"] = deep_merge({"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
-                                                "unlocked_paths": None, "selected_run_numbers": None}, out.get("least_squares", {}))
+                                                "unlocked_paths": None, "selected_run_numbers": None,
+                                                "fit_range_percent": {}}, out.get("least_squares", {}))
+            if isinstance(out["least_squares"]["fit_range_percent"], dict):
+                out["least_squares"]["fit_range_percent"] = {
+                    canonical_fit_parameter_path(path): percent
+                    for path, percent in out["least_squares"]["fit_range_percent"].items()
+                }
             out["least_squares"].pop("parallel_workers", None)
             out["numerics"] = deep_merge({"time_steps": 700, "axial_positions": 40}, out.get("numerics", {}))
             out["numerics"].pop("cpu_threads", None)

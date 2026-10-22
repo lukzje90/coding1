@@ -78,6 +78,14 @@ def _num(value: Any) -> str:
         return "."
 
 
+class _FitControlRegistry(list[tuple[str, str]]):
+    """Keep fit-lock paths and their saved optional range limits together."""
+
+    def __init__(self, fit_range_percent: dict[str, Any]):
+        super().__init__()
+        self.fit_range_percent = fit_range_percent
+
+
 def _nrow(label: str, var: str, value: Any, label_width: int = 290,
           on_change: str | None = None, *, fit_path: str | None = None,
           fit_lock_vars: list[tuple[str, str]] | None = None,
@@ -93,6 +101,15 @@ def _nrow(label: str, var: str, value: Any, label_width: int = 290,
         )
         if fit_lock_vars is not None:
             fit_lock_vars.append((lock_var, fit_path))
+            saved_range = getattr(fit_lock_vars, "fit_range_percent", {}).get(fit_path)
+            range_enabled = saved_range is not None
+            range_value = saved_range if range_enabled else 20.0
+            lock_control += (
+                f', Text Box("Fit ±%", << Set Width(48)), '
+                f'{var}FitRangeMode = Combo Box({{"Default", "Limited"}}, '
+                f'<< Set({2 if range_enabled else 1}), << Set Width(82)), '
+                f'{var}FitRangePercent = Number Edit Box({_num(range_value)}, 9, << Set Width(70))'
+            )
     return f'H List Box(Text Box({_q(label)}, << Set Width({label_width})), {var} = Number Edit Box({_num(value)}, 9, << Set Width(92){callback}){lock_control})'
 
 
@@ -362,7 +379,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         batch_count = 1
 
     component_bodies, component_sends, component_vis = [], [], []
-    fit_lock_vars: list[tuple[str, str]] = []
+    fit_lock_vars = _FitControlRegistry(cfg["least_squares"].get("fit_range_percent") or {})
     default_unlocked_paths = _default_lsq_unlocked_paths(cfg)
     if cfg["least_squares"].get("unlocked_paths") is None:
         # Seed each model's usual fit controls only when no explicit locks were
@@ -567,6 +584,16 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         lock_state_parts.extend([_q(parameter_path + "="), f'{lock_var} << Get Selected', _q(";")])
     if lock_state_parts:
         sends.append('Python Send(Concat(' + ", ".join(lock_state_parts) + '), Python Name("tdm_ui_lsq_parameter_lock_states"));')
+    range_chunks = []
+    for offset in range(0, len(fit_lock_vars), 20):
+        range_parts = []
+        for lock_var, parameter_path in fit_lock_vars[offset:offset + 20]:
+            var = lock_var.removesuffix("FitLock")
+            range_parts.extend([_q(parameter_path + "|"), f'{var}FitRangeMode << Get Selected',
+                                _q("|"), f'Char({var}FitRangePercent << Get)', _q(";")])
+        range_chunks.append('Concat(' + ", ".join(range_parts) + ')')
+    if range_chunks:
+        sends.append('Python Send(Concat(' + ", ".join(range_chunks) + '), Python Name("tdm_ui_lsq_parameter_fit_ranges"));')
     set_all_lock_lines = " ".join(
         f'{lock_var} << Set(If(Uppercase(Char(state)) == "UNLOCKED", 2, 1));'
         for lock_var, _parameter_path in fit_lock_vars
@@ -1477,6 +1504,7 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                     {wang_eta_row}
                 )),
                 Text Box("LSQ changes only unlocked model parameters. Run recipes and column geometry stay fixed.", << Set Wrap(760)),
+                Text Box("Fit ±%: choose Limited to restrict an unlocked parameter around its starting value. Default uses the model bounds.", << Set Wrap(760)),
                 {', '.join(component_bodies)}
             )),
             "Least-Squares Refinement",
@@ -1548,7 +1576,8 @@ UpdateLSQRunSummary();
     for lock_var, path in fit_lock_vars:
         final_lock_parts.extend([_q(path + "="), f'{lock_var} << Get Selected', _q(";")])
     final_send = 'Python Send(Concat(' + ", ".join(final_lock_parts) + '), Python Name("tdm_ui_lsq_parameter_lock_states"));'
-    jsl = jsl.replace(sends[-1], final_send) if 'tdm_ui_lsq_parameter_lock_states' in sends[-1] else jsl
+    lock_send = next((send for send in sends if 'tdm_ui_lsq_parameter_lock_states' in send), None)
+    jsl = jsl.replace(lock_send, final_send) if lock_send is not None else jsl
     final_lock_lines = " ".join(f'{var} << Set(If(Uppercase(Char(state)) == "UNLOCKED", 2, 1));' for var, _ in fit_lock_vars)
     jsl = jsl.replace(set_all_lock_lines, final_lock_lines)
     return jsl

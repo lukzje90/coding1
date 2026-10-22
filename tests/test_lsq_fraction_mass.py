@@ -112,8 +112,7 @@ class FractionMassTests(unittest.TestCase):
                                 for row in mass_rows), 0.02)
             self.assertIn("UV chromatogram with collected fraction mass%", report_html)
             self.assertIn("Mass% (right axis)", report_html)
-            self.assertEqual({int(row["Residual_DOF"]) for row in parameter_rows if row["Fit_State"] == "Unlocked"},
-                             {len(cv) * 2 + len(mass_rows) - 2})
+            self.assertNotIn("Residual_DOF", parameter_rows[0])
 
     def test_tdm_cpa_four_species_fraction_profile_refines_wrong_parameter(self):
         truth = make_config(MODEL_TDM_CPA, 3, multistep=False)

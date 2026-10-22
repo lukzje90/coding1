@@ -894,6 +894,51 @@ def _report_parameter_label(config: dict[str, Any], path: str, field_label: str 
     return f"{role} ({name}) — {field_label or match.group(2)}"
 
 
+def _limit_fit_specs(config: dict[str, Any], specs: list[FitParameter]) -> list[FitParameter]:
+    """Intersect optional ±% movement limits with the model's physical bounds."""
+    limits = config.get("least_squares", {}).get("fit_range_percent") or {}
+    if not isinstance(limits, dict):
+        raise ValueError("Per-parameter LSQ fit ranges must be a path-to-percentage mapping.")
+    limited: list[FitParameter] = []
+    for spec in specs:
+        entered = limits.get(spec.path)
+        if entered is None:
+            limited.append(spec)
+            continue
+        try:
+            percent = float(entered)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{spec.label}: ±% fit range must be numeric.") from exc
+        if not math.isfinite(percent) or not 0 < percent <= 1000:
+            raise ValueError(f"{spec.label}: ±% fit range must be greater than 0 and at most 1000.")
+        fraction = percent / 100.0
+        if spec.transform == "LOG10":
+            start = 10.0 ** spec.initial
+            requested_lower = (math.log10(start * (1.0 - fraction))
+                               if fraction < 1.0 else spec.lower)
+            requested_upper = math.log10(start * (1.0 + fraction))
+        else:
+            # A percentage of zero would freeze a parameter. Use the physical
+            # default bound span for a zero-valued starting parameter.
+            delta = fraction * (abs(spec.initial) if spec.initial != 0
+                                else spec.upper - spec.lower)
+            requested_lower = spec.initial - delta
+            requested_upper = spec.initial + delta
+        lower = max(spec.lower, requested_lower)
+        upper = min(spec.upper, requested_upper)
+        if not lower < upper:
+            raise ValueError(f"{spec.label}: ±% fit range leaves no feasible movement within the physical bounds.")
+        limited.append(FitParameter(spec.path, spec.label, spec.transform,
+                                    lower, upper, spec.initial))
+    return limited
+
+
+def _physical_fit_bounds(spec: FitParameter) -> tuple[float, float]:
+    if spec.transform == "LOG10":
+        return 10.0 ** spec.lower, 10.0 ** spec.upper
+    return spec.lower, spec.upper
+
+
 def fit_parameter_lock_catalog(config: dict[str, Any]) -> list[FitParameter]:
     """Return all currently required mechanistic parameters that can be unlocked."""
     return _all_fit_parameter_specs(config, fit_uv_response=True, fit_conductivity=True)
@@ -915,11 +960,15 @@ def fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = True,
         candidates = _all_fit_parameter_specs(config, fit_uv_response=fit_uv_response,
                                               fit_conductivity=fit_conductivity,
                                               candidate_paths=candidate_paths)
-        return [spec for spec in candidates if spec.path in unlocked]
+        return _limit_fit_specs(config, [spec for spec in candidates if spec.path in unlocked])
     persisted = config.get("least_squares", {}).get("unlocked_paths")
     unlocked = set(persisted) if persisted is not None else _default_unlocked_parameter_paths(config, fit_uv_response=fit_uv_response)
-    return [spec for spec in _all_fit_parameter_specs(config, fit_uv_response=fit_uv_response, fit_conductivity=fit_conductivity, candidate_paths=candidate_paths)
-            if spec.path in unlocked]
+    return _limit_fit_specs(config, [
+        spec for spec in _all_fit_parameter_specs(
+            config, fit_uv_response=fit_uv_response,
+            fit_conductivity=fit_conductivity, candidate_paths=candidate_paths)
+        if spec.path in unlocked
+    ])
 
 
 def fit_parameter_text(config: dict[str, Any]) -> str:
@@ -1931,18 +1980,21 @@ def run_least_squares_refinement(
         fit_apply_profile_path.unlink()
 
     with fit_results_path.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["Parameter_Path", "Parameter", "Initial_Value", "Fitted_Value", "Transform", "Residual_DOF", "At_Lower_Bound", "At_Upper_Bound"]
+        fields = ["Parameter_Path", "Parameter", "Initial_Value", "Fitted_Value", "Transform",
+                  "Fit_Range_Percent", "Allowed_Min", "Allowed_Max", "At_Lower_Bound", "At_Upper_Bound"]
         writer = csv.DictWriter(fh, fieldnames=fields); writer.writeheader()
         for spec, xfit in zip(specs, opt.x):
             initial_value = float(_get_path(config, spec.path))
             fitted_value = float(_get_path(fitted, spec.path))
+            allowed_min, allowed_max = _physical_fit_bounds(spec)
             writer.writerow({
                 "Parameter_Path": spec.path,
                 "Parameter": spec.label,
                 "Initial_Value": initial_value,
                 "Fitted_Value": fitted_value,
                 "Transform": spec.transform,
-                "Residual_DOF": max(0, len(final_r) - len(specs)),
+                "Fit_Range_Percent": config["least_squares"].get("fit_range_percent", {}).get(spec.path, ""),
+                "Allowed_Min": allowed_min, "Allowed_Max": allowed_max,
                 "At_Lower_Bound": abs(float(xfit) - spec.lower) <= 1e-6 * max(1.0, abs(spec.lower)),
                 "At_Upper_Bound": abs(float(xfit) - spec.upper) <= 1e-6 * max(1.0, abs(spec.upper)),
             })
@@ -1981,15 +2033,17 @@ def run_least_squares_refinement(
         "reference_x_axis_assumption": ref.x_axis_assumption,
         "composition_references": comp_refs,
         "fitted_parameter_paths": [s.path for s in specs],
+        "fit_range_percent": config["least_squares"].get("fit_range_percent", {}),
         "max_nfev": int(max_nfev),
         "objective_history_csv": str(fit_history_path),
         "target_run_context": run_context,
     }
     fit_settings_path.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    residual_dof = max(0, len(final_r) - len(specs))
     parameter_rows = "".join(
-        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(config, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td><td>{residual_dof}</td></tr>"
+        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(config, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td>"
+        f"<td>{html.escape(str(config['least_squares'].get('fit_range_percent', {}).get(spec.path, 'Default')))}</td>"
+        f"<td>{_physical_fit_bounds(spec)[0]:.7g}</td><td>{_physical_fit_bounds(spec)[1]:.7g}</td></tr>"
         for spec in specs
     )
     comp_note = (
@@ -2045,8 +2099,7 @@ Converged flag: {bool(opt.success)}; accepted/applied to active model: {accepted
 {fraction_uv_plot}
 {composition_plot}
 <h2>Refined mechanistic parameters</h2>
-<p>Residual degrees of freedom = {len(final_r)} fitted observations − {len(specs)} unlocked parameters = {residual_dof}. This is shared by the parameter estimates; it is not a separate independent degree of freedom for each parameter.</p>
-<table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th><th>Residual DOF</th></tr></thead><tbody>{parameter_rows}</tbody></table>
+<table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th><th>Fit limit ±%</th><th>Allowed min</th><th>Allowed max</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Objective construction</h2>
 <p>The chromatogram residual is point-by-point least squares (Hahn et al., equation 9). RAW_SSE is the default. No baseline is inferred unless INITIAL_MEDIAN is explicitly selected; otherwise the fixed detector baseline is used. The predicted UV signal is the sum of each species concentration multiplied by its own response factor; the target uses the shared Model Parameters factor and each impurity uses its component-specific factor. UV references labelled AU are converted to mAU. Optional NORMALIZED_MSE divides residuals by the measured signal scale and sqrt(N). RAW_SSE compares UV values directly.</p>
 {uv_identifiability_note}
@@ -2189,6 +2242,8 @@ def run_global_least_squares_refinement(
             raise ValueError("All attached chromatograms must use the same model combination and selected species for one global shared fit.")
         if [r.get("name") for r in active_components(cfg)] != [r.get("name") for r in active_components(first)]:
             raise ValueError(f"Global-fit profile {index} does not have the same shared protein-species names as profile 1.")
+        if cfg["least_squares"].get("fit_range_percent") != first["least_squares"].get("fit_range_percent"):
+            raise ValueError(f"Global-fit profile {index} has different per-parameter fit ranges; one shared fit needs one shared set of limits.")
 
     # These are shared batch parameters. Process recipes and column geometry
     # remain profile inputs, while a different non-empty value for a shared
@@ -2430,7 +2485,8 @@ def run_global_least_squares_refinement(
         FIT_APPLY_JSL.unlink()
 
     with FIT_RESULTS_CSV.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["Parameter_Path", "Parameter", "Initial_Value", "Fitted_Value", "Transform", "Fit_State", "Residual_DOF", "At_Lower_Bound", "At_Upper_Bound"]
+        fields = ["Parameter_Path", "Parameter", "Initial_Value", "Fitted_Value", "Transform", "Fit_State",
+                  "Fit_Range_Percent", "Allowed_Min", "Allowed_Max", "At_Lower_Bound", "At_Upper_Bound"]
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
         spec_map = {spec.path: spec for spec in specs}
@@ -2446,11 +2502,13 @@ def run_global_least_squares_refinement(
             if spec and specs:
                 xfit = (10.0 ** float(opt.x[specs.index(spec)]) if spec.transform == "LOG10"
                         else float(opt.x[specs.index(spec)]))
+            allowed_min, allowed_max = _physical_fit_bounds(spec) if spec else ("", "")
             writer.writerow({
                 "Parameter_Path": path, "Parameter": spec.label if spec else _report_parameter_label(seed, path),
                 "Initial_Value": initial_value, "Fitted_Value": fitted_value,
                 "Transform": spec.transform if spec else "", "Fit_State": fit_state,
-                "Residual_DOF": max(0, len(final_r) - len(specs)) if spec else "",
+                "Fit_Range_Percent": first["least_squares"].get("fit_range_percent", {}).get(path, "") if spec else "",
+                "Allowed_Min": allowed_min, "Allowed_Max": allowed_max,
                 "At_Lower_Bound": bool(spec and xfit is not None and abs(float(opt.x[specs.index(spec)]) - spec.lower) <= 1e-6 * max(1.0, abs(spec.lower))),
                 "At_Upper_Bound": bool(spec and xfit is not None and abs(float(opt.x[specs.index(spec)]) - spec.upper) <= 1e-6 * max(1.0, abs(spec.upper))),
             })
@@ -2458,7 +2516,8 @@ def run_global_least_squares_refinement(
     # Only unlocked parameters are listed as improvements; report the exact
     # values in original physical units, even when the fit variable was log10.
     with FIT_IMPROVED_CSV.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["Parameter_Path", "Parameter", "Initial_Value", "Improved_Value", "Change_percent", "Residual_DOF", "At_Lower_Bound", "At_Upper_Bound"])
+        writer = csv.DictWriter(fh, fieldnames=["Parameter_Path", "Parameter", "Initial_Value", "Improved_Value", "Change_percent",
+                                                "Fit_Range_Percent", "Allowed_Min", "Allowed_Max", "At_Lower_Bound", "At_Upper_Bound"])
         writer.writeheader()
         text_rows = ["LEAST-SQUARES REFINED PARAMETERS", f"Objective: {first['least_squares']['objective']}", f"Accepted: {accepted}", f"Initial objective: {initial_obj:.10g}", f"Final objective: {final_obj:.10g}", ""]
         for i, spec in enumerate(specs):
@@ -2468,7 +2527,9 @@ def run_global_least_squares_refinement(
             xfit_val = math.log10(fitted_val) if spec.transform == "LOG10" else fitted_val
             row = {"Parameter_Path": spec.path, "Parameter": spec.label,
                    "Initial_Value": initial_val, "Improved_Value": fitted_val,
-                   "Change_percent": diff_percent, "Residual_DOF": max(0, len(final_r) - len(specs)),
+                   "Change_percent": diff_percent,
+                   "Fit_Range_Percent": first["least_squares"].get("fit_range_percent", {}).get(spec.path, ""),
+                   "Allowed_Min": _physical_fit_bounds(spec)[0], "Allowed_Max": _physical_fit_bounds(spec)[1],
                    "At_Lower_Bound": abs(xfit_val - spec.lower) <= 1e-6 * max(1.0, abs(spec.lower)),
                    "At_Upper_Bound": abs(xfit_val - spec.upper) <= 1e-6 * max(1.0, abs(spec.upper))}
             writer.writerow(row)
@@ -2622,6 +2683,7 @@ def run_global_least_squares_refinement(
             for p in normalized_profiles
         ],
         "fitted_parameter_paths": [s.path for s in specs],
+        "fit_range_percent": first["least_squares"].get("fit_range_percent", {}),
         "locked_parameter_paths": [p for p in candidate_paths if p not in {s.path for s in specs}],
         "max_nfev": int(max_nfev),
         "max_model_evaluations": int(max_model_evaluations) if max_model_evaluations is not None else None,
@@ -2630,9 +2692,10 @@ def run_global_least_squares_refinement(
         "objective_history_csv": str(history_path) if history_path else None,
         "objective_history_write_error": history_write_error,
     }
-    residual_dof = max(0, len(final_r) - len(specs))
     parameter_rows = "".join(
-        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(seed, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td><td>{residual_dof}</td></tr>"
+        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(seed, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td>"
+        f"<td>{html.escape(str(first['least_squares'].get('fit_range_percent', {}).get(spec.path, 'Default')))}</td>"
+        f"<td>{_physical_fit_bounds(spec)[0]:.7g}</td><td>{_physical_fit_bounds(spec)[1]:.7g}</td></tr>"
         for spec in specs
     ) or '<tr><td colspan="4">No parameters were unlocked; model values were evaluated without optimization.</td></tr>'
     profile_rows = "".join(
@@ -2740,7 +2803,7 @@ def run_global_least_squares_refinement(
 <h2>Objective by measurement type</h2><p>Per-run squared residual sums before optional multi-run weighting. Mass% is zero when that channel is not selected.</p><table><thead><tr><th>Run</th><th>Initial UV</th><th>Fitted UV</th><th>Initial mass%</th><th>Fitted mass%</th></tr></thead><tbody>{channel_rows}</tbody></table>
 {composition_metrics_html}
 <h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>{overlays_html}
-<h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><p>Residual degrees of freedom = {len(final_r)} fitted observations − {len(specs)} unlocked parameters = {residual_dof}. This shared metric is repeated for each unlocked parameter.</p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th><th>Residual DOF</th></tr></thead><tbody>{parameter_rows}</tbody></table>
+<h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th><th>Fit limit ±%</th><th>Allowed min</th><th>Allowed max</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Profile recipes used</h2>{recipe_details}
 <h2>Objective construction</h2><p>UV uses every measured detector sample. RAW_SSE preserves the pointwise UV residual; NORMALIZED_MSE divides by the measured signal scale and sqrt(sample count). Conductivity is included only when enabled. Each entered species mass% is compared with 100 times its integrated detector concentration divided by the integrated concentration of all active species over that collected fraction. CV is cumulative volume, so changing flow is included. The mass% residual group is divided by 100 and sqrt(the populated species-observation count), then expressed in comparable UV units for RAW_SSE. Legacy point-only observations retain midpoint comparison. Blank cells add no residual; chart lines are display-only. Each selected run's process settings remain fixed. Only unlocked active-model parameters are shared and refined.</p>
 <h2>Objective improvement over time</h2><p>{history_file_html}</p>{history_plot}

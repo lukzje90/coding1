@@ -237,6 +237,9 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
     locks = _lsq_unlocked_paths_from_jmp()
     if locks is not None:
         config["least_squares"]["unlocked_paths"] = sorted(locks)
+    fit_ranges = _lsq_fit_range_percent_from_jmp()
+    if fit_ranges is not None:
+        config["least_squares"]["fit_range_percent"] = fit_ranges
     if _num("tdm_ui_lsq_run_count") is not None:
         config["least_squares"]["selected_run_numbers"] = _selected_lsq_run_numbers()
     config["column"]["volume_mL"] = _num("tdm_ui_column_volume_mL")
@@ -462,6 +465,37 @@ def _lsq_unlocked_paths_from_jmp() -> set[str] | None:
         if path.strip() and state.strip().upper() == "UNLOCKED":
             unlocked.add(canonical_fit_parameter_path(path.strip()))
     return unlocked
+
+
+def _lsq_fit_range_percent_from_jmp() -> dict[str, float] | None:
+    """Read optional per-parameter ±% bounds from the JMP model controls."""
+    raw = _text("tdm_ui_lsq_parameter_fit_ranges")
+    if not raw:
+        return None  # Direct Python/older JMP callers retain default bounds.
+    ranges: dict[str, float] = {}
+    for item in raw.split(";"):
+        if not item.strip():
+            continue
+        parts = item.split("|", 2)
+        if len(parts) != 3 or not parts[0].strip():
+            raise ValueError("Invalid per-parameter LSQ fit-range setting from JMP.")
+        path, mode, entered = parts
+        path = canonical_fit_parameter_path(path.strip())
+        mode = mode.strip().upper()
+        if mode == "DEFAULT":
+            continue
+        if mode != "LIMITED":
+            raise ValueError(f"{path}: fit-range setting must be Default or Limited.")
+        try:
+            percent = float(entered)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{path}: enter a numeric ±% fit range.") from exc
+        if not math.isfinite(percent) or not 0 < percent <= 1000:
+            raise ValueError(f"{path}: ±% fit range must be greater than 0 and at most 1000.")
+        if path in ranges:
+            raise ValueError(f"{path}: duplicate LSQ fit-range setting.")
+        ranges[path] = percent
+    return ranges
 
 
 def _save_lsq_profile_csv_path(run_number: int, path: str) -> None:
