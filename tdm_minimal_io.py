@@ -1027,8 +1027,10 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
     model = str(config.get("model") or "")
     if model not in MODELS:
         return ["Select a supported model combination."]
-    if uses_wang(model) and config.get("chromatography_mode") != "HIC":
-        errors.append("TDM – Modified Wang requires HIC mode.")
+    if uses_cpa(model) and config.get("chromatography_mode") != "ION_EXCHANGE":
+        errors.append("EDM/TDM – CPA requires ion-exchange mode.")
+    if (uses_langmuir(model) or uses_wang(model)) and config.get("chromatography_mode") != "HIC":
+        errors.append("Competitive Langmuir and Modified Wang require HIC mode.")
     try:
         n_imp_raw = float(config.get("impurity_count", 0))
         if n_imp_raw != int(n_imp_raw) or not 0 <= int(n_imp_raw) <= MAX_IMPURITIES:

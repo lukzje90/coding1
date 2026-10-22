@@ -19,12 +19,13 @@ that has mass data, then choose **Edit mass% for LSQ run** to enter that run's
 up to 30 fraction start/end ranges in CV or mL. Each LSQ run has its own
 saved row count, units and species values in `tdm_lsq_fraction_mass.csv`.
 Only enabled selected runs contribute mass%; the others contribute UV alone. The
-midpoint is the observation position. A blank target/impurity cell leaves that
+midpoint is the plot position. A blank target/impurity cell leaves that
 species out of the objective at that fraction and breaks its line in the plot;
 zero is a measured value. The graph uses shape-preserving interpolation only
-to display adjacent observations. The optimizer compares the entered midpoint
-mass% directly with `100 × simulated species concentration / sum of modeled
-species concentrations` at that midpoint. mL coordinates use the selected
+to display adjacent observations. The optimizer compares the entered mass%
+with `100 × integrated species concentration / integrated sum of modeled
+species concentrations` over the full collected fraction. CV is cumulative
+volume, so this integration includes changes in flow. mL coordinates use the selected
 model's column volume. The alignment preview shows a solid measured target
 line, dotted measured impurity lines, a dashed model target and lighter dotted
 model impurities, with gaps where that species has no input. UV remains a

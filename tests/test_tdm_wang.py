@@ -126,9 +126,22 @@ class ModifiedWangTests(unittest.TestCase):
         )})
         self.assertIn('chromatographyMode = Combo Box({"HIC", "ION_EXCHANGE"}', jsl)
         self.assertIn('wangSharedPanel << Visibility(If(isWang, "Visible", "Collapse"))', jsl)
-        self.assertIn('If(isWang & Uppercase(Char(chromatographyMode << Get Selected)) != "HIC", chromatographyMode << Set(1))', jsl)
+        self.assertIn('If(Uppercase(Char(chromatographyMode << Get Selected)) != "ION_EXCHANGE", chromatographyMode << Set(2))', jsl)
+        self.assertIn('If(Uppercase(Char(chromatographyMode << Get Selected)) != "HIC", chromatographyMode << Set(1))', jsl)
         self.assertIn('c1QmaxFitLock = Combo Box({"Locked", "Unlocked"}, << Set(2)', jsl)
         self.assertIn('c1WangKeqFitLock = Combo Box({"Locked", "Unlocked"}, << Set(2)', jsl)
+
+    def test_chromatography_mode_is_fixed_by_model_combination(self):
+        for model in (MODEL_EDM_CPA, MODEL_TDM_CPA):
+            cfg = make_config(model, 0, multistep=False)
+            cfg["chromatography_mode"] = "HIC"
+            self.assertTrue(any("requires ion-exchange" in error
+                                for error in validate_config(cfg, strict=True)))
+        for model in (MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_TDM_WANG):
+            cfg = wang_config() if model == MODEL_TDM_WANG else make_config(model, 0, multistep=False)
+            cfg["chromatography_mode"] = "ION_EXCHANGE"
+            self.assertTrue(any("require HIC" in error
+                                for error in validate_config(cfg, strict=True)))
 
     def test_jmp_wang_parameter_handoff(self):
         cfg = wang_config()

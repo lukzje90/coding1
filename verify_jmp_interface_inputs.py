@@ -1,7 +1,7 @@
 """Audit generated JMP fields through the Python bridge and solver receipt.
 
 Run from this directory with ``python verify_jmp_interface_inputs.py``.
-The test uses synthetic HIC inputs and does not require a JMP installation.
+The test uses synthetic HIC and ion-exchange inputs and does not require JMP.
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def _set_jmp_globals(bridge, config: dict) -> None:
     values = {
         "tdm_ui_model": MODEL_LABELS[config["model"]],
         "tdm_ui_impurity_count": config["impurity_count"],
-        "tdm_ui_chromatography_mode": "HIC",
+        "tdm_ui_chromatography_mode": config["chromatography_mode"],
         "tdm_ui_column_volume_mL": config["column"]["volume_mL"],
         "tdm_ui_column_length_mm": config["column"]["length_mm"],
         "tdm_ui_bead_radius": config["tdm"]["bead_radius_um"],
@@ -175,10 +175,17 @@ def main() -> None:
         saved_row = load_batch_rows(csv_path)[0]
 
     per_model = []
-    # This HIC affinity audit predates Wang and asserts k_s on every model.
     # Wang's separate paper-law handoff is covered in test_tdm_wang.py.
     for model in sorted(set(MODELS) - {MODEL_TDM_WANG}):
         seed = make_hic_config(model, impurities=1, steps=50, cells=6)
+        seed["chromatography_mode"] = "HIC" if uses_langmuir(model) else "ION_EXCHANGE"
+        if not uses_langmuir(model):
+            seed["cpa"].update(ligand_surface_density_umol_m2=2.89,
+                               system_specific_adsorption_parameter=0.03)
+            for component in seed["components"][:2]:
+                component.update(Z_ref=40.0, pH_ref=6.0, Z1_per_pH=0.0,
+                                 Z2_per_pH2=0.0, Z3_per_pH3=0.0,
+                                 delta_pH_slope_m2_C=0.0)
         _set_jmp_globals(tdm_bridge, seed)
         shared = tdm_bridge.build_shared_config_from_jmp()
         for section in ("tdm", "edm", "conversion", "cpa", "system"):
@@ -234,22 +241,28 @@ def main() -> None:
         assert abs(changed_receipt["buffer_chemistry_used"]["buffer_A"]["salt_concentration_M"] - 0.1) < 1e-12
         assert changed_receipt["buffer_chemistry_used"]["buffer_B"]["salt_concentration_M"] == 1.4
 
-        # Change the JMP k_s value independently and require it in the solver
-        # receipt and a changed HIC prediction.
+        # Vary an active species parameter for the chosen physical mode.
         tdm_bridge.tdm_ui_cond_to_salt_factor = 0.02
-        tdm_bridge.tdm_ui_c1_salt_sensitivity_per_M = 0.0
+        if uses_langmuir(model):
+            tdm_bridge.tdm_ui_c1_salt_sensitivity_per_M = 0.0
+            changed_path = "components[0].salt_sensitivity_per_M"
+        else:
+            tdm_bridge.tdm_ui_c1_Z_ref = seed["components"][0]["Z_ref"] * 1.25
+            changed_path = "components[0].Z_ref"
         affinity_shared = tdm_bridge.build_shared_config_from_jmp()
         affinity, _ = apply_batch_shared_parameters(affinity_shared, run_config)
         affinity["numerics"].update(time_steps=50, axial_positions=6)
         affinity_result = simulate(affinity)
         delta_uv = float(np.max(np.abs(result["trace"]["uv_mAU"] - affinity_result["trace"]["uv_mAU"])))
-        assert affinity_result["parameter_receipt"]["required_inputs_used"]["components[0].salt_sensitivity_per_M"] == 0.0
+        assert affinity_result["parameter_receipt"]["required_inputs_used"][changed_path] == (
+            0.0 if uses_langmuir(model) else seed["components"][0]["Z_ref"] * 1.25)
         assert delta_uv > 1e-8, (model, delta_uv)
 
         # The competitive Langmuir b field must also survive the JMP bridge
         # and alter the local binding affinity, independently of k_s.
         delta_b_uv = None
         tdm_bridge.tdm_ui_c1_salt_sensitivity_per_M = seed["components"][0]["salt_sensitivity_per_M"]
+        tdm_bridge.tdm_ui_c1_Z_ref = seed["components"][0]["Z_ref"]
         if uses_langmuir(model):
             tdm_bridge.tdm_ui_c1_b_L_g = 2.0 * seed["components"][0]["b_L_g"]
             b_shared = tdm_bridge.build_shared_config_from_jmp()
@@ -284,9 +297,10 @@ def main() -> None:
         extreme_shared = tdm_bridge.build_shared_config_from_jmp()
         extreme, _ = apply_batch_shared_parameters(extreme_shared, run_config)
         extreme_errors = validate_config(extreme)
-        assert any("Load material resolves to 40000 M salt" in error for error in extreme_errors), extreme_errors
-        assert any("Buffer A resolves to 10000 M salt" in error for error in extreme_errors), extreme_errors
-        assert not any("Buffer B resolves to" in error for error in extreme_errors), extreme_errors
+        if uses_langmuir(model):
+            assert any("Load material resolves to 40000 M salt" in error for error in extreme_errors), extreme_errors
+            assert any("Buffer A resolves to 10000 M salt" in error for error in extreme_errors), extreme_errors
+            assert not any("Buffer B resolves to" in error for error in extreme_errors), extreme_errors
 
         # If all salt inputs are SALT_M, the factor is inactive for binding;
         # changing it must neither invent a 1000 M salt nor alter the program.
@@ -308,19 +322,20 @@ def main() -> None:
             "load_salt_M_mode_salt_M": load_used["material_salt_M"],
             "buffer_A_salt_M": receipt["buffer_chemistry_used"]["buffer_A"]["salt_concentration_M"],
             "buffer_B_salt_M": receipt["buffer_chemistry_used"]["buffer_B"]["salt_concentration_M"],
-            "max_uv_change_when_k_s_zeroed_mAU": delta_uv,
+            "active_species_parameter_tested": changed_path,
+            "max_uv_change_when_active_parameter_changed_mAU": delta_uv,
             "max_uv_change_when_b_doubled_mAU": delta_b_uv,
             "stage_flows_mL_min": [stages[0]["flow_mL_min"], stages[1]["flow_mL_min"], stages[2]["flow_mL_min"]],
-            "factor_1000_rejected": True,
+            "factor_1000_rejected": bool(extreme_errors),
             "factor_1000_errors": extreme_errors,
             "all_SALT_M_modes_ignore_factor": True,
         })
-        print(f"PASS {model}: JMP fields → bridge → solver receipt; salt modes and k_s respond")
+        print(f"PASS {model}: JMP fields → bridge → solver receipt; salt modes and {changed_path} respond")
 
     report = {
         "build_id": RESULT_GUARD_BUILD,
         "status": "PASS",
-        "scope": "Generated JMP source contract, saved run table, Python bridge, HIC solver receipt and factor-1000 rejection; synthetic cases; no native JMP session.",
+        "scope": "Generated JMP source contract, saved run table, Python bridge, mode-specific solver receipt and HIC factor-1000 rejection; synthetic cases; no native JMP session.",
         "max_supported_hic_salt_M": MAX_HIC_SALT_M,
         "interface_contract": interface,
         "models": per_model,

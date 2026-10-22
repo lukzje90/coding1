@@ -6,7 +6,7 @@ Two objective modes are intentionally supported:
 1. CHROMATOGRAM: ordinary point-by-point least-squares against an attached raw
    chromatogram CSV.
 2. CHROMATOGRAM_AND_COMPOSITION: the same chromatogram objective plus
-   sparse species mass-percent observations at fraction midpoints (CV or mL).
+   species mass-percent observations integrated over fraction intervals (CV or mL).
 
 UV predictions use the target and species response factors; only eligible
 unlocked factors are refined. Fit entry points require a UV reference in mAU
@@ -951,6 +951,7 @@ def validate_composition_references(
         raise ValueError("Active species names must be unique for fraction mass% refinement.")
     out: list[dict[str, Any]] = []
     previous_cv = -math.inf
+    previous_end_cv = -math.inf
     previous_index = 0
     for k, row in enumerate(references, start=1):
         try:
@@ -991,6 +992,11 @@ def validate_composition_references(
         if cv <= previous_cv:
             raise ValueError(f"Fraction {k}: fraction midpoints must increase in row order.")
         previous_cv = cv
+        start_cv = start / float(config["column"]["volume_mL"]) if unit == "ML" else start
+        end_cv = end / float(config["column"]["volume_mL"]) if unit == "ML" else end
+        if start_cv < previous_end_cv - 1e-9:
+            raise ValueError(f"Fraction {k}: fraction intervals must be ordered and must not overlap.")
+        previous_end_cv = end_cv
         measured: dict[str, float] = {}
         for name in names:
             raw = mass_values.get(name)
@@ -1285,7 +1291,7 @@ def preview_lsq_alignment(
             + (f'<h3 id="mass-preview-run-{html.escape(str(run_number), quote=True)}">Fraction mass% at midpoints</h3>'
                + _composition_profile_svg(config, comp_refs, info["result"]["trace"])
                + f"<p>{sum(len(row['mass_percent']) for row in comp_refs)} entered species observations. "
-                 "Only populated midpoint cells contribute to refinement; smooth curves are display-only.</p>"
+                 "Each populated cell is compared with integrated modeled mass over its collected interval; connecting curves are display-only.</p>"
                if comp_refs else "")
         ))
     default_run = str(next(
@@ -1318,7 +1324,7 @@ def preview_lsq_alignment(
         'as the median imported sample in each chart pixel column to prevent dark overdraw; '
         'every imported sample still enters the least-squares calculation. Predicted UV spans the complete programmed run. '
         'The selected detector-baseline policy is applied exactly as it is during refinement. '
-        'If fraction mass% is entered, the preview shows midpoint observations and current model predictions. No fitting occurs in blank cells or between points.</p>'
+        'If fraction mass% is entered, the preview plots observations at fraction midpoints and compares them with modeled mass integrated over each full collected interval. Blank cells add no residual.</p>'
         '<label for="lsq-preview-run-picker">View LSQ run:</label>'
         '<select id="lsq-preview-run-picker">' + ''.join(choices) + '</select>'
         + rendered_sections
@@ -1335,7 +1341,36 @@ def _predicted_mass_percent_at_cv(sim_cv: np.ndarray, comp: np.ndarray,
     concentrations = np.array([np.interp(cv, sim_cv, comp[:, i])
                                for i in range(species_count)], dtype=float)
     total = float(np.sum(concentrations))
-    return 100.0 * concentrations / total if total > 1e-12 else np.zeros(species_count)
+    return 100.0 * (concentrations / total) if total > 1e-12 else np.zeros(species_count)
+
+
+def _predicted_fraction_mass_percent(config: dict[str, Any], trace: dict[str, Any],
+                                     ref: dict[str, Any]) -> tuple[np.ndarray, bool]:
+    """Integrate detector species concentration over the collected volume.
+
+    CV is cumulative volume / column volume, so Q dt is exactly V_col dCV,
+    including when the stage flow changes. The constant V_col cancels in the
+    mass percentages. Interpolated endpoints include partial simulation cells.
+    Legacy point observations retain their explicitly pointwise meaning.
+    """
+    cv = np.asarray(trace["CV"], dtype=float)
+    comp = np.maximum(np.asarray(trace["component_g_L"], dtype=float), 0.0)
+    if ref.get("legacy_point"):
+        return _predicted_mass_percent_at_cv(cv, comp, float(ref["CV"]), comp.shape[1]), True
+    factor = float(config["column"]["volume_mL"]) if ref["x_unit"] == "ML" else 1.0
+    start, end = float(ref["start"]) / factor, float(ref["end"]) / factor
+    tolerance = 1e-9 * max(1.0, float(cv[-1]))
+    if start < cv[0] - tolerance or end > cv[-1] + tolerance:
+        raise ValueError(f"Fraction {ref['fraction_index']} [{start:g}, {end:g}] CV lies outside the simulated run.")
+    start, end = max(start, float(cv[0])), min(end, float(cv[-1]))
+    points = np.r_[start, cv[(cv > start) & (cv < end)], end]
+    concentrations = np.column_stack([np.interp(points, cv, comp[:, i])
+                                      for i in range(comp.shape[1])])
+    integrated = np.sum(0.5 * (concentrations[:-1] + concentrations[1:])
+                        * np.diff(points)[:, None], axis=0)
+    total = float(np.sum(integrated))
+    quantifiable = total / max(end - start, np.finfo(float).tiny) > 1e-12
+    return (100.0 * (integrated / total) if quantifiable else np.zeros(comp.shape[1])), quantifiable
 
 
 def _composition_residuals(
@@ -1345,7 +1380,6 @@ def _composition_residuals(
 ) -> tuple[np.ndarray, list[dict[str, Any]]]:
     names = [str(r["name"]) for r in active_components(config)]
     sim_cv = np.asarray(trace["CV"], dtype=float)
-    comp = np.asarray(trace["component_g_L"], dtype=float)
     rows: list[dict[str, Any]] = []
     residuals: list[float] = []
     for ref in references:
@@ -1354,7 +1388,7 @@ def _composition_residuals(
         cv = float(ref["CV"])
         if cv < float(np.min(sim_cv)) - 1e-12 or cv > float(np.max(sim_cv)) + 1e-12:
             raise ValueError(f"Composition reference at CV {cv:g} lies outside the simulated CV range.")
-        predicted = _predicted_mass_percent_at_cv(sim_cv, comp, cv, len(names))
+        predicted, quantifiable = _predicted_fraction_mass_percent(config, trace, ref)
         for i, name in enumerate(names):
             if name not in ref["mass_percent"]:
                 continue
@@ -1364,7 +1398,8 @@ def _composition_residuals(
             rows.append({"CV": cv, "Fraction": ref["fraction_index"],
                          "Fraction_Start": ref["start"], "Fraction_End": ref["end"],
                          "Fraction_Unit": ref["x_unit"], "Protein_Species": name,
-                         "Measured_mass_percent": measured, "Simulated_mass_percent": pred})
+                         "Measured_mass_percent": measured, "Simulated_mass_percent": pred,
+                         "Model_Fraction_Quantifiable": quantifiable})
     if residuals:
         arr = np.asarray(residuals, dtype=float) / math.sqrt(len(residuals))
     else:
@@ -1382,7 +1417,6 @@ def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, 
     names = [str(row["name"]) for row in active_components(config)]
     colors = ("#0878c6", "#e87722", "#149447", "#dc3545", "#8a63b7", "#9b6a42")
     sim_cv = np.asarray(trace["CV"], dtype=float)
-    comp = np.asarray(trace["component_g_L"], dtype=float)
     show_ml = all(ref["x_unit"] == "ML" for ref in references)
     x_factor = float(config["column"]["volume_mL"]) if show_ml else 1.0
     x_min = 0.0
@@ -1436,16 +1470,18 @@ def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, 
                 smooth_y = np.clip(PchipInterpolator(xs, ys)(smooth_x), 0.0, 100.0)
                 measured_style = ' stroke-dasharray="2 4"' if species_index else ''
                 svg.append(f'<path d="{path(list(zip(smooth_x, smooth_y)))}" fill="none" stroke="{color}" stroke-width="2.3"{measured_style}/>')
-                model_x = np.unique(np.concatenate(([xs[0]], sim_cv[(sim_cv > xs[0]) & (sim_cv < xs[-1])], [xs[-1]])))
-                model_y = [_predicted_mass_percent_at_cv(sim_cv, comp, float(cv), len(names))[species_index]
-                           for cv in model_x]
+                # Display fraction-integrated predictions at the actual
+                # collection intervals. Interpolation is visual only.
+                model_x = xs
+                model_y = [_predicted_fraction_mass_percent(config, trace, ref)[0][species_index]
+                           for ref in group]
                 model_pattern = "1 6" if species_index else "6 4"
                 model_opacity = ".6" if species_index else ".85"
                 svg.append(f'<path d="{path(list(zip(model_x, model_y)))}" fill="none" stroke="{color}" stroke-width="1.8" stroke-dasharray="{model_pattern}" opacity="{model_opacity}"/>')
             for ref in group:
                 cv = float(ref["CV"])
                 measured = float(ref["mass_percent"][name])
-                predicted = float(_predicted_mass_percent_at_cv(sim_cv, comp, cv, len(names))[species_index])
+                predicted = float(_predicted_fraction_mass_percent(config, trace, ref)[0][species_index])
                 svg.append(f'<circle cx="{px(cv):.2f}" cy="{py(measured):.2f}" r="3.4" fill="{color}"/>')
                 svg.append(f'<circle cx="{px(cv):.2f}" cy="{py(predicted):.2f}" r="3" fill="white" stroke="{color}" stroke-width="1.5"/>')
         legend_y = 55 + species_index * 25
@@ -1459,6 +1495,83 @@ def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, 
     svg.append('<text x="790" y="321" font-size="12">Blank: no fit or line</text>')
     svg.append('</svg>')
     return "".join(svg)
+
+
+def _fraction_uv_overlay_svg(config: dict[str, Any], references: list[dict[str, Any]],
+                             info: dict[str, Any]) -> str:
+    """One chromatogram with collected fraction percentages on a second axis."""
+    trace = info["result"]["trace"]
+    chrom = info["chromatogram"]
+    program = info["result"]["simulation"]["program"]
+    x_max = max(float(program.total_CV), 1e-9)
+    measured_x, measured_y = _reference_display_series(chrom["CV"], chrom["measured"], x_max)
+    model_x = np.asarray(trace["CV"], dtype=float)
+    model_y = np.asarray(trace["uv_mAU"], dtype=float) + float(chrom["baseline"])
+    y_min = min(0.0, float(np.min(measured_y)), float(np.min(model_y)))
+    y_max = max(1.0, float(np.max(measured_y)), float(np.max(model_y)))
+    if y_min == y_max:
+        y_max += 1.0
+    left, right, top, bottom = 70.0, 760.0, 35.0, 365.0
+    px = lambda value: left + (right - left) * np.clip(value / x_max, 0.0, 1.0)
+    py_uv = lambda value: bottom - (bottom - top) * (value - y_min) / (y_max - y_min)
+    py_pct = lambda value: bottom - (bottom - top) * np.clip(value / 100.0, 0.0, 1.0)
+
+    def line(x: np.ndarray, y: np.ndarray, y_map: Any) -> str:
+        return " ".join(("M" if i == 0 else "L") + f"{px(float(a)):.2f},{y_map(float(b)):.2f}"
+                        for i, (a, b) in enumerate(zip(x, y)))
+
+    parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1030 430" '
+             'role="img" aria-label="Measured and predicted UV chromatogram with fraction mass percentages">',
+             '<rect width="1030" height="430" fill="white"/>']
+    for stage in _stage_receipt(config, program):
+        x = px(float(stage["start_CV"]))
+        parts.append(f'<line x1="{x:.2f}" y1="{top}" x2="{x:.2f}" y2="{bottom}" stroke="#d5d9de" stroke-dasharray="3 4"/>')
+    for j in range(5):
+        y = top + (bottom - top) * j / 4
+        uv = y_max - (y_max - y_min) * j / 4
+        pct = 100 - 25 * j
+        parts.extend([f'<line x1="{left}" y1="{y:.2f}" x2="{right}" y2="{y:.2f}" stroke="#e4e7eb"/>',
+                      f'<text x="{left-8}" y="{y+4:.2f}" text-anchor="end" font-size="11">{uv:.3g}</text>',
+                      f'<text x="{right+8}" y="{y+4:.2f}" font-size="11">{pct}</text>'])
+    for j in range(6):
+        x = left + (right - left) * j / 5
+        parts.append(f'<text x="{x:.2f}" y="{bottom+19}" text-anchor="middle" font-size="11">{x_max*j/5:.3g}</text>')
+    parts.append(f'<path d="{line(measured_x, measured_y, py_uv)}" fill="none" stroke="#20262e" stroke-width="1.7"/>')
+    parts.append(f'<path d="{line(model_x, model_y, py_uv)}" fill="none" stroke="#0878c6" stroke-width="1.8"/>')
+    colors = ("#a32673", "#e87722", "#149447", "#dc3545", "#8a63b7", "#9b6a42")
+    names = [str(row["name"]) for row in active_components(config)]
+    for i, name in enumerate(names):
+        groups: list[list[dict[str, Any]]] = []
+        for ref in references:
+            if name not in ref["mass_percent"]:
+                continue
+            if not groups or ref["fraction_index"] != groups[-1][-1]["fraction_index"] + 1 or (
+                not ref.get("legacy_point") and not groups[-1][-1].get("legacy_point") and
+                float(ref["start"]) > float(groups[-1][-1]["end"]) + 1e-8):
+                groups.append([])
+            groups[-1].append(ref)
+        for group in groups:
+            x = np.asarray([float(ref["CV"]) for ref in group])
+            measured = np.asarray([float(ref["mass_percent"][name]) for ref in group])
+            predicted = np.asarray([_predicted_fraction_mass_percent(config, trace, ref)[0][i]
+                                    for ref in group])
+            if len(group) > 1:
+                parts.append(f'<path d="{line(x, measured, py_pct)}" fill="none" stroke="{colors[i]}" stroke-width="2"/>')
+                parts.append(f'<path d="{line(x, predicted, py_pct)}" fill="none" stroke="{colors[i]}" stroke-width="1.7" stroke-dasharray="5 4"/>')
+            for xv, mv, pv in zip(x, measured, predicted):
+                parts.append(f'<circle cx="{px(xv):.2f}" cy="{py_pct(mv):.2f}" r="3" fill="{colors[i]}"/>')
+                parts.append(f'<circle cx="{px(xv):.2f}" cy="{py_pct(pv):.2f}" r="3" fill="white" stroke="{colors[i]}"/>')
+        y = 60 + 24 * i
+        parts.append(f'<text x="805" y="{y}" fill="{colors[i]}" font-size="12">{html.escape(name)} mass%</text>')
+    parts.extend([f'<text x="{(left+right)/2:.1f}" y="410" text-anchor="middle" font-size="13">CV from run start</text>',
+                  '<text x="15" y="200" transform="rotate(-90 15 200)" font-size="12" text-anchor="middle">UV [mAU]</text>',
+                  '<text x="800" y="210" font-size="12">Mass% (right axis)</text>',
+                  '<text x="805" y="275" font-size="11">Black: measured UV</text>',
+                  '<text x="805" y="293" font-size="11">Blue: predicted UV</text>',
+                  '<text x="805" y="311" font-size="11">Filled: measured mass%</text>',
+                  '<text x="805" y="329" font-size="11">Open/dashed: predicted mass%</text>',
+                  '</svg>'])
+    return "".join(parts)
 
 
 def _objective_parts(
@@ -1813,7 +1926,7 @@ def run_least_squares_refinement(
         fit_apply_profile_path.unlink()
 
     with fit_results_path.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["Parameter_Path", "Parameter", "Initial_Value", "Fitted_Value", "Transform", "At_Lower_Bound", "At_Upper_Bound"]
+        fields = ["Parameter_Path", "Parameter", "Initial_Value", "Fitted_Value", "Transform", "Residual_DOF", "At_Lower_Bound", "At_Upper_Bound"]
         writer = csv.DictWriter(fh, fieldnames=fields); writer.writeheader()
         for spec, xfit in zip(specs, opt.x):
             initial_value = float(_get_path(config, spec.path))
@@ -1824,6 +1937,7 @@ def run_least_squares_refinement(
                 "Initial_Value": initial_value,
                 "Fitted_Value": fitted_value,
                 "Transform": spec.transform,
+                "Residual_DOF": max(0, len(final_r) - len(specs)),
                 "At_Lower_Bound": abs(float(xfit) - spec.lower) <= 1e-6 * max(1.0, abs(spec.lower)),
                 "At_Upper_Bound": abs(float(xfit) - spec.upper) <= 1e-6 * max(1.0, abs(spec.upper)),
             })
@@ -1836,7 +1950,7 @@ def run_least_squares_refinement(
             writer.writerow({"CV": cv, "Measured_Signal": ym, "Simulated_Total_Protein_g_L": ys, "Scaled_Simulated_Signal": yp, "Residual": float(yp)-float(ym)})
 
     with fit_composition_path.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Residual_mass_percent"]
+        fields = ["CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Model_Fraction_Quantifiable", "Residual_mass_percent"]
         writer = csv.DictWriter(fh, fieldnames=fields); writer.writeheader()
         for row in final_info["composition"]:
             r = dict(row)
@@ -1868,12 +1982,13 @@ def run_least_squares_refinement(
     }
     fit_settings_path.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    residual_dof = max(0, len(final_r) - len(specs))
     parameter_rows = "".join(
-        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(config, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td></tr>"
+        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(config, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td><td>{residual_dof}</td></tr>"
         for spec in specs
     )
     comp_note = (
-        f"<p><b>Composition constraints:</b> {len(comp_refs)} fraction midpoints, {len(final_info['composition'])} populated species observations. "
+        f"<p><b>Composition constraints:</b> {len(comp_refs)} fractions, {len(final_info['composition'])} populated species observations. "
         f"Composition objective contribution = {final_info['composition_sse_normalized']:.6g}.</p>"
         if mode == MODE_CHROMATOGRAM_AND_COMPOSITION else
         "<p><b>Composition constraints:</b> not used in this refinement.</p>"
@@ -1893,6 +2008,9 @@ def run_least_squares_refinement(
     improvement_percent = _objective_improvement_percent(initial_obj, final_obj)
     history_plot = _objective_history_svg(history)
     chromatogram_plot = _chromatogram_fit_svg(fitted, final_info)
+    fraction_uv_plot = ("<h2>UV chromatogram with collected fraction mass%</h2>"
+                        + _fraction_uv_overlay_svg(fitted, comp_refs, final_info)
+                        if comp_refs else "")
     composition_plot = ("<h2>Fraction mass% profiles</h2>"
                         + _composition_profile_svg(fitted, comp_refs, final_info["result"]["trace"])
                         + "<p>Solid target and dotted impurity curves connect adjacent entered midpoints without overshoot. Model target is dashed; model impurities use lighter dots. Model lines appear only where corresponding measured segments exist. Blank cells create gaps and add no residual.</p>"
@@ -1919,13 +2037,15 @@ Converged flag: {bool(opt.success)}; accepted/applied to active model: {accepted
 <h2>Measured and predicted chromatogram</h2>
 <p>The predicted UV and process overlays span the full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>
 {chromatogram_plot}
+{fraction_uv_plot}
 {composition_plot}
 <h2>Refined mechanistic parameters</h2>
-<table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
+<p>Residual degrees of freedom = {len(final_r)} fitted observations − {len(specs)} unlocked parameters = {residual_dof}. This is shared by the parameter estimates; it is not a separate independent degree of freedom for each parameter.</p>
+<table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th><th>Residual DOF</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Objective construction</h2>
 <p>The chromatogram residual is point-by-point least squares (Hahn et al., equation 9). RAW_SSE is the default. No baseline is inferred unless INITIAL_MEDIAN is explicitly selected; otherwise the fixed detector baseline is used. The predicted UV signal is the sum of each species concentration multiplied by its own response factor; the target uses the shared Model Parameters factor and each impurity uses its component-specific factor. UV references labelled AU are converted to mAU. Optional NORMALIZED_MSE divides residuals by the measured signal scale and sqrt(N). RAW_SSE compares UV values directly.</p>
 {uv_identifiability_note}
-<p>When fraction mass% is selected, simulated species mass% is evaluated at each populated fraction midpoint as 100 × c_i / sum(c_j). Each entered species value contributes one residual, divided by 100 and sqrt(the number of populated cells). With RAW_SSE, that residual group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the number of UV samples); with NORMALIZED_MSE both groups stay dimensionless with a 1 mAU UV normalization floor. Blank cells add no residual and break the display line; curve interpolation does not add fit points.</p>
+<p>For each entered fraction, species mass% is 100 × its integrated detector concentration over the collected CV interval / the integrated concentration of all active species. CV is proportional to collected volume, so this accounts for changing flow. Legacy point-only references retain midpoint comparison. Each entered species value contributes one residual, divided by 100 and sqrt(the number of populated cells). With RAW_SSE, that residual group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the number of UV samples); with NORMALIZED_MSE both groups stay dimensionless with a 1 mAU UV normalization floor. Blank cells add no residual and break the display line.</p>
 <p>Only unlocked eligible mechanistic and instrument parameters listed above are refined. Locked values, column geometry and each recipe remain fixed. The optimizer result was saved to <code>{html.escape(fit_config_path.name)}</code>. It is copied to the active model <code>{html.escape(CONFIG_PATH.name)}</code> only when the total objective is not worse than the starting objective.</p>
 <h2>Objective improvement over time</h2>
 <p>The plot and CSV show every objective evaluation, elapsed seconds, best-so-far objective, improvement relative to the initial objective, and any numerical-penalty status. Lower objective is better. <a href="{html.escape(fit_history_path.name)}">Open objective history CSV</a>.</p>
@@ -2305,7 +2425,7 @@ def run_global_least_squares_refinement(
         FIT_APPLY_JSL.unlink()
 
     with FIT_RESULTS_CSV.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["Parameter_Path", "Parameter", "Initial_Value", "Fitted_Value", "Transform", "Fit_State", "At_Lower_Bound", "At_Upper_Bound"]
+        fields = ["Parameter_Path", "Parameter", "Initial_Value", "Fitted_Value", "Transform", "Fit_State", "Residual_DOF", "At_Lower_Bound", "At_Upper_Bound"]
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
         spec_map = {spec.path: spec for spec in specs}
@@ -2325,6 +2445,7 @@ def run_global_least_squares_refinement(
                 "Parameter_Path": path, "Parameter": spec.label if spec else _report_parameter_label(seed, path),
                 "Initial_Value": initial_value, "Fitted_Value": fitted_value,
                 "Transform": spec.transform if spec else "", "Fit_State": fit_state,
+                "Residual_DOF": max(0, len(final_r) - len(specs)) if spec else "",
                 "At_Lower_Bound": bool(spec and xfit is not None and abs(float(opt.x[specs.index(spec)]) - spec.lower) <= 1e-6 * max(1.0, abs(spec.lower))),
                 "At_Upper_Bound": bool(spec and xfit is not None and abs(float(opt.x[specs.index(spec)]) - spec.upper) <= 1e-6 * max(1.0, abs(spec.upper))),
             })
@@ -2332,7 +2453,7 @@ def run_global_least_squares_refinement(
     # Only unlocked parameters are listed as improvements; report the exact
     # values in original physical units, even when the fit variable was log10.
     with FIT_IMPROVED_CSV.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["Parameter_Path", "Parameter", "Initial_Value", "Improved_Value", "Change_percent", "At_Lower_Bound", "At_Upper_Bound"])
+        writer = csv.DictWriter(fh, fieldnames=["Parameter_Path", "Parameter", "Initial_Value", "Improved_Value", "Change_percent", "Residual_DOF", "At_Lower_Bound", "At_Upper_Bound"])
         writer.writeheader()
         text_rows = ["LEAST-SQUARES REFINED PARAMETERS", f"Objective: {first['least_squares']['objective']}", f"Accepted: {accepted}", f"Initial objective: {initial_obj:.10g}", f"Final objective: {final_obj:.10g}", ""]
         for i, spec in enumerate(specs):
@@ -2342,7 +2463,7 @@ def run_global_least_squares_refinement(
             xfit_val = math.log10(fitted_val) if spec.transform == "LOG10" else fitted_val
             row = {"Parameter_Path": spec.path, "Parameter": spec.label,
                    "Initial_Value": initial_val, "Improved_Value": fitted_val,
-                   "Change_percent": diff_percent,
+                   "Change_percent": diff_percent, "Residual_DOF": max(0, len(final_r) - len(specs)),
                    "At_Lower_Bound": abs(xfit_val - spec.lower) <= 1e-6 * max(1.0, abs(spec.lower)),
                    "At_Upper_Bound": abs(xfit_val - spec.upper) <= 1e-6 * max(1.0, abs(spec.upper))}
             writer.writerow(row)
@@ -2358,13 +2479,16 @@ def run_global_least_squares_refinement(
                         "Normalized_Residual", "Sample_Weight", "Run_Weight", "Profile_Objective_Contribution"]
         writer = csv.DictWriter(fh, fieldnames=trace_fields)
         writer.writeheader()
-        for profile, info, norm_run_weight in zip(normalized_profiles, final_infos, run_weights):
+        for profile, initial_info, info, norm_run_weight in zip(normalized_profiles, initial_infos, final_infos, run_weights):
             chrom = info["chromatogram"]
             context = profile["run_context"]
             difference = np.asarray(chrom["predicted_detector_signal"], dtype=float) - np.asarray(chrom["measured"], dtype=float)
             norm_difference = difference / float(chrom["measured_signal_scale"])
             normalized_nrmse = float(np.sqrt(np.mean(difference ** 2))) / float(chrom["measured_signal_scale"])
             raw_rmse = float(np.sqrt(np.mean(difference ** 2)))
+            initial_chrom = initial_info["chromatogram"]
+            initial_difference = np.asarray(initial_chrom["predicted_detector_signal"], dtype=float) - np.asarray(initial_chrom["measured"], dtype=float)
+            initial_raw_rmse = float(np.sqrt(np.mean(initial_difference ** 2)))
             sample_weights = np.asarray(chrom["point_weights"], dtype=float)
             run_weighted_rmse = float(np.sqrt(np.sum(sample_weights * difference ** 2) / np.sum(sample_weights)))
             total_ss = float(np.sum((np.asarray(chrom["measured"], dtype=float) - float(np.mean(chrom["measured"]))) ** 2))
@@ -2378,10 +2502,15 @@ def run_global_least_squares_refinement(
                 "overlap_points": int(chrom["overlap_points"]),
                 "normalized_nrmse": normalized_nrmse,
                 "raw_rmse": raw_rmse,
+                "initial_raw_rmse": initial_raw_rmse,
                 "weighted_rmse": run_weighted_rmse,
                 "run_weight": profile["weight"],
                 "r_squared": r2,
                 "conductivity_rmse_mS_cm": info["conductivity"]["rmse_mS_cm"] if info["conductivity"] else None,
+                "initial_uv_objective": float(initial_info["chromatogram_sse_normalized"]),
+                "fitted_uv_objective": float(info["chromatogram_sse_normalized"]),
+                "initial_mass_objective": float(initial_info["composition_sse_normalized"]),
+                "fitted_mass_objective": float(info["composition_sse_normalized"]),
                 "profile_objective": float(info["chromatogram_sse_normalized"] + info["conductivity_sse_normalized"] + info["composition_sse_normalized"]),
             }
             metric_rows.append(metric)
@@ -2445,7 +2574,7 @@ def run_global_least_squares_refinement(
                                  "CV": float(cv), "Measured_mS_cm": float(measured),
                                  "Predicted_mS_cm": float(predicted), "Residual_mS_cm": float(predicted - measured)})
     with FIT_COMPOSITION_CSV.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["Run_Number", "Run_Name", "CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Residual_mass_percent"]
+        fields = ["Run_Number", "Run_Name", "CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Model_Fraction_Quantifiable", "Residual_mass_percent"]
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
         for profile, info in zip(normalized_profiles, final_infos):
@@ -2496,14 +2625,15 @@ def run_global_least_squares_refinement(
         "objective_history_csv": str(history_path) if history_path else None,
         "objective_history_write_error": history_write_error,
     }
+    residual_dof = max(0, len(final_r) - len(specs))
     parameter_rows = "".join(
-        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(seed, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td></tr>"
+        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(seed, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td><td>{residual_dof}</td></tr>"
         for spec in specs
-    ) or '<tr><td colspan="3">No parameters were unlocked; model values were evaluated without optimization.</td></tr>'
+    ) or '<tr><td colspan="4">No parameters were unlocked; model values were evaluated without optimization.</td></tr>'
     profile_rows = "".join(
         "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
             metric["run_number"], metric["run_name"], metric["model_run_label"], metric["overlap_points"],
-            f'{metric["normalized_nrmse"]:.6g}', f'{metric["raw_rmse"]:.6g}', f'{metric["weighted_rmse"]:.6g}', f'{metric["run_weight"]:.6g}',
+            f'{metric["normalized_nrmse"]:.6g}', f'{metric["initial_raw_rmse"]:.6g}', f'{metric["raw_rmse"]:.6g}', f'{metric["weighted_rmse"]:.6g}', f'{metric["run_weight"]:.6g}',
             "—" if not math.isfinite(metric["r_squared"]) else f'{metric["r_squared"]:.6g}',
             "—" if metric["conductivity_rmse_mS_cm"] is None else f'{metric["conductivity_rmse_mS_cm"]:.6g}',
         )) + "</tr>"
@@ -2518,9 +2648,17 @@ def run_global_least_squares_refinement(
         )) + "</tr>"
         for metric in composition_profile_metrics
     )
+    channel_rows = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
+            metric["run_number"], f'{metric["initial_uv_objective"]:.6g}',
+            f'{metric["fitted_uv_objective"]:.6g}',
+            f'{metric["initial_mass_objective"]:.6g}',
+            f'{metric["fitted_mass_objective"]:.6g}',
+        )) + "</tr>" for metric in metric_rows
+    )
     composition_metrics_html = (
         "<h2>Fraction mass% fit by protein species</h2>"
-        "<p>RMSE is measured in mass percentage points at entered fraction midpoints. "
+        "<p>RMSE is measured in mass percentage points across collected fraction intervals. "
         "Blank species cells and fraction gaps add no observations.</p>"
         "<table><thead><tr><th>Run</th><th>Profile</th><th>Protein species</th>"
         "<th>Observed fractions</th><th>Before RMSE</th><th>After RMSE</th>"
@@ -2538,9 +2676,11 @@ def run_global_least_squares_refinement(
             plot += _conductivity_fit_svg(info)
         refs = profile["composition_references"]
         if refs:
-            plot += ("<h4>Fraction mass% at midpoints</h4>"
+            plot += ("<h4>UV chromatogram with collected fraction mass%</h4>"
+                     + _fraction_uv_overlay_svg(cfg, refs, info)
+                     + "<h4>Fraction mass% at midpoints</h4>"
                      + _composition_profile_svg(cfg, refs, info["result"]["trace"])
-                     + "<p>Only populated species cells at fraction midpoints contribute mass% residuals. The measured target is solid, measured impurities are dotted, model target is dashed, and model impurities use lighter dots. Blank cells leave gaps; smooth lines are for display.</p>")
+                     + "<p>Only populated species cells for collected fraction intervals contribute mass% residuals. The measured target is solid, measured impurities are dotted, model target is dashed, and model impurities use lighter dots. Blank cells leave gaps; connecting lines are for display.</p>")
         profile_plots.append(
             f'<h3>Run {profile["run_context"]["run_number"]}: {html.escape(profile["run_context"]["run_name"])}'
             f' vs {html.escape(profile["run_context"]["model_run_label"])}</h3>' + plot)
@@ -2549,11 +2689,17 @@ def run_global_least_squares_refinement(
     fit_quality_warning = ""
     poor_uv_runs = [str(row["run_number"]) for row in metric_rows
                     if math.isfinite(row["r_squared"]) and row["r_squared"] < 0.8]
+    worsened_uv_runs = [str(row["run_number"]) for row in metric_rows
+                        if row["raw_rmse"] > row["initial_raw_rmse"] * 1.05 + 1e-9]
     if poor_uv_runs:
         fit_quality_warning = ("Measured and fitted UV remain materially different for run(s) "
                                + ", ".join(poor_uv_runs)
                                + " (UV R² below 0.8). Accepted means the best tested objective did not worsen; "
                                "it does not mean the measured chromatogram was matched.")
+    elif worsened_uv_runs:
+        fit_quality_warning = ("Fitted UV RMSE is more than 5% worse than its starting value for run(s) "
+                               + ", ".join(worsened_uv_runs)
+                               + ". The mass% and UV constraints may conflict; review the plotted traces and fixed inputs.")
     elif budget_reached:
         fit_quality_warning = ("The model-evaluation safety cap stopped optimization before convergence. "
                                "The best tested parameters were retained.")
@@ -2585,12 +2731,13 @@ def run_global_least_squares_refinement(
 <b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Evaluation safety cap:</b> {int(max_model_evaluations) if max_model_evaluations is not None else int(max_nfev)}; <b>Unlocked parameters:</b> {len(specs)}. The model-evaluation cap includes optimizer candidates, finite-difference Jacobian probes, and final verification; the initial reference calculation is logged at evaluation 0.</p>
 {f'<p><b>Fit quality warning:</b> {html.escape(fit_quality_warning)}</p>' if fit_quality_warning else ''}
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise UV equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor. Conductivity, when enabled for a run, adds measured detector residuals normalized by that run's conductivity signal scale and sample count; in RAW_SSE these are rescaled to the measured UV scale.</p>
-<table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>UV RMSE</th><th>Weighted UV RMSE</th><th>Run weight</th><th>UV R²</th><th>Conductivity RMSE [mS/cm]</th></tr></thead><tbody>{profile_rows}</tbody></table>
+<table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>Initial UV RMSE</th><th>Fitted UV RMSE</th><th>Weighted UV RMSE</th><th>Run weight</th><th>UV R²</th><th>Conductivity RMSE [mS/cm]</th></tr></thead><tbody>{profile_rows}</tbody></table>
+<h2>Objective by measurement type</h2><p>Per-run squared residual sums before optional multi-run weighting. Mass% is zero when that channel is not selected.</p><table><thead><tr><th>Run</th><th>Initial UV</th><th>Fitted UV</th><th>Initial mass%</th><th>Fitted mass%</th></tr></thead><tbody>{channel_rows}</tbody></table>
 {composition_metrics_html}
 <h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>{overlays_html}
-<h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th></tr></thead><tbody>{parameter_rows}</tbody></table>
+<h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><p>Residual degrees of freedom = {len(final_r)} fitted observations − {len(specs)} unlocked parameters = {residual_dof}. This shared metric is repeated for each unlocked parameter.</p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th><th>Residual DOF</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Profile recipes used</h2>{recipe_details}
-<h2>Objective construction</h2><p>Equation 9 is the sum of squared predicted-minus-measured UV detector samples. RAW_SSE preserves the UV term verbatim. NORMALIZED_MSE divides each run's UV residuals by its signal scale and sqrt(sample count). Enabled conductivity adds one residual per numeric measured point; these are divided by the measured conductivity scale and sqrt(conductivity point count), then expressed in comparable UV units for RAW_SSE. Fraction mass% adds measured-minus-predicted residuals at entered midpoints only, divided by 100 and sqrt(the populated species-observation count). With RAW_SSE, the mass% group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the UV sample count); with NORMALIZED_MSE both groups are dimensionless with the same 1 mAU UV floor. The predicted fraction is 100 times that species' simulated concentration divided by the sum of modeled species concentrations. Blank cells add no residual; chart interpolation is display-only. WEIGHTED_RMSE applies when fraction mass% is off. Baseline estimation is opt-in; the default baseline is fixed. Each selected run's process settings remain fixed during refinement. Only unlocked active-model parameters are shared and refined.</p>
+<h2>Objective construction</h2><p>UV uses every measured detector sample. RAW_SSE preserves the pointwise UV residual; NORMALIZED_MSE divides by the measured signal scale and sqrt(sample count). Conductivity is included only when enabled. Each entered species mass% is compared with 100 times its integrated detector concentration divided by the integrated concentration of all active species over that collected fraction. CV is cumulative volume, so changing flow is included. The mass% residual group is divided by 100 and sqrt(the populated species-observation count), then expressed in comparable UV units for RAW_SSE. Legacy point-only observations retain midpoint comparison. Blank cells add no residual; chart lines are display-only. Each selected run's process settings remain fixed. Only unlocked active-model parameters are shared and refined.</p>
 <h2>Objective improvement over time</h2><p>{history_file_html}</p>{history_plot}
 <p>Files: {FIT_TRACE_CSV.name}, {FIT_CONDUCTIVITY_CSV.name}, {FIT_RESULTS_CSV.name}, {FIT_COMPOSITION_CSV.name}, {FIT_SETTINGS_JSON.name}.</p>
 """, encoding="utf-8")

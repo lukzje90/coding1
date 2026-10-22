@@ -1,4 +1,22 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25g)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25h)
+
+FRACTION MASS% AND CHROMATOGRAPHY MODE (R25h)
+Each entered fraction's predicted species mass% now comes from integrating
+the detector-delayed species concentrations across its full start–end CV or
+mL interval. The CV coordinate represents collected volume, including when
+flow varies between stages. Legacy point-only Python references remain point
+observations. Overlapping fractions and fractions outside the simulated run
+are rejected. The fit report has a separate chromatogram with measured and
+predicted fraction mass% overlaid on UV, and lists the initial and fitted UV
+RMSE so a joint fit can be assessed channel by channel. Each unlocked
+parameter row has the shared residual degrees of freedom (number of fitted
+observations minus unlocked parameters); this is not a separate independent
+degree of freedom for that parameter. The fit CSV flags fractions below a
+1e-12 g/L numerical concentration floor; this is not an assay detection limit.
+CPA with TDM or EDM is ion
+exchange; Competitive Langmuir with TDM or EDM and TDM Modified Wang are HIC.
+The JMP mode selector follows the selected model automatically; incompatible
+mode/model combinations are rejected by Python validation.
 
 LOAD INPUTS IN JMP (R25g)
 Enter feed concentration and load capacity for each run. The JMP window
@@ -82,7 +100,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25g_package.marker beside the launcher and Python files. Run the saved
+tdm_r25h_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)
@@ -223,7 +241,7 @@ Active species names must be distinct so observations cannot be assigned to
 two model species under one name.
 Enter target and up to five impurity mass% values. Leave a cell blank when
 that species was not measured in a fraction; enter 0 for a measured zero.
-Blank cells create visible gaps, and only populated midpoint values enter
+Blank cells create visible gaps, and only populated species values enter
 the least-squares objective. A shape-preserving smooth line connects adjacent
 populated fractions for display, without creating extra fit points. The
 preview and final report show entered and predicted species lines, with the
@@ -233,8 +251,8 @@ impurities use lighter dotted lines.
 The final fit report also shows before/after mass% RMSE in percentage points
 for each measured species in each LSQ run, so the fraction-profile improvement
 can be checked separately from the combined UV and mass% objective.
-Measured values are compared with
-100 x species concentration / total modeled-species concentration. Partial
+Measured values are compared with 100 x integrated species mass over the
+fraction / integrated total modeled-species mass over that fraction. Partial
 rows are allowed; a full row that does not total 100% may have an irreducible
 residual because the model normalizes its selected species to 100%.
 RAW_SSE keeps its UV term in mAU squared and scales the mass% block using the

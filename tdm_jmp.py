@@ -1151,7 +1151,11 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     impurityCount = Num(impurityCountBox << Get Selected); If(Is Missing(impurityCount), impurityCount = 0);
     isTDM = Contains(modelLabel, "TDM") > 0; isEDM = Contains(modelLabel, "EDM") > 0;
     isCPA = Contains(modelLabel, "CPA") > 0; isLangmuir = Contains(modelLabel, "Competitive Langmuir") > 0; isWang = Contains(modelLabel, "Modified Wang") > 0;
-    If(isWang & Uppercase(Char(chromatographyMode << Get Selected)) != "HIC", chromatographyMode << Set(1));
+    If(isCPA,
+        If(Uppercase(Char(chromatographyMode << Get Selected)) != "ION_EXCHANGE", chromatographyMode << Set(2)),
+        If(Uppercase(Char(chromatographyMode << Get Selected)) != "HIC", chromatographyMode << Set(1))
+    );
+    chromatographyMode << Enable(0);
     isHIC = Uppercase(Char(chromatographyMode << Get Selected)) == "HIC";
     If(isLangmuir & !Is Missing(c1Qmax << Get) & !Is Missing(c1Mass << Get) & !Is Missing(loadDensity << Get) &
        If(isEDM, !Is Missing(edmPorosity << Get), !Is Missing(voidFraction << Get) & !Is Missing(particlePorosity << Get)),

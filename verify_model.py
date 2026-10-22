@@ -40,6 +40,7 @@ from tdm_least_squares import (
 def make_config(model: str, n_imp: int = 1, *, multistep: bool = True) -> dict:
     c = blank_config()
     c['model'] = model
+    c['chromatography_mode'] = 'HIC' if uses_langmuir(model) or model == 'TDM_WANG' else 'ION_EXCHANGE'
     c['impurity_count'] = n_imp
     c['column'].update(volume_mL=1.0, length_mm=50.0, flow_mL_min=1.0)
     c['feed'].update(total_concentration_mg_mL=2.0, load_density_mg_mL_resin=0.4)

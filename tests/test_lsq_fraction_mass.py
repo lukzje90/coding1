@@ -17,6 +17,30 @@ from verify_model import make_config
 
 
 class FractionMassTests(unittest.TestCase):
+    def test_fraction_mass_uses_collected_interval_with_interpolated_boundaries(self):
+        cfg = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
+        cfg["column"]["volume_mL"] = 2.0
+        names = [item["name"] for item in cfg["components"][:2]]
+        trace = {"CV": np.array([0.0, 1.0, 2.0]),
+                 "component_g_L": np.array([[0.0, 1.0], [10.0, 1.0], [0.0, 1.0]])}
+        refs = lsq.validate_composition_references(cfg, [{
+            "fraction_index": 1, "start": 1.0, "end": 3.0, "x_unit": "ML",
+            "mass_percent": {names[0]: 100.0 * 7.5 / 8.5,
+                             names[1]: 100.0 / 8.5},
+        }])
+        prediction, quantifiable = lsq._predicted_fraction_mass_percent(cfg, trace, refs[0])
+        self.assertTrue(quantifiable)
+        np.testing.assert_allclose(prediction, [100.0 * 7.5 / 8.5, 100.0 / 8.5])
+        self.assertGreater(lsq._predicted_mass_percent_at_cv(trace["CV"], trace["component_g_L"], 1.0, 2)[0], prediction[0])
+        residual, rows = lsq._composition_residuals(cfg, refs, trace)
+        np.testing.assert_allclose(residual, 0.0, atol=1e-12)
+        self.assertTrue(all(row["Model_Fraction_Quantifiable"] for row in rows))
+        with self.assertRaisesRegex(ValueError, "must not overlap"):
+            lsq.validate_composition_references(cfg, [
+                {"start": 0.0, "end": 1.0, "mass_percent": {names[0]: 50.0}},
+                {"start": 0.8, "end": 1.5, "mass_percent": {names[0]: 50.0}},
+            ])
+
     def test_tdm_cpa_four_species_uv_and_mass_fit_reproduces_saved_trace(self):
         truth = normalize_config(make_config(MODEL_TDM_CPA, 3, multistep=False))
         truth["numerics"].update(time_steps=50, axial_positions=6)
@@ -35,8 +59,9 @@ class FractionMassTests(unittest.TestCase):
                      (.75, .85), (3.65, 3.75), (3.85, 3.95))
         fractions = []
         for number, (start, end) in enumerate(intervals, start=1):
-            values = lsq._predicted_mass_percent_at_cv(
-                cv, concentrations, (start + end) / 2, 4)
+            values, _ = lsq._predicted_fraction_mass_percent(truth, measured, {
+                "fraction_index": number, "start": start, "end": end,
+                "x_unit": "CV", "CV": (start + end) / 2})
             fractions.append({"fraction_index": number, "start": start, "end": end,
                               "x_unit": "CV", "mass_percent": dict(zip(names, map(float, values)))})
         with tempfile.TemporaryDirectory() as directory:
@@ -65,6 +90,9 @@ class FractionMassTests(unittest.TestCase):
                     mass_rows = list(csv.DictReader(stream))
                 with lsq.FIT_CONDUCTIVITY_CSV.open(newline="", encoding="utf-8") as stream:
                     conductivity_rows = list(csv.DictReader(stream))
+                with lsq.FIT_RESULTS_CSV.open(newline="", encoding="utf-8") as stream:
+                    parameter_rows = list(csv.DictReader(stream))
+                report_html = lsq.FIT_REPORT_HTML.read_text(encoding="utf-8")
             fitted = fit["fitted_config"]
             reproduced = simulate(fitted)["trace"]
             self.assertTrue(fit["accepted"])
@@ -82,6 +110,10 @@ class FractionMassTests(unittest.TestCase):
             self.assertLess(fit["profile_metrics"][0]["conductivity_rmse_mS_cm"], 1e-8)
             self.assertLess(max(abs(float(row["Residual_mass_percent"]))
                                 for row in mass_rows), 0.02)
+            self.assertIn("UV chromatogram with collected fraction mass%", report_html)
+            self.assertIn("Mass% (right axis)", report_html)
+            self.assertEqual({int(row["Residual_DOF"]) for row in parameter_rows if row["Fit_State"] == "Unlocked"},
+                             {len(cv) * 2 + len(mass_rows) - 2})
 
     def test_tdm_cpa_four_species_fraction_profile_refines_wrong_parameter(self):
         truth = make_config(MODEL_TDM_CPA, 3, multistep=False)
@@ -101,8 +133,9 @@ class FractionMassTests(unittest.TestCase):
                      (.75, .85), (3.65, 3.75), (3.85, 3.95))
         fractions = []
         for index, (start, end) in enumerate(intervals, 1):
-            predicted = lsq._predicted_mass_percent_at_cv(
-                cv, concentrations, (start + end) / 2, 4)
+            predicted, _ = lsq._predicted_fraction_mass_percent(truth, true_trace, {
+                "fraction_index": index, "start": start, "end": end,
+                "x_unit": "CV", "CV": (start + end) / 2})
             fractions.append({
                 "fraction_index": index, "start": start, "end": end,
                 "x_unit": "CV",
@@ -344,7 +377,9 @@ class FractionMassTests(unittest.TestCase):
         fractions = []
         for index, (lo, hi) in enumerate(((0.19, 0.21), (0.25, 0.27), (0.27, 0.29), (0.29, 0.31)), 1):
             midpoint = (lo + hi) / 2
-            observed = lsq._predicted_mass_percent_at_cv(cv, comp, midpoint, 2)
+            observed, _ = lsq._predicted_fraction_mass_percent(true, trace, {
+                "fraction_index": index, "start": lo, "end": hi,
+                "x_unit": "CV", "CV": midpoint})
             values = {} if index == 2 else {names[0]: float(observed[0]), names[1]: float(observed[1])}
             fractions.append({"fraction_index": index, "start": lo, "end": hi,
                               "x_unit": "CV", "mass_percent": values})
