@@ -1214,6 +1214,75 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
         + (1.0 - epsv) * (1.0 - epsp) * final_qv,
         axis=0,
     )
+    # Inspect the solved states at exact process boundaries. The reported time
+    # grid may have no sample in a short load or wash, so using the plotted
+    # chromatogram here would misclassify breakthrough as retained material.
+    mw_g_mol = np.array([comp.mw_kDa * 1000.0 for comp in comps])
+    loaded_mol = (program.stages[0].feed_vector
+                  * program.stages[0].flow_mL_min * 1e-6 / 60.0
+                  * program.stage_end_time_s[0])
+    stage_binding = []
+    for stage_index, stage in enumerate(program.stages):
+        start = program.stage_start_time_s[stage_index]
+        end = program.stage_end_time_s[stage_index]
+        internal = solution.t[(solution.t > start) & (solution.t < end)]
+        times = np.r_[start, internal, end]
+        endpoints = solution.sol(np.array([start, end]))
+        outlet = np.column_stack((endpoints[(nx - 1) * n:nx * n, 0],
+                                  solution.y[(nx - 1) * n:nx * n, :][:, (solution.t > start) & (solution.t < end)],
+                                  endpoints[(nx - 1) * n:nx * n, 1]))
+        outlet_mol = np.array([_trapezoidal_integral(np.maximum(outlet[i], 0.0), times)
+                               for i in range(n)]) * stage.flow_mL_min * 1e-6 / 60.0
+        stage_cb, stage_cp, stage_qv = unpack(endpoints[:, 1])
+        stage_inventory_mol = bed_cell_V * np.sum(
+            epsv * stage_cb + (1.0 - epsv) * epspi * stage_cp
+            + (1.0 - epsv) * (1.0 - epsp) * stage_qv, axis=0)
+        bound_mol = bed_cell_V * (1.0 - epsv) * (1.0 - epsp) * np.sum(stage_qv, axis=0)
+        stage_binding.append({
+            "stage": stage.name, "kind": stage.kind,
+            "start_CV": float(program.stage_start_CV[stage_index]),
+            "end_CV": float(program.stage_end_CV[stage_index]),
+            "outlet_g": (outlet_mol * mw_g_mol).tolist(),
+            "column_inventory_g": np.maximum(stage_inventory_mol * mw_g_mol, 0.0).tolist(),
+            "bound_inventory_g": np.maximum(bound_mol * mw_g_mol, 0.0).tolist(),
+        })
+    load_pH, _, load_I, _ = program.stages[0].chemistry(0.0)
+    elution_stage = next((stage for stage in program.stages if stage.kind == "ELUTION"), None)
+    elution_pH, _, elution_I, _ = (elution_stage.chemistry(1.0) if elution_stage else
+                                  (load_pH, 0.0, load_I, 0.0))
+    empty_surface = np.zeros(n)
+    load_K = cpa_model.equilibrium_factors(empty_surface, load_pH, load_I)
+    elution_K = cpa_model.equilibrium_factors(empty_surface, elution_pH, elution_I)
+    initial_rate = cpa_model.kinetic_rate(program.stages[0].feed_vector, empty_surface,
+                                          load_pH, load_I)
+    adsorption_audit = {
+        "note": "Zero-coverage partition factors and initial rates are local loading-condition diagnostics, not fitted column capacities. Stage outlet masses are from the undelayed column outlet.",
+        "species": [], "stages": stage_binding,
+    }
+    for i, comp in enumerate(comps):
+        loaded_g = float(loaded_mol[i] * mw_g_mol[i])
+        load_exit_g = float(stage_binding[0]["outlet_g"][i])
+        bound_g = float(stage_binding[0]["bound_inventory_g"][i])
+        column_g = float(stage_binding[0]["column_inventory_g"][i])
+        wash_g = sum(float(stage_row["outlet_g"][i]) for stage_row in stage_binding
+                     if stage_row["kind"] == "PLW")
+        eluted_g = sum(float(stage_row["outlet_g"][i]) for stage_row in stage_binding
+                       if stage_row["kind"] == "ELUTION")
+        geometric_ceiling_mol_m3 = comp.As_m_inv / (math.pi * N_A * comp.radius_m**2)
+        adsorption_audit["species"].append({
+            "name": comp.name, "loaded_g": loaded_g,
+            "load_pH": float(load_pH), "load_ionic_strength_M": float(load_I),
+            "elution_end_pH": float(elution_pH), "elution_end_ionic_strength_M": float(elution_I),
+            "zero_coverage_partition_load": float(load_K[i]),
+            "zero_coverage_partition_elution_end": float(elution_K[i]),
+            "initial_adsorption_rate_mol_m3_s": float(initial_rate[i]),
+            "geometric_surface_ceiling_g_L_skeleton": float(geometric_ceiling_mol_m3 * comp.mw_kDa),
+            "load_outlet_percent_of_load": 100.0 * load_exit_g / loaded_g if loaded_g > 0 else 0.0,
+            "end_load_column_percent_of_load": 100.0 * column_g / loaded_g if loaded_g > 0 else 0.0,
+            "end_load_bound_percent_of_load": 100.0 * bound_g / loaded_g if loaded_g > 0 else 0.0,
+            "wash_outlet_percent_of_load": 100.0 * wash_g / loaded_g if loaded_g > 0 else 0.0,
+            "elution_outlet_percent_of_load": 100.0 * eluted_g / loaded_g if loaded_g > 0 else 0.0,
+        })
     return {
         "program": program,
         "mobile_phase": mobile_phase,
@@ -1239,6 +1308,7 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
             "fixed_temperature_K": CPA_TEMPERATURE_K,
             "fixed_relative_permittivity": CPA_RELATIVE_PERMITTIVITY,
             "fixed_CEX_ligand_pK": CPA_CEX_LIGAND_PK,
+            "CPA_adsorption_audit": adsorption_audit,
         },
     }
 
@@ -1739,6 +1809,21 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
                 "(qmax × stationary-phase bed fraction). Breakthrough can occur during loading "
                 "or washing even when high salt strongly favors binding."
             )
+    if model == MODEL_TDM_CPA:
+        adsorption_audit = sim["diagnostics"]["CPA_adsorption_audit"]
+        target_binding = adsorption_audit["species"][0]
+        if target_binding["end_load_bound_percent_of_load"] < 1.0:
+            warnings.append(
+                "Less than 1% of the target load is adsorbed at the end of loading. "
+                "This prediction does not support a bind-and-elute interpretation; "
+                "inspect the CPA adsorption audit and the load chemistry."
+            )
+        peak_cv = target_peak["column_outlet_peak_CV"]
+        if peak_cv is not None and peak_cv < first_elution_CV - 1e-9:
+            warnings.append(
+                "The target column-outlet maximum occurs before the first elution stage. "
+                "The predicted target response is breakthrough or washout, not an elution peak."
+            )
     if is_hic(config):
         load_salt = program.stages[0].chemistry(0.0)[1]
         elution_salts = [stage.chemistry(f)[1] for stage in program.stages if stage.kind == "ELUTION" for f in (0.0, 1.0)]
@@ -2148,6 +2233,28 @@ def write_outputs(
     generated_uk_display = generated_uk_time.strftime("%d/%m/%Y %H:%M:%S %Z")
     diagnostics_obj = result["simulation"]["diagnostics"]
     saturation = diagnostics_obj.get("nominal_langmuir_saturation")
+    cpa_audit = diagnostics_obj.get("CPA_adsorption_audit")
+    cpa_audit_rows = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
+            row["name"], f'{row["zero_coverage_partition_load"]:.5g}',
+            f'{row["zero_coverage_partition_elution_end"]:.5g}',
+            f'{row["end_load_bound_percent_of_load"]:.3g}',
+            f'{row["end_load_column_percent_of_load"]:.3g}',
+            f'{row["load_outlet_percent_of_load"]:.3g}',
+            f'{row["wash_outlet_percent_of_load"]:.3g}',
+            f'{row["elution_outlet_percent_of_load"]:.3g}',
+        )) + "</tr>" for row in cpa_audit["species"]
+    ) if cpa_audit else ""
+    cpa_audit_html = (
+        "<h2>CPA binding and elution audit</h2>"
+        "<p>K values are zero-coverage equilibrium partition factors at the load start and first elution end. "
+        "End-load bound mass is adsorbed protein; column mass also includes mobile and pore protein. "
+        "Outlet amounts are integrated before detector delay. Percentages use each species' loaded mass.</p>"
+        "<div class=\"scroll\"><table><thead><tr><th>Species</th><th>K load</th><th>K elution end</th>"
+        "<th>Bound after load %</th><th>Column after load %</th><th>Load outlet %</th>"
+        "<th>Wash outlet %</th><th>Elution outlet %</th></tr></thead><tbody>"
+        + cpa_audit_rows + "</tbody></table></div>"
+    ) if cpa_audit else ""
     saturation_html = (
         "<h2>Load versus nominal Langmuir saturation</h2>"
         f"<p>Target feed load: {saturation['target_feed_load_g_L_bed']:.6g} g/L packed bed; "
@@ -2202,6 +2309,7 @@ def write_outputs(
 <div class="scroll"><table><thead><tr><th>Marker</th><th>Stage</th><th>Start CV</th><th>End CV</th><th>Duration CV</th><th>Mode</th><th>Flow mL/min</th><th>Chemistry control</th><th>Start %B</th><th>End %B</th><th>pH start → end</th><th>Salt M start → end</th><th>Salt source/input start → end</th><th>Conductivity mS/cm start → end</th></tr></thead><tbody>{stage_rows}</tbody></table></div>
 {affinity_html}
 {saturation_html}
+{cpa_audit_html}
 <h2>Mass balance</h2>
 <table><thead><tr><th>Component</th><th>Input g</th><th>Outlet g</th><th>Column inventory g</th><th>Closure error</th></tr></thead><tbody>{mb_rows}</tbody></table>
 <h2>Inputs actually used by this run</h2><pre>{parameter_receipt}</pre>
@@ -2228,6 +2336,7 @@ def write_outputs(
         "stages": stages,
         "warnings": diagnostics_obj.get("warnings", []),
         "nominal_langmuir_saturation": saturation,
+        "CPA_adsorption_audit": cpa_audit,
         "langmuir_affinity_used": affinity_used,
         "target_peak": result.get("parameter_receipt", {}).get("target_peak"),
         "output_sha256": {

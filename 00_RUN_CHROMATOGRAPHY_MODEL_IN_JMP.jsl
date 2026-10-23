@@ -4,7 +4,7 @@ Names Default To Here( 1 );
 // JMP's default directory may differ from the folder containing this script.
 launcherName = "00_RUN_CHROMATOGRAPHY_MODEL_IN_JMP.jsl";
 setupName = "open_tdm_setup.py";
-packageMarker = "tdm_r25j_package.marker";
+packageMarker = "tdm_r25k_package.marker";
 
 // JMP can report either a full script path, an editor-window path, or only a
 // working directory. Accept a folder only when this package marker and the

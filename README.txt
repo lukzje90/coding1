@@ -1,4 +1,26 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25j)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25k)
+
+TDM+CPA BINDING AUDIT (R25k)
+Normal results and least-squares fit reports now show the target and impurity
+mass adsorbed at the end of loading, the amount still in the column, and the
+amount leaving during loading, washing and elution. Stage boundaries use the
+adaptive solver's states rather than the plotted time grid, which can skip a
+short load or wash. The report also shows zero-coverage CPA partition factors
+at the load start and first elution end. These are diagnostics, not measured
+or fitted capacity estimates. A target column-outlet peak before elution or
+less than 1% adsorbed at the end of loading raises a visible warning. LSQ still
+reports numerical acceptance separately from chromatographic validity;
+flow-through operation can be intentional for some processes. Core solving
+equations and LSQ residuals are unchanged.
+
+The CPA check includes a one-component bind-and-elute test and a deliberately
+weak-affinity breakthrough test. With several unlocked, correlated parameters,
+fit adsorption first using a small set of CPA parameters, then transport and
+impurities, and finish with a joint UV plus fraction mass% fit. Verify the
+load-material salt or conductivity setting actually used in the run receipt;
+when a buffer uses CONDUCTIVITY input, its entered salt-M value is not the
+authority. The uploaded assessment contained no run-specific inputs, so it
+cannot establish the physical validity of a particular experimental fit.
 
 PER-PARAMETER LSQ FIT LIMITS (R25j)
 Each model parameter keeps its LSQ Locked/Unlocked selector and now has an
@@ -124,7 +146,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25j_package.marker beside the launcher and Python files. Run the saved
+tdm_r25k_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

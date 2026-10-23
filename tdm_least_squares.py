@@ -1667,6 +1667,61 @@ def _objective_parts(
     }
 
 
+def _cpa_binding_metrics(initial_info: dict[str, Any], final_info: dict[str, Any]) -> dict[str, Any] | None:
+    """Keep chromatographic validity separate from numerical fit acceptance."""
+    before = initial_info["result"]["simulation"]["diagnostics"].get("CPA_adsorption_audit")
+    after = final_info["result"]["simulation"]["diagnostics"].get("CPA_adsorption_audit")
+    if not before or not after:
+        return None
+    peak = final_info["result"]["parameter_receipt"]["target_peak"]
+    early_peak = (peak["column_outlet_peak_CV"] is not None
+                  and peak["column_outlet_peak_CV"] < peak["first_elution_start_CV"] - 1e-9)
+    return {
+        "initial": before,
+        "fitted": after,
+        "target_peak_before_elution": bool(early_peak),
+        "target_peak_stage": peak["stage_at_detector_peak"],
+        "target_column_outlet_peak_CV": peak["column_outlet_peak_CV"],
+        "first_elution_start_CV": peak["first_elution_start_CV"],
+        "warnings": list(final_info["result"]["simulation"]["diagnostics"].get("warnings", [])),
+    }
+
+
+def _cpa_binding_html(metrics: dict[str, Any] | None) -> str:
+    if not metrics:
+        return ""
+    initial = metrics["initial"]["species"]
+    fitted = metrics["fitted"]["species"]
+    rows = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
+            after["name"], f'{before["zero_coverage_partition_load"]:.5g}',
+            f'{after["zero_coverage_partition_load"]:.5g}',
+            f'{before["end_load_bound_percent_of_load"]:.3g}',
+            f'{after["end_load_bound_percent_of_load"]:.3g}',
+            f'{after["load_outlet_percent_of_load"]:.3g}',
+            f'{after["wash_outlet_percent_of_load"]:.3g}',
+            f'{after["elution_outlet_percent_of_load"]:.3g}',
+        )) + "</tr>" for before, after in zip(initial, fitted)
+    )
+    warning = " ".join(metrics["warnings"])
+    warning_html = f'<p><b>Binding warning:</b> {html.escape(warning)}</p>' if warning else ""
+    intro = (
+        "<h4>CPA binding and elution audit</h4>"
+        "<p>Zero-coverage K and adsorbed mass after loading show whether the fitted model predicts binding. "
+        "Stage outlet percentages are integrated at the column before detector delay, divided by species load. "
+        "A lower UV objective alone does not establish bind-and-elute behaviour.</p>"
+        f'<p><b>Target column-outlet peak:</b> {html.escape(str(metrics["target_column_outlet_peak_CV"]))} CV; '
+        f'first elution begins at {metrics["first_elution_start_CV"]:.5g} CV.</p>'
+    )
+    table = (
+        "<table><thead><tr><th>Species</th><th>Initial K load</th><th>Fitted K load</th>"
+        "<th>Initial bound after load %</th><th>Fitted bound after load %</th>"
+        "<th>Fitted load outlet %</th><th>Fitted wash outlet %</th>"
+        "<th>Fitted elution outlet %</th></tr></thead><tbody>" + rows + "</tbody></table>"
+    )
+    return intro + warning_html + table
+
+
 class EvaluationBudgetReached(RuntimeError):
     """Stop optimization before the selected model-evaluation budget is exceeded."""
 
@@ -2020,6 +2075,7 @@ def run_least_squares_refinement(
         writer.writeheader()
         writer.writerows(history)
 
+    binding_metrics = _cpa_binding_metrics(initial_info, final_info)
     settings = {
         "mode": mode,
         "objective": config["least_squares"]["objective"],
@@ -2037,6 +2093,7 @@ def run_least_squares_refinement(
         "max_nfev": int(max_nfev),
         "objective_history_csv": str(fit_history_path),
         "target_run_context": run_context,
+        "CPA_binding_audit": binding_metrics,
     }
     fit_settings_path.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -2098,6 +2155,7 @@ Converged flag: {bool(opt.success)}; accepted/applied to active model: {accepted
 {chromatogram_plot}
 {fraction_uv_plot}
 {composition_plot}
+{_cpa_binding_html(binding_metrics)}
 <h2>Refined mechanistic parameters</h2>
 <table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th><th>Fit limit ±%</th><th>Allowed min</th><th>Allowed max</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Objective construction</h2>
@@ -2655,6 +2713,12 @@ def run_global_least_squares_refinement(
                 writer.writerow(row)
 
     write_history()
+    binding_metrics_by_run = [
+        {"run_number": int(profile["run_context"]["run_number"]),
+         "run_name": str(profile["run_context"]["run_name"]),
+         "audit": _cpa_binding_metrics(initial_info, final_info)}
+        for profile, initial_info, final_info in zip(normalized_profiles, initial_infos, final_infos)
+    ]
     settings = {
         "mode": mode,
         "profile_count": n_profiles,
@@ -2689,6 +2753,7 @@ def run_global_least_squares_refinement(
         "max_model_evaluations": int(max_model_evaluations) if max_model_evaluations is not None else None,
         "evaluation_cap_reached": budget_reached,
         "composition_profile_metrics": composition_profile_metrics,
+        "CPA_binding_audit_by_run": binding_metrics_by_run,
         "objective_history_csv": str(history_path) if history_path else None,
         "objective_history_write_error": history_write_error,
     }
@@ -2738,7 +2803,8 @@ def run_global_least_squares_refinement(
         for p in normalized_profiles
     )
     profile_plots = []
-    for profile, cfg, info in zip(normalized_profiles, fitted_configs, final_infos):
+    for profile, cfg, info, binding_row in zip(normalized_profiles, fitted_configs, final_infos,
+                                                binding_metrics_by_run):
         plot = _chromatogram_fit_svg(cfg, info)
         if info["conductivity"]:
             plot += _conductivity_fit_svg(info)
@@ -2751,7 +2817,8 @@ def run_global_least_squares_refinement(
                      + "<p>Only populated species cells for collected fraction intervals contribute mass% residuals. The measured target is solid, measured impurities are dotted, model target is dashed, and model impurities use lighter dots. Blank cells leave gaps; connecting lines are for display.</p>")
         profile_plots.append(
             f'<h3>Run {profile["run_context"]["run_number"]}: {html.escape(profile["run_context"]["run_name"])}'
-            f' vs {html.escape(profile["run_context"]["model_run_label"])}</h3>' + plot)
+            f' vs {html.escape(profile["run_context"]["model_run_label"])}</h3>'
+            + plot + _cpa_binding_html(binding_row["audit"]))
     overlays_html = "".join(profile_plots)
     improvement = _objective_improvement_percent(initial_obj, final_obj)
     fit_quality_warning = ""
@@ -2771,6 +2838,17 @@ def run_global_least_squares_refinement(
     elif budget_reached:
         fit_quality_warning = ("The model-evaluation safety cap stopped optimization before convergence. "
                                "The best tested parameters were retained.")
+    binding_runs = [str(row["run_number"]) for row in binding_metrics_by_run
+                    if row["audit"] and (row["audit"]["target_peak_before_elution"]
+                                         or row["audit"]["fitted"]["species"][0]
+                                         ["end_load_bound_percent_of_load"] < 1.0)]
+    if binding_runs:
+        fit_quality_warning += (" " if fit_quality_warning else "") + (
+            "TDM+CPA run(s) " + ", ".join(binding_runs)
+            + " do not predict convincing target binding and elution: the target outlet peak "
+            "is before elution or less than 1% of its load is bound after loading. "
+            "Review the CPA binding audit before treating the fitted parameters as physical estimates."
+        )
     history_plot = _objective_history_svg(history)
     if history_path is None:
         history_file_html = "History CSV could not be written; the complete history is plotted below."
