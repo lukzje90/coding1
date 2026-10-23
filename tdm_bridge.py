@@ -227,6 +227,18 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
     config["least_squares"]["objective"] = _text("tdm_ui_lsq_objective") or "RAW_SSE"
     config["least_squares"]["baseline_mode"] = _text("tdm_ui_lsq_baseline_mode") or "NONE"
     config["least_squares"]["detector_baseline"] = _num("tdm_ui_lsq_detector_baseline") or 0.0
+    acceptance_label = _text("tdm_ui_lsq_physical_acceptance_mode")
+    if acceptance_label:
+        config["least_squares"]["physical_acceptance_mode"] = (
+            "DIAGNOSTIC_ONLY" if acceptance_label.startswith("Allow flow-through") else "REQUIRE_BIND_ELUTE")
+    for field, ui in (("minimum_bound_percent_after_load", "tdm_ui_lsq_min_bound_percent"),
+                      ("minimum_elution_recovery_percent", "tdm_ui_lsq_min_recovery_percent"),
+                      ("minimum_objective_improvement_percent", "tdm_ui_lsq_min_improvement_percent")):
+        if ui in globals():
+            value = _num(ui)
+            if value is None or not 0 <= value <= 100:
+                raise ValueError(f"{field} must be a number from 0 to 100.")
+            config["least_squares"][field] = value
     # Older bridge callers may not send this field. Once the JMP box exists,
     # reject an empty, fractional or out-of-range cap instead of resetting it.
     if "tdm_ui_lsq_max_nfev" in globals():
@@ -842,6 +854,8 @@ def main() -> int:
                 f"Optimizer converged: {fit['success']}; {fit['message']}\n"
                 f"{fit_warning_line}"
                 f"Accepted/applied to shared batch parameters: {fit['accepted']}\n"
+                f"Acceptance status: {fit['acceptance']['status']}; "
+                f"details: {'; '.join(fit['acceptance']['reasons']) or 'all enabled checks passed'}\n"
                 f"Improved parameters:\n{improved_list}\n"
                 f"Report: {fit['fit_report_html']}\nParameter list CSV: {fit['improved_parameters_csv']}\nObjective history CSV: {fit['latest_fit_history_csv'] or 'unavailable; history is plotted in the fit report'}"
             )

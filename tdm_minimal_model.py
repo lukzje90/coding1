@@ -1119,13 +1119,9 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
     Dax = np.array([float(r["D_ax_mm2_s"]) * 1e-6 for r in rows], dtype=float)
     epspi = np.array([float(r["accessible_particle_porosity"]) for r in rows], dtype=float)
     Facc = epspi / epsp
-    Dax_salt = float(config["system"]["salt_dispersion_mm2_s"]) * 1e-6
-    # The attached study fixes k_eff to r_p/3 when film/pore resistance is negligible.
-    k_eff_salt = rp / 3.0
     n = len(comps)
     time_steps, nx = _numerical_resolution(config)
     dx = L / nx
-    x_centres = (np.arange(nx) + 0.5) * dx
     block = nx * n
     sl_cb = slice(0, block)
     sl_cp = slice(block, 2*block)
@@ -1159,11 +1155,10 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
     def rhs(t: float, y: np.ndarray) -> np.ndarray:
         cb, cp, qv = unpack(y)
         local_chemistry = mobile_phase.local(t, pore=True)
-        inlet_protein, _inlet_pH, inlet_I, _ = program.at_time(t)
+        inlet_protein, _, _, _ = program.at_time(t)
         Q = program.flow_at_time(t) * 1e-6 / 60.0
         u = Q / max(A * epsv, SMALL)
         dqv = np.zeros_like(qv)
-        current_cv = program.time_to_cv(t)
         for cell in range(nx):
             # pH is supplied as an operating profile.  In the absence of a
             # separate buffer-equilibrium model or proton-dispersion parameter,
@@ -1194,6 +1189,25 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
     )
     if not solution.success:
         raise RuntimeError("TDM+CPA integration failed: " + solution.message)
+    if not np.all(np.isfinite(solution.y)):
+        raise FloatingPointError("TDM+CPA produced non-finite concentration states.")
+    state_minimum = float(np.min(solution.y))
+    phases = {"bulk": solution.y[sl_cb], "pore": solution.y[sl_cp],
+              "adsorbed": solution.y[sl_qv]}
+    phase_state_minimum = {name: float(np.min(values)) for name, values in phases.items()}
+    negative_tolerances = {name: max(1e-8, 1e-4 * max(1.0, float(np.max(np.abs(values)))))
+                           for name, values in phases.items()}
+    for name, minimum in phase_state_minimum.items():
+        if minimum < -negative_tolerances[name]:
+            raise FloatingPointError(
+                f"TDM+CPA materially negative {name} state {minimum:.6g} mol/m³ "
+                f"(tolerance {negative_tolerances[name]:.6g} mol/m³).")
+    q_trajectory = np.maximum(solution.y[sl_qv].reshape(nx, n, -1), 0.0)
+    coverage_weights = np.array([math.pi * N_A * c.radius_m**2 / c.As_m_inv for c in comps])
+    maximum_surface_coverage = float(np.max(np.sum(q_trajectory * coverage_weights[None, :, None], axis=1)))
+    if maximum_surface_coverage > 1.05:
+        raise FloatingPointError(
+            f"TDM+CPA surface coverage {maximum_surface_coverage:.6g} exceeds the geometric ceiling by more than 5%.")
 
     sample_t = np.linspace(0.0, program.total_time_s, time_steps + 1)
     Y = solution.sol(sample_t)
@@ -1222,6 +1236,8 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
                   * program.stages[0].flow_mL_min * 1e-6 / 60.0
                   * program.stage_end_time_s[0])
     stage_binding = []
+    cumulative_in_mol = np.zeros(n)
+    cumulative_out_mol = np.zeros(n)
     for stage_index, stage in enumerate(program.stages):
         start = program.stage_start_time_s[stage_index]
         end = program.stage_end_time_s[stage_index]
@@ -1234,17 +1250,34 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
         outlet_mol = np.array([_trapezoidal_integral(np.maximum(outlet[i], 0.0), times)
                                for i in range(n)]) * stage.flow_mL_min * 1e-6 / 60.0
         stage_cb, stage_cp, stage_qv = unpack(endpoints[:, 1])
+        bulk_inventory_mol = bed_cell_V * epsv * np.sum(stage_cb, axis=0)
+        pore_inventory_mol = bed_cell_V * (1.0 - epsv) * epspi * np.sum(stage_cp, axis=0)
         stage_inventory_mol = bed_cell_V * np.sum(
             epsv * stage_cb + (1.0 - epsv) * epspi * stage_cp
             + (1.0 - epsv) * (1.0 - epsp) * stage_qv, axis=0)
         bound_mol = bed_cell_V * (1.0 - epsv) * (1.0 - epsp) * np.sum(stage_qv, axis=0)
+        if stage.kind == "LOAD":
+            cumulative_in_mol += (stage.feed_vector * stage.flow_mL_min * 1e-6 / 60.0
+                                  * (end - start))
+        cumulative_out_mol += outlet_mol
+        balance_error_g = (cumulative_in_mol - cumulative_out_mol - stage_inventory_mol) * mw_g_mol
+        balance_error_percent = 100.0 * balance_error_g / np.maximum(loaded_mol * mw_g_mol, 1e-12)
+        if np.any((loaded_mol > 0) & (np.abs(balance_error_percent) > 5.0)):
+            raise FloatingPointError(
+                f"TDM+CPA stage {stage.name} mass closure exceeds 5% of the species load: "
+                f"{balance_error_percent.tolist()}%.")
         stage_binding.append({
             "stage": stage.name, "kind": stage.kind,
             "start_CV": float(program.stage_start_CV[stage_index]),
             "end_CV": float(program.stage_end_CV[stage_index]),
             "outlet_g": (outlet_mol * mw_g_mol).tolist(),
             "column_inventory_g": np.maximum(stage_inventory_mol * mw_g_mol, 0.0).tolist(),
+            "bulk_inventory_g": np.maximum(bulk_inventory_mol * mw_g_mol, 0.0).tolist(),
+            "pore_inventory_g": np.maximum(pore_inventory_mol * mw_g_mol, 0.0).tolist(),
             "bound_inventory_g": np.maximum(bound_mol * mw_g_mol, 0.0).tolist(),
+            "peak_outlet_mol_m3": np.maximum(np.max(outlet, axis=1), 0.0).tolist(),
+            "cumulative_mass_balance_error_g": balance_error_g.tolist(),
+            "cumulative_mass_balance_error_percent_of_load": balance_error_percent.tolist(),
         })
     load_pH, _, load_I, _ = program.stages[0].chemistry(0.0)
     elution_stage = next((stage for stage in program.stages if stage.kind == "ELUTION"), None)
@@ -1268,6 +1301,8 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
                      if stage_row["kind"] == "PLW")
         eluted_g = sum(float(stage_row["outlet_g"][i]) for stage_row in stage_binding
                        if stage_row["kind"] == "ELUTION")
+        peak_stage = max(stage_binding, key=lambda row: (row["peak_outlet_mol_m3"][i],
+                                                         row["kind"] == "ELUTION"))
         geometric_ceiling_mol_m3 = comp.As_m_inv / (math.pi * N_A * comp.radius_m**2)
         adsorption_audit["species"].append({
             "name": comp.name, "loaded_g": loaded_g,
@@ -1275,13 +1310,16 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
             "elution_end_pH": float(elution_pH), "elution_end_ionic_strength_M": float(elution_I),
             "zero_coverage_partition_load": float(load_K[i]),
             "zero_coverage_partition_elution_end": float(elution_K[i]),
-            "initial_adsorption_rate_mol_m3_s": float(initial_rate[i]),
+            "zero_coverage_rate_at_feed_concentration_mol_m3_s": float(initial_rate[i]),
             "geometric_surface_ceiling_g_L_skeleton": float(geometric_ceiling_mol_m3 * comp.mw_kDa),
             "load_outlet_percent_of_load": 100.0 * load_exit_g / loaded_g if loaded_g > 0 else 0.0,
             "end_load_column_percent_of_load": 100.0 * column_g / loaded_g if loaded_g > 0 else 0.0,
             "end_load_bound_percent_of_load": 100.0 * bound_g / loaded_g if loaded_g > 0 else 0.0,
             "wash_outlet_percent_of_load": 100.0 * wash_g / loaded_g if loaded_g > 0 else 0.0,
             "elution_outlet_percent_of_load": 100.0 * eluted_g / loaded_g if loaded_g > 0 else 0.0,
+            "elution_recovery_percent_of_end_load_retained": 100.0 * eluted_g / column_g if column_g > 0 else 0.0,
+            "peak_outlet_stage": peak_stage["stage"],
+            "peak_outlet_stage_kind": peak_stage["kind"],
         })
     return {
         "program": program,
@@ -1302,7 +1340,23 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
             "requested_time_steps": time_steps,
             "internal_time_steps": max(len(solution.t) - 1, 0),
             "literature_TDM_symbols": "r_p, epsilon_v, epsilon_p, epsilon_p,i, F_acc,i, D_ax,i, D_ax,salt, k_eff,i, u_int",
-            "salt_k_eff_rule": "k_eff,salt = r_p/3 (study assumption)",
+            "mobile_phase_transport_inputs": {
+                "axial_dispersion_mm2_s": float(config["system"]["salt_dispersion_mm2_s"])
+                if config["system"]["salt_dispersion_enabled"] else 0.0,
+                "upstream_mixer_volume_mL": float(config["system"]["buffer_dispersion_mL"])
+                if config["system"]["buffer_dispersion_enabled"] else 0.0,
+                "downstream_uv_dead_volume_mL": float(config["system"]["uv_dead_volume_mL"]),
+                "downstream_conductivity_dead_volume_mL": float(config["system"]["conductivity_dead_volume_mL"]),
+                "bulk_to_pore_exchange_rate_per_s": 1.0,
+                "column_volume_mL": float(config["column"]["volume_mL"]),
+                "column_length_mm": float(config["column"]["length_mm"]),
+                "void_fraction": epsv, "particle_porosity": epsp,
+                "initial_chemistry": mobile_phase.initial_chemistry_state.tolist(),
+            },
+            "minimum_solver_state_mol_m3": state_minimum,
+            "minimum_solver_state_by_phase_mol_m3": phase_state_minimum,
+            "negative_state_tolerance_by_phase_mol_m3": negative_tolerances,
+            "maximum_surface_coverage_fraction": maximum_surface_coverage,
             "pH_rule": "user-programmed pH profile with interstitial convective delay; pH-dependent CPA parameters follow Briskot et al. (2021)",
             "radius_rule": "diameter_nm / 2",
             "fixed_temperature_K": CPA_TEMPERATURE_K,
@@ -1812,6 +1866,12 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
     if model == MODEL_TDM_CPA:
         adsorption_audit = sim["diagnostics"]["CPA_adsorption_audit"]
         target_binding = adsorption_audit["species"][0]
+        moderate_balance = [row["stage"] for row in adsorption_audit["stages"]
+                            if any(abs(error) > 0.5 for error in
+                                   row["cumulative_mass_balance_error_percent_of_load"])]
+        if moderate_balance:
+            warnings.append("CPA cumulative mass closure exceeds 0.5% of a species load at "
+                            + ", ".join(moderate_balance) + ". Review numerical resolution.")
         if target_binding["end_load_bound_percent_of_load"] < 1.0:
             warnings.append(
                 "Less than 1% of the target load is adsorbed at the end of loading. "

@@ -741,9 +741,11 @@ def _linear_z_spec(path: str, label: str, value: float) -> FitParameter:
 
 
 def _default_unlocked_parameter_paths(config: dict[str, Any], *, fit_uv_response: bool = True) -> set[str]:
-    """Keep the established default fit set unless the user changes lock states."""
+    """Start TDM–CPA with target retention parameters; honor saved lock states."""
     config = normalize_config(config)
     model = str(config["model"])
+    if model == MODEL_TDM_CPA:
+        return {"components[0].delta_ref", "components[0].Z_ref"}
     paths: set[str] = set()
     for i, row in enumerate(selected_components(config)):
         if float(row.get("mass_percent") or 0) <= 0:
@@ -981,7 +983,13 @@ def _apply_vector(base: dict[str, Any], specs: list[FitParameter], vector: np.nd
     for spec, raw in zip(specs, np.asarray(vector, dtype=float)):
         value = 10.0 ** float(raw) if spec.transform == "LOG10" else float(raw)
         _set_path(cfg, spec.path, value)
-    return normalize_config(cfg)
+    cfg = normalize_config(cfg)
+    for spec, raw in zip(specs, np.asarray(vector, dtype=float)):
+        expected = 10.0 ** float(raw) if spec.transform == "LOG10" else float(raw)
+        actual = float(_get_path(cfg, spec.path))
+        if not math.isclose(actual, expected, rel_tol=1e-10, abs_tol=1e-12):
+            raise ValueError(f"Parameter transfer failed for {spec.path}: requested {expected}, read back {actual}.")
+    return cfg
 
 
 def _encode_initial(specs: list[FitParameter]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1682,9 +1690,74 @@ def _cpa_binding_metrics(initial_info: dict[str, Any], final_info: dict[str, Any
         "target_peak_before_elution": bool(early_peak),
         "target_peak_stage": peak["stage_at_detector_peak"],
         "target_column_outlet_peak_CV": peak["column_outlet_peak_CV"],
+        "target_peak_stage_from_adaptive_solver": after["species"][0]["peak_outlet_stage"],
         "first_elution_start_CV": peak["first_elution_start_CV"],
         "warnings": list(final_info["result"]["simulation"]["diagnostics"].get("warnings", [])),
     }
+
+
+def _fit_acceptance(config: dict[str, Any], initial_obj: float, final_obj: float,
+                    final_infos: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Require a measurable objective gain and, by default, bind-and-elute for TDM–CPA."""
+    policy = config["least_squares"]
+    gain_percent = _objective_improvement_percent(initial_obj, final_obj)
+    minimum_gain = float(policy["minimum_objective_improvement_percent"])
+    numerical = bool(math.isfinite(final_obj) and final_obj < initial_obj
+                     and gain_percent >= minimum_gain)
+    reasons: list[str] = []
+    physical = True
+    if config["model"] == MODEL_TDM_CPA and policy["physical_acceptance_mode"] == "REQUIRE_BIND_ELUTE":
+        for run, info in enumerate(final_infos, start=1):
+            audit = info["result"]["simulation"]["diagnostics"].get("CPA_adsorption_audit")
+            if not audit or not audit["species"]:
+                reasons.append(f"Run {run}: CPA binding audit is unavailable.")
+                continue
+            target = audit["species"][0]
+            if target["end_load_bound_percent_of_load"] < float(policy["minimum_bound_percent_after_load"]):
+                reasons.append(f"Run {run}: target bound after loading is below the selected minimum.")
+            if target["peak_outlet_stage_kind"] != "ELUTION":
+                reasons.append(f"Run {run}: target column-outlet maximum is in {target['peak_outlet_stage_kind']}, not elution.")
+            if target["elution_recovery_percent_of_end_load_retained"] < float(policy["minimum_elution_recovery_percent"]):
+                reasons.append(f"Run {run}: target recovery relative to end-load column inventory is below the selected minimum.")
+        physical = not reasons
+    status = ("ACCEPTED" if numerical and physical else
+              "NUMERICALLY_IMPROVED_BUT_PHYSICALLY_INVALID" if numerical else "REJECTED")
+    if not numerical:
+        reasons.insert(0, f"Objective improvement {gain_percent:.6g}% does not exceed the required {minimum_gain:.6g}%.")
+    return {"status": status, "accepted": status == "ACCEPTED",
+            "numerically_accepted": numerical, "physically_accepted": physical,
+            "reasons": reasons}
+
+
+def _jacobian_diagnostics(opt: Any, selected_vector: np.ndarray,
+                          specs: list[FitParameter]) -> dict[str, Any]:
+    """Report sensitivity only when SciPy's Jacobian belongs to the selected fit."""
+    result: dict[str, Any] = {
+        "optimizer_jacobian_evaluations": (int(opt.njev) if getattr(opt, "njev", None) is not None else None),
+        "optimizer_optimality": (float(opt.optimality) if getattr(opt, "optimality", None) is not None else None),
+        "finite_difference_step_rule": "in transformed coordinates: max(0.001, abs(value)*0.001), one-sided at bounds",
+        "rank": None, "singular_values": None, "condition_estimate": None,
+        "sensitivity_by_parameter": None,
+        "note": "Jacobian diagnostics unavailable at the selected best candidate.",
+    }
+    jac = getattr(opt, "jac", None)
+    if jac is None or not np.allclose(np.asarray(getattr(opt, "x", []), dtype=float),
+                                      selected_vector, rtol=0, atol=1e-12):
+        return result
+    matrix = np.asarray(jac.toarray() if hasattr(jac, "toarray") else jac, dtype=float)
+    if matrix.ndim != 2 or matrix.shape[1] != len(specs) or not np.all(np.isfinite(matrix)):
+        return result
+    singular = np.linalg.svd(matrix, compute_uv=False)
+    rank = int(np.linalg.matrix_rank(matrix))
+    result.update(rank=rank, singular_values=singular.tolist(),
+                  condition_estimate=(float(singular[0] / singular[-1]) if len(singular)
+                                      and singular[-1] > 0 else None),
+                  sensitivity_by_parameter={spec.path: float(np.linalg.norm(matrix[:, i]))
+                                            for i, spec in enumerate(specs)},
+                  note=("Jacobian is rank deficient; parameter uncertainty is not identifiable."
+                        if rank < len(specs) else
+                        "Local sensitivities use transformed fit coordinates. Confidence intervals require a justified noise model and are not reported."))
+    return result
 
 
 def _cpa_binding_html(metrics: dict[str, Any] | None) -> str:
@@ -1711,7 +1784,9 @@ def _cpa_binding_html(metrics: dict[str, Any] | None) -> str:
         "Stage outlet percentages are integrated at the column before detector delay, divided by species load. "
         "A lower UV objective alone does not establish bind-and-elute behaviour.</p>"
         f'<p><b>Target column-outlet peak:</b> {html.escape(str(metrics["target_column_outlet_peak_CV"]))} CV; '
-        f'first elution begins at {metrics["first_elution_start_CV"]:.5g} CV.</p>'
+        f'first elution begins at {metrics["first_elution_start_CV"]:.5g} CV. '
+        f'Adaptive-solver peak stage: {html.escape(metrics["target_peak_stage_from_adaptive_solver"])}; '
+        f'elution recovery of end-load retained target: {fitted[0]["elution_recovery_percent_of_end_load_retained"]:.3g}%.</p>'
     )
     table = (
         "<table><thead><tr><th>Species</th><th>Initial K load</th><th>Fitted K load</th>"
@@ -1719,7 +1794,22 @@ def _cpa_binding_html(metrics: dict[str, Any] | None) -> str:
         "<th>Fitted load outlet %</th><th>Fitted wash outlet %</th>"
         "<th>Fitted elution outlet %</th></tr></thead><tbody>" + rows + "</tbody></table>"
     )
-    return intro + warning_html + table
+    stage_rows = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
+            stage["stage"], f'{stage["outlet_g"][0]:.5g}',
+            f'{stage["bulk_inventory_g"][0]:.5g}',
+            f'{stage["pore_inventory_g"][0]:.5g}',
+            f'{stage["bound_inventory_g"][0]:.5g}',
+            f'{stage["column_inventory_g"][0]:.5g}',
+            f'{stage["cumulative_mass_balance_error_percent_of_load"][0]:.4g}',
+        )) + "</tr>" for stage in metrics["fitted"]["stages"]
+    )
+    stage_table = ("<h5>Target process-stage audit</h5><table><thead><tr><th>Stage</th>"
+                   "<th>Outlet [g]</th><th>Bulk [g]</th><th>Pore [g]</th>"
+                   "<th>Bound [g]</th><th>Column inventory [g]</th>"
+                   "<th>Cumulative mass closure [% of load]</th></tr></thead><tbody>"
+                   + stage_rows + "</tbody></table>")
+    return intro + warning_html + table + stage_table
 
 
 class EvaluationBudgetReached(RuntimeError):
@@ -2002,8 +2092,10 @@ def run_least_squares_refinement(
             gtol=1e-7,
             max_nfev=max(2, int(max_nfev)),
         )
+        jac_diagnostics = _jacobian_diagnostics(opt, best_vector if best_vector is not None else x0, specs)
     else:
         opt = SimpleNamespace(x=x0, success=True, message="All eligible parameters are locked; evaluated without refinement.", nfev=0)
+        jac_diagnostics = _jacobian_diagnostics(opt, x0, specs)
 
     if best_vector is None:
         fitted = copy.deepcopy(config)
@@ -2017,14 +2109,12 @@ def run_least_squares_refinement(
     eval_count += 1
     record_objective(final_obj, "final verification", "ok")
 
-    # Never replace the active model with a numerically worse refinement.
-    # scipy may stop at max_nfev with success=False while still having found an
-    # improved parameter set, so acceptance is based on the objective itself.
-    accepted = bool(math.isfinite(final_obj) and final_obj <= initial_obj + 32.0 * np.finfo(float).eps * max(initial_obj, np.finfo(float).tiny))
-    applied = fitted if accepted else copy.deepcopy(config)
+    # SciPy can stop at the cap after finding a useful candidate. Apply it only
+    # when the verified objective and enabled physical checks both pass.
+    acceptance = _fit_acceptance(config, initial_obj, final_obj, [final_info])
+    accepted = acceptance["accepted"]
 
-    # Keep the optimizer result as an audit receipt, but only make it the active
-    # model (and update the JMP boxes) when it did not worsen the objective.
+    # Keep the candidate as an audit receipt even when the active model is unchanged.
     save_config(fitted, fit_config_path)
     if accepted:
         save_config(fitted, CONFIG_PATH)
@@ -2094,6 +2184,8 @@ def run_least_squares_refinement(
         "objective_history_csv": str(fit_history_path),
         "target_run_context": run_context,
         "CPA_binding_audit": binding_metrics,
+        "acceptance": acceptance,
+        "jacobian_diagnostics": jac_diagnostics,
     }
     fit_settings_path.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -2146,7 +2238,9 @@ Detected x column: <code>{html.escape(ref.x_column)}</code> ({html.escape(ref.x_
 {x_assumption_note}
 {run_context_html}
 <p><b>Optimiser:</b> SciPy bounded nonlinear least_squares, linear loss.<br>
-Converged flag: {bool(opt.success)}; accepted/applied to active model: {accepted}; function evaluations reported by optimiser: {int(opt.nfev)}; objective evaluations including final check: {eval_count}.</p>
+Converged flag: {bool(opt.success)}; decision: {acceptance['status']}; applied to active model: {accepted}; function evaluations reported by optimiser: {int(opt.nfev)}; objective evaluations including final check: {eval_count}.</p>
+<p><b>Acceptance checks:</b> {html.escape('; '.join(acceptance['reasons']) or 'All enabled checks passed.')} Bound-after-load minimum {config['least_squares']['minimum_bound_percent_after_load']:.3g}%; elution recovery minimum {config['least_squares']['minimum_elution_recovery_percent']:.3g}% of end-load column inventory. CPA policy: {html.escape(config['least_squares']['physical_acceptance_mode'])}.</p>
+<p><b>Jacobian diagnostics:</b> {html.escape(json.dumps(jac_diagnostics, ensure_ascii=False))}</p>
 <p><b>Initial total objective:</b> {initial_obj:.7g}<br><b>Final total objective:</b> {final_obj:.7g}<br>
 <b>Improvement:</b> {improvement_percent:.4g}%<br><b>Final chromatogram objective ({html.escape(config['least_squares']['objective'])}):</b> {final_info['chromatogram_sse_normalized']:.7g}</p>
 {comp_note}
@@ -2162,7 +2256,7 @@ Converged flag: {bool(opt.success)}; accepted/applied to active model: {accepted
 <p>The chromatogram residual is point-by-point least squares (Hahn et al., equation 9). RAW_SSE is the default. No baseline is inferred unless INITIAL_MEDIAN is explicitly selected; otherwise the fixed detector baseline is used. The predicted UV signal is the sum of each species concentration multiplied by its own response factor; the target uses the shared Model Parameters factor and each impurity uses its component-specific factor. UV references labelled AU are converted to mAU. Optional NORMALIZED_MSE divides residuals by the measured signal scale and sqrt(N). RAW_SSE compares UV values directly.</p>
 {uv_identifiability_note}
 <p>For each entered fraction, species mass% is 100 × its integrated detector concentration over the collected CV interval / the integrated concentration of all active species. CV is proportional to collected volume, so this accounts for changing flow. Legacy point-only references retain midpoint comparison. Each entered species value contributes one residual, divided by 100 and sqrt(the number of populated cells). With RAW_SSE, that residual group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the number of UV samples); with NORMALIZED_MSE both groups stay dimensionless with a 1 mAU UV normalization floor. Blank cells add no residual and break the display line.</p>
-<p>Only unlocked eligible mechanistic and instrument parameters listed above are refined. Locked values, column geometry and each recipe remain fixed. The optimizer result was saved to <code>{html.escape(fit_config_path.name)}</code>. It is copied to the active model <code>{html.escape(CONFIG_PATH.name)}</code> only when the total objective is not worse than the starting objective.</p>
+<p>Only unlocked eligible mechanistic and instrument parameters listed above are refined. Locked values, column geometry and each recipe remain fixed. The candidate was saved to <code>{html.escape(fit_config_path.name)}</code>; it is applied to <code>{html.escape(CONFIG_PATH.name)}</code> only after all enabled acceptance checks pass.</p>
 <h2>Objective improvement over time</h2>
 <p>The plot and CSV show every objective evaluation, elapsed seconds, best-so-far objective, improvement relative to the initial objective, and any numerical-penalty status. Lower objective is better. <a href="{html.escape(fit_history_path.name)}">Open objective history CSV</a>.</p>
 {history_plot}
@@ -2189,6 +2283,7 @@ Converged flag: {bool(opt.success)}; accepted/applied to active model: {accepted
     return {
         "success": bool(opt.success),
         "accepted": accepted,
+        "acceptance": acceptance,
         "message": str(opt.message),
         "initial_objective": initial_obj,
         "final_objective": final_obj,
@@ -2302,6 +2397,11 @@ def run_global_least_squares_refinement(
             raise ValueError(f"Global-fit profile {index} does not have the same shared protein-species names as profile 1.")
         if cfg["least_squares"].get("fit_range_percent") != first["least_squares"].get("fit_range_percent"):
             raise ValueError(f"Global-fit profile {index} has different per-parameter fit ranges; one shared fit needs one shared set of limits.")
+        acceptance_fields = ("physical_acceptance_mode", "minimum_bound_percent_after_load",
+                             "minimum_elution_recovery_percent", "minimum_objective_improvement_percent")
+        if any(cfg["least_squares"].get(field) != first["least_squares"].get(field)
+               for field in acceptance_fields):
+            raise ValueError(f"Global-fit profile {index} has different physical acceptance settings.")
 
     # These are shared batch parameters. Process recipes and column geometry
     # remain profile inputs, while a different non-empty value for a shared
@@ -2502,6 +2602,7 @@ def run_global_least_squares_refinement(
             budget_reached = True
             opt = SimpleNamespace(x=x0.copy(), success=False, message=str(exc),
                                   nfev=candidate_evaluations)
+        jac_diagnostics = _jacobian_diagnostics(opt, best_vector if best_vector is not None else x0, specs)
         if best_vector is None:
             fitted_configs = [copy.deepcopy(cfg) for cfg in base_configs]
             opt.x = np.asarray([math.log10(float(_get_path(seed, spec.path))) if spec.transform == "LOG10"
@@ -2517,6 +2618,7 @@ def run_global_least_squares_refinement(
         opt_success = True
         opt_message = "All eligible mechanistic parameters are locked; objective evaluated without optimization."
         opt_nfev = 0
+        jac_diagnostics = _jacobian_diagnostics(SimpleNamespace(), x0, specs)
     try:
         final_r, final_infos = evaluate(fitted_configs)
         final_obj = float(np.sum(final_r ** 2))
@@ -2530,10 +2632,9 @@ def run_global_least_squares_refinement(
         opt_message = f"Final candidate verification failed; original parameters retained: {type(exc).__name__}: {exc}"
     eval_count += 1
     record(final_obj, "final verification", "ok" if opt_success else opt_message)
-    accepted = bool(math.isfinite(final_obj) and final_obj <= initial_obj + 32.0 * np.finfo(float).eps * max(initial_obj, np.finfo(float).tiny))
-    fitted = fitted_configs[0] if accepted else copy.deepcopy(base_configs[0])
-    if not accepted:
-        fitted_configs = [copy.deepcopy(cfg) for cfg in base_configs]
+    acceptance = _fit_acceptance(first, initial_obj, final_obj, final_infos)
+    accepted = acceptance["accepted"]
+    fitted = fitted_configs[0]
 
     save_config(fitted, FIT_CONFIG_JSON)
     if accepted:
@@ -2754,6 +2855,8 @@ def run_global_least_squares_refinement(
         "evaluation_cap_reached": budget_reached,
         "composition_profile_metrics": composition_profile_metrics,
         "CPA_binding_audit_by_run": binding_metrics_by_run,
+        "acceptance": acceptance,
+        "jacobian_diagnostics": jac_diagnostics,
         "objective_history_csv": str(history_path) if history_path else None,
         "objective_history_write_error": history_write_error,
     }
@@ -2829,7 +2932,7 @@ def run_global_least_squares_refinement(
     if poor_uv_runs:
         fit_quality_warning = ("Measured and fitted UV remain materially different for run(s) "
                                + ", ".join(poor_uv_runs)
-                               + " (UV R² below 0.8). Accepted means the best tested objective did not worsen; "
+                               + " (UV R² below 0.8). Acceptance checks do not certify a close UV match; "
                                "it does not mean the measured chromatogram was matched.")
     elif worsened_uv_runs:
         fit_quality_warning = ("Fitted UV RMSE is more than 5% worse than its starting value for run(s) "
@@ -2874,7 +2977,9 @@ def run_global_least_squares_refinement(
 <p><b>Elapsed fit time:</b> {fit_elapsed_hms} ({fit_elapsed_seconds:.1f} seconds). Measured from loading the selected reference profiles through fitted output preparation.</p>
 <p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
-<b>Accepted/applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Evaluation safety cap:</b> {int(max_model_evaluations) if max_model_evaluations is not None else int(max_nfev)}; <b>Unlocked parameters:</b> {len(specs)}. The model-evaluation cap includes optimizer candidates, finite-difference Jacobian probes, and final verification; the initial reference calculation is logged at evaluation 0.</p>
+<b>Decision:</b> {acceptance['status']}; <b>Applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Evaluation safety cap:</b> {int(max_model_evaluations) if max_model_evaluations is not None else int(max_nfev)}; <b>Unlocked parameters:</b> {len(specs)}. The model-evaluation cap includes optimizer candidates, finite-difference Jacobian probes, and final verification; the initial reference calculation is logged at evaluation 0.</p>
+<p><b>Acceptance checks:</b> {html.escape('; '.join(acceptance['reasons']) or 'All enabled checks passed.')} Bound-after-load minimum {first['least_squares']['minimum_bound_percent_after_load']:.3g}%; elution recovery minimum {first['least_squares']['minimum_elution_recovery_percent']:.3g}% of end-load column inventory. CPA policy: {html.escape(first['least_squares']['physical_acceptance_mode'])}. Candidate parameters are saved for diagnosis and applied to the active model only after all enabled checks pass.</p>
+<p><b>Local Jacobian diagnostics:</b> {html.escape(json.dumps(jac_diagnostics, ensure_ascii=False))}</p>
 {f'<p><b>Fit quality warning:</b> {html.escape(fit_quality_warning)}</p>' if fit_quality_warning else ''}
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise UV equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor. Conductivity, when enabled for a run, adds measured detector residuals normalized by that run's conductivity signal scale and sample count; in RAW_SSE these are rescaled to the measured UV scale.</p>
 <table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>Initial UV RMSE</th><th>Fitted UV RMSE</th><th>Weighted UV RMSE</th><th>Run weight</th><th>UV R²</th><th>Conductivity RMSE [mS/cm]</th></tr></thead><tbody>{profile_rows}</tbody></table>
@@ -2891,6 +2996,7 @@ def run_global_least_squares_refinement(
     return {
         "success": opt_success,
         "accepted": accepted,
+        "acceptance": acceptance,
         "message": opt_message,
         "initial_objective": initial_obj,
         "final_objective": final_obj,

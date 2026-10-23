@@ -1,4 +1,21 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25k)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25l)
+
+TDM+CPA LSQ ACCEPTANCE AND SOLVER AUDIT (R25l)
+TDM+CPA fits now require a measurable objective improvement and, by default,
+target binding after loading, a column-outlet peak during elution, and recovery
+of retained target. Fit settings expose adjustable percentage limits and an
+option to allow intentional flow-through. A numerically improved candidate
+that fails the physical check remains in the reports and fitted inputs JSON,
+but is not copied into the active model or JMP parameter boxes. The solver
+reports actual mobile-phase transport inputs, phase-state minima, and stage
+mass closure. Material negative states and severe (>5% of load) mass errors
+stop the simulation. Parameter readback is checked before final simulation.
+The System response salt-dispersion value is the active transport input; the
+old TDM-only salt field is kept solely for legacy project loading.
+For new TDM+CPA projects, the default LSQ selection unlocks only target Delta
+and charge; saved locks remain in force. Isolated tests cover salt and charge
+direction, saturation, kinetics, retention, release, mass balance, and grid/time
+convergence on a representative bind-and-elute recipe.
 
 TDM+CPA BINDING AUDIT (R25k)
 Normal results and least-squares fit reports now show the target and impurity
@@ -8,10 +25,9 @@ adaptive solver's states rather than the plotted time grid, which can skip a
 short load or wash. The report also shows zero-coverage CPA partition factors
 at the load start and first elution end. These are diagnostics, not measured
 or fitted capacity estimates. A target column-outlet peak before elution or
-less than 1% adsorbed at the end of loading raises a visible warning. LSQ still
-reports numerical acceptance separately from chromatographic validity;
-flow-through operation can be intentional for some processes. Core solving
-equations and LSQ residuals are unchanged.
+less than 1% adsorbed at the end of loading raises a visible warning. LSQ now
+requires the configurable binding check by default; intentional flow-through
+fits can turn it off. Core solving equations and LSQ residuals are unchanged.
 
 The CPA check includes a one-component bind-and-elute test and a deliberately
 weak-affinity breakthrough test. With several unlocked, correlated parameters,
@@ -146,7 +162,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25k_package.marker beside the launcher and Python files. Run the saved
+tdm_r25l_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

@@ -200,7 +200,11 @@ def blank_config() -> dict[str, Any]:
         "wang": {"q0_g_L": 20.0, "eta": 1.0},
         "system": system_defaults(),
         "least_squares": {"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
-                          "unlocked_paths": None, "selected_run_numbers": None, "fit_range_percent": {}},
+                          "unlocked_paths": None, "selected_run_numbers": None, "fit_range_percent": {},
+                          "physical_acceptance_mode": "REQUIRE_BIND_ELUTE",
+                          "minimum_bound_percent_after_load": 5.0,
+                          "minimum_elution_recovery_percent": 5.0,
+                          "minimum_objective_improvement_percent": 0.01},
         "impurity_count": 0,
         "column": {
             "volume_mL": None,
@@ -346,9 +350,7 @@ def normalize_config(config: Any) -> Any:
             if str(out["model"]) == MODEL_TDM_CPA and legacy_salt_d is not None:
                 defaults["salt_dispersion_mm2_s"] = legacy_salt_d
             out["system"] = deep_merge(defaults, out.get("system", {}))
-            out["least_squares"] = deep_merge({"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
-                                                "unlocked_paths": None, "selected_run_numbers": None,
-                                                "fit_range_percent": {}}, out.get("least_squares", {}))
+            out["least_squares"] = deep_merge(blank_config()["least_squares"], out.get("least_squares", {}))
             if isinstance(out["least_squares"]["fit_range_percent"], dict):
                 out["least_squares"]["fit_range_percent"] = {
                     canonical_fit_parameter_path(path): percent
@@ -791,7 +793,7 @@ CPA_COMMON_INPUT_FIELDS = (
     "cpa.ligand_surface_density_umol_m2",
     "cpa.system_specific_adsorption_parameter",
 )
-CPA_TDM_ONLY_INPUT_FIELDS = ("tdm.salt_axial_dispersion_mm2_s",)
+CPA_TDM_ONLY_INPUT_FIELDS: tuple[str, ...] = ()  # Legacy value is migrated to system.salt_dispersion_mm2_s.
 COMPONENT_COMMON_FIELDS = ("mass_percent",)
 COMPONENT_TDM_FIELDS = ("D_ax_mm2_s", "k_eff_um_s", "accessible_particle_porosity")
 COMPONENT_EDM_FIELDS = ("D_app_mm2_s",)
@@ -1063,6 +1065,11 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
         errors.append("Least-squares objective must be RAW_SSE, NORMALIZED_MSE or WEIGHTED_RMSE.")
     if lsq.get("baseline_mode") not in {"NONE", "INITIAL_MEDIAN"}:
         errors.append("Baseline mode must be NONE or INITIAL_MEDIAN.")
+    if lsq.get("physical_acceptance_mode") not in {"REQUIRE_BIND_ELUTE", "DIAGNOSTIC_ONLY"}:
+        errors.append("CPA fit acceptance must be REQUIRE_BIND_ELUTE or DIAGNOSTIC_ONLY.")
+    for field in ("minimum_bound_percent_after_load", "minimum_elution_recovery_percent",
+                  "minimum_objective_improvement_percent"):
+        _number(lsq.get(field), field, errors, lower=0.0, upper=100.0)
     _number(lsq.get("detector_baseline"), "Detector baseline", errors)
     max_nfev = _number(lsq.get("max_nfev"), "Least-squares maximum solver evaluations", errors, lower=2, upper=10000)
     if max_nfev is not None and not max_nfev.is_integer():

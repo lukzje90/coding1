@@ -571,7 +571,7 @@ def main() -> None:
         MODEL_EDM_LANGMUIR: {'column.volume_mL','column.length_mm','conversion.uv_to_protein_mAU_L_g','conversion.conductivity_to_salt_M_per_mS_cm','edm.total_bed_porosity'},
         MODEL_TDM_LANGMUIR: {'column.volume_mL','column.length_mm','conversion.uv_to_protein_mAU_L_g','conversion.conductivity_to_salt_M_per_mS_cm','tdm.bead_radius_um','tdm.void_fraction','tdm.particle_porosity'},
         MODEL_EDM_CPA: {'column.volume_mL','column.length_mm','conversion.uv_to_protein_mAU_L_g','conversion.conductivity_to_salt_M_per_mS_cm','edm.total_bed_porosity','cpa.ligand_surface_density_umol_m2','cpa.system_specific_adsorption_parameter'},
-        MODEL_TDM_CPA: {'column.volume_mL','column.length_mm','conversion.uv_to_protein_mAU_L_g','conversion.conductivity_to_salt_M_per_mS_cm','tdm.bead_radius_um','tdm.void_fraction','tdm.particle_porosity','tdm.salt_axial_dispersion_mm2_s','cpa.ligand_surface_density_umol_m2','cpa.system_specific_adsorption_parameter'},
+        MODEL_TDM_CPA: {'column.volume_mL','column.length_mm','conversion.uv_to_protein_mAU_L_g','conversion.conductivity_to_salt_M_per_mS_cm','tdm.bead_radius_um','tdm.void_fraction','tdm.particle_porosity','cpa.ligand_surface_density_umol_m2','cpa.system_specific_adsorption_parameter'},
     }
     expected_component = {
         MODEL_EDM_LANGMUIR: {'mass_percent','D_app_mm2_s','qmax_g_L','b_L_g','salt_sensitivity_per_M'},

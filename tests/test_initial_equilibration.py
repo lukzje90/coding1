@@ -185,6 +185,9 @@ class InitialEquilibrationTests(unittest.TestCase):
 
     def test_tdm_cpa_fits_ph_parameter_required_only_by_later_run(self):
         first = small_config(MODEL_TDM_CPA)
+        # This test isolates parameter eligibility across recipes; its synthetic
+        # pH programmes are not constructed as bind-and-elute acceptance runs.
+        first["least_squares"]["physical_acceptance_mode"] = "DIAGNOSTIC_ONLY"
         first["components"][0].update(pH_ref=6.0, Z1_per_pH=5.0,
                                       Z2_per_pH2=0.0, Z3_per_pH3=0.0,
                                       delta_pH_slope_m2_C=0.0)

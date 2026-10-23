@@ -337,11 +337,13 @@ def _req_expr(model: str, span: float, chromatography_mode: str | None = None) -
 
 
 def _default_lsq_unlocked_paths(config: dict[str, Any]) -> set[str]:
-    """Mirror the previous LSQ defaults while exposing every other fit lock."""
+    """Use a small initial TDM–CPA fit; preserve explicit saved lock choices."""
     persisted = config.get("least_squares", {}).get("unlocked_paths")
     if persisted is not None:
         return set(persisted)
     model = str(config.get("model") or "")
+    if model == MODEL_TDM_CPA:
+        return {"components[0].delta_ref", "components[0].Z_ref"}
     n = min(max(int(config.get("impurity_count", 0) or 0), 0), MAX_IMPURITIES) + 1
     paths: set[str] = set()
     for i in range(n):
@@ -381,7 +383,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     component_bodies, component_sends, component_vis = [], [], []
     fit_lock_vars = _FitControlRegistry(cfg["least_squares"].get("fit_range_percent") or {})
     default_unlocked_paths = _default_lsq_unlocked_paths(cfg)
-    if cfg["least_squares"].get("unlocked_paths") is None:
+    if cfg["least_squares"].get("unlocked_paths") is None and cfg["model"] != MODEL_TDM_CPA:
         # Seed each model's usual fit controls only when no explicit locks were
         # saved. Switching model in JMP then exposes sensible active defaults;
         # a saved Lock all choice remains locked even for hidden combinations.
@@ -487,6 +489,10 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'Python Send(lsqBaselineMode << Get Selected, Python Name("tdm_ui_lsq_baseline_mode"));',
         'Python Send(lsqBaseline << Get, Python Name("tdm_ui_lsq_detector_baseline"));',
         'Python Send(lsqMaxEvaluations << Get, Python Name("tdm_ui_lsq_max_nfev"));',
+        'Python Send(lsqPhysicalAcceptance << Get Selected, Python Name("tdm_ui_lsq_physical_acceptance_mode"));',
+        'Python Send(lsqMinBound << Get, Python Name("tdm_ui_lsq_min_bound_percent"));',
+        'Python Send(lsqMinRecovery << Get, Python Name("tdm_ui_lsq_min_recovery_percent"));',
+        'Python Send(lsqMinImprovement << Get, Python Name("tdm_ui_lsq_min_improvement_percent"));',
     ]
     lsq_run_sections = []
     lsq_selection_visibility = []
@@ -1518,6 +1524,12 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                     H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
                     Text Box("Set parameter locks on Model Parameters. The safety cap counts model evaluations; progress is saved to least_squares_objective_history.csv.", << Set Wrap(740)),
                     {_nrow("Safety cap: model evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 320)},
+                    Outline Box("TDM–CPA fit acceptance", << Close(1), V List Box(
+                        H List Box(Text Box("Physical check", << Set Width(240)), lsqPhysicalAcceptance = Combo Box({{"Require bind + elute", "Allow flow-through fit"}}, << Set({1 if cfg['least_squares']['physical_acceptance_mode']=='REQUIRE_BIND_ELUTE' else 2}), << Set Width(250))),
+                        {_nrow("Minimum target bound after load [%]", "lsqMinBound", cfg['least_squares']['minimum_bound_percent_after_load'], 240)},
+                        {_nrow("Minimum elution recovery of retained target [%]", "lsqMinRecovery", cfg['least_squares']['minimum_elution_recovery_percent'], 240)},
+                        {_nrow("Minimum objective improvement [%]", "lsqMinImprovement", cfg['least_squares']['minimum_objective_improvement_percent'], 240)}
+                    )),
                     Outline Box("Optional objective and stopping settings", << Close(1), V List Box(
                         H List Box(Text Box("Objective", << Set Width(240)), lsqObjective = Combo Box({{"RAW_SSE", "NORMALIZED_MSE", "WEIGHTED_RMSE"}}, << Set({1 if cfg['least_squares']['objective']=='RAW_SSE' else 2 if cfg['least_squares']['objective']=='NORMALIZED_MSE' else 3}), << Set Width(220))),
                         H List Box(Text Box("Baseline policy", << Set Width(240)), lsqBaselineMode = Combo Box({{"NONE", "INITIAL_MEDIAN"}}, << Set({1 if cfg['least_squares']['baseline_mode']=='NONE' else 2}), << Set Width(220))),
