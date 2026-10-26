@@ -1,4 +1,17 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25l)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25m)
+
+TDM+CPA REFINEMENT AND SELECTED PREDICTION (R25m)
+The TDM+CPA fit history can show impossible surface coverage during a
+Jacobian probe. Those trial parameters are invalid: the solver now rejects
+such a trajectory at its first accepted over-coverage state, rather than
+finishing the full run before rejecting it. The LSQ numerical Jacobian tries
+the opposite parameter direction and then smaller steps; a fixed penalty is
+never treated as a measured derivative. Each retry counts toward the selected
+model-evaluation safety cap. CPA scalar calculations reuse the electrostatic
+energy and avoid array operations on single numbers. Regression checks found
+identical chromatograms before and after that calculation cleanup. The
+selected-run button now shows that a prediction is in progress while JMP is
+waiting for the solver. A complex TDM+CPA prediction can still take minutes.
 
 TDM+CPA LSQ ACCEPTANCE AND SOLVER AUDIT (R25l)
 TDM+CPA fits now require a measurable objective improvement and, by default,
@@ -162,7 +175,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25l_package.marker beside the launcher and Python files. Run the saved
+tdm_r25m_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

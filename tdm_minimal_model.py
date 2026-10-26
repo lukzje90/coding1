@@ -13,7 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
-from scipy.integrate import solve_ivp
+from scipy.integrate import BDF, solve_ivp
 from scipy.optimize import brentq
 from scipy.sparse import lil_matrix
 from threadpoolctl import threadpool_limits
@@ -66,6 +66,11 @@ CPA_RELATIVE_PERMITTIVITY = 78.3
 CPA_CEX_LIGAND_PK = 2.3
 SMALL = 1e-30
 MAX_EXP = MAX_HIC_LOG_AFFINITY
+
+
+def _clip_scalar(value: float, lower: float, upper: float) -> float:
+    """Scalar equivalent of np.clip without an array dispatch in the CPA RHS."""
+    return lower if value < lower else upper if value > upper else value
 
 # Briskot et al. Eq. 23; inverted only for mass/molar conversion when the user
 # supplies diameter as requested by the Word document.
@@ -332,7 +337,7 @@ class CPAModel:
         self.has_lateral_interactions = any(abs(c.Z_lat) > 0.0 for c in components)
 
     def ligand_ionisation(self, pH: float) -> float:
-        exponent = float(np.clip(CPA_CEX_LIGAND_PK - pH, -300.0, 300.0))
+        exponent = _clip_scalar(CPA_CEX_LIGAND_PK - pH, -300.0, 300.0)
         return 1.0 / (1.0 + 10.0**exponent)
 
     def sigma_adsorber(self, pH: float) -> float:
@@ -369,7 +374,7 @@ class CPAModel:
             (math.pi * r*r * surface_density + 2.0 * math.pi * r * radius_density) / one_minus
             + math.pi * r*r * radius_density*radius_density / (one_minus*one_minus)
         )
-        return float(np.clip(one_minus * math.exp(-min(max(work, 0.0), MAX_EXP)), 0.0, 1.0))
+        return _clip_scalar(one_minus * math.exp(-min(max(work, 0.0), MAX_EXP)), 0.0, 1.0)
 
     def lateral_interactions(self, qv: np.ndarray, ionic_strength_mol_m3: float) -> np.ndarray:
         if not self.has_lateral_interactions:
@@ -402,7 +407,8 @@ class CPAModel:
             return y*y * math.exp(-ay)
         return 0.5 * y*y / max(math.cosh(y) - 1.0, SMALL)
 
-    def equilibrium_factors(self, qv: np.ndarray, pH: float, ionic_strength_M: float) -> np.ndarray:
+    def equilibrium_factors(self, qv: np.ndarray, pH: float, ionic_strength_M: float,
+                            _energy_out: np.ndarray | None = None) -> np.ndarray:
         if self.hic:
             # Phenomenological HIC extension of the CPA available-surface model.
             # The attached CPA paper is IEX: its electrostatic salt screening
@@ -416,27 +422,29 @@ class CPAModel:
         lateral = self.lateral_interactions(qv, ionic_mol_m3)
         K = np.zeros(self.n)
         for i, comp in enumerate(self.components):
-            y = float(np.clip(self.u_adsorber(comp, pH, ionic_mol_m3) / self.kBT, -80.0, 80.0))
+            y = _clip_scalar(self.u_adsorber(comp, pH, ionic_mol_m3) / self.kBT, -80.0, 80.0)
+            if _energy_out is not None:
+                _energy_out[i] = y
             available = self.available_surface(i, qv)
-            integral = 1.0 if abs(y) < 1e-7 else (1.0 - math.exp(float(np.clip(-y, -80.0, 80.0)))) / y
+            integral = 1.0 if abs(y) < 1e-7 else (1.0 - math.exp(_clip_scalar(-y, -80.0, 80.0))) / y
             K[i] = max(
                 comp.delta(pH)
                 * available
-                * math.exp(float(np.clip(-lateral[i] / self.kBT, -80.0, 80.0)))
+                * math.exp(_clip_scalar(-lateral[i] / self.kBT, -80.0, 80.0))
                 * integral,
                 0.0,
             )
         return K
 
     def kinetic_rate(self, cp: np.ndarray, qv: np.ndarray, pH: float, ionic_strength_M: float) -> np.ndarray:
-        K = self.equilibrium_factors(qv, pH, ionic_strength_M)
-        ionic_mol_m3 = max(float(ionic_strength_M), 0.0) * 1000.0
+        energy = np.zeros(self.n)
+        K = self.equilibrium_factors(qv, pH, ionic_strength_M, _energy_out=energy)
         dq = np.zeros(self.n)
         for i, comp in enumerate(self.components):
-            y = 0.0 if self.hic else float(np.clip(self.u_adsorber(comp, pH, ionic_mol_m3) / self.kBT, -80.0, 80.0))
-            kkin = max(comp.kkin_star_s * self._fkin(y), 0.0)
+            kkin = max(comp.kkin_star_s * self._fkin(float(energy[i])), 0.0)
             dq[i] = kkin * (K[i] * max(float(cp[i]), 0.0) - max(float(qv[i]), 0.0))
         return dq
+
 
     def equilibrium_from_total(
         self, total: np.ndarray, phase_ratio_F: float, pH: float, ionic_strength_M: float
@@ -507,6 +515,36 @@ class CPAModel:
                 q = np.clip(0.7*q + 0.3*target, 0.0, upper)
         c = np.maximum(total - Fphase*q, 0.0)
         return c, q
+
+
+class _CoverageGuardedBDF(BDF):
+    """Reject an unphysical CPA trajectory at its first accepted solver step.
+
+    The ordinary BDF integration and tolerances are unchanged. Checking an
+    accepted state here avoids spending the rest of a long LSQ probe solving a
+    trajectory that the post-solve geometric audit must reject anyway. Trial
+    states inside BDF's Newton iteration are deliberately left unchecked.
+    """
+
+    def __init__(self, fun, t0, y0, t_bound, *, coverage_weights,
+                 adsorbed_slice, axial_positions, species_count, **options):
+        self._coverage_weights = np.asarray(coverage_weights, dtype=float)
+        self._adsorbed_slice = adsorbed_slice
+        self._axial_positions = axial_positions
+        self._species_count = species_count
+        super().__init__(fun, t0, y0, t_bound, **options)
+
+    def _step_impl(self):
+        success, message = super()._step_impl()
+        if success:
+            adsorbed = np.maximum(
+                self.y[self._adsorbed_slice].reshape(
+                    self._axial_positions, self._species_count), 0.0)
+            coverage = float(np.max(adsorbed @ self._coverage_weights))
+            if not math.isfinite(coverage) or coverage > 1.05:
+                raise FloatingPointError(
+                    f"TDM+CPA surface coverage {coverage:.6g} exceeds the geometric ceiling by more than 5%.")
+        return success, message
 
 
 def _mw_from_radius_nm(radius_nm: float) -> float:
@@ -1182,10 +1220,12 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
 
         return np.concatenate([dcb.ravel(), dcp.ravel(), dqv.ravel()])
 
+    coverage_weights = np.array([math.pi * N_A * c.radius_m**2 / c.As_m_inv for c in comps])
     solution = solve_ivp(
-        rhs, (0.0, program.total_time_s), y0, method="BDF", rtol=2e-6, atol=1e-9,
+        rhs, (0.0, program.total_time_s), y0, method=_CoverageGuardedBDF, rtol=2e-6, atol=1e-9,
         max_step=max(program.total_time_s / max(time_steps, 1), 1e-6), dense_output=True,
-        jac_sparsity=sparsity.tocsr(),
+        jac_sparsity=sparsity.tocsr(), coverage_weights=coverage_weights,
+        adsorbed_slice=sl_qv, axial_positions=nx, species_count=n,
     )
     if not solution.success:
         raise RuntimeError("TDM+CPA integration failed: " + solution.message)
@@ -1203,7 +1243,6 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
                 f"TDM+CPA materially negative {name} state {minimum:.6g} mol/m³ "
                 f"(tolerance {negative_tolerances[name]:.6g} mol/m³).")
     q_trajectory = np.maximum(solution.y[sl_qv].reshape(nx, n, -1), 0.0)
-    coverage_weights = np.array([math.pi * N_A * c.radius_m**2 / c.As_m_inv for c in comps])
     maximum_surface_coverage = float(np.max(np.sum(q_trajectory * coverage_weights[None, :, None], axis=1)))
     if maximum_surface_coverage > 1.05:
         raise FloatingPointError(

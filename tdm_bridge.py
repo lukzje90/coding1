@@ -868,6 +868,7 @@ def main() -> int:
                                  "Any existing result belongs to earlier settings:\n- " + "\n- ".join(errors))
             from tdm_minimal_model import run_and_write
             context = _selected_run_context(run_number)
+            _write_status(f"Running prediction for Run {run_number} — {context['run_name']}.")
             paths = run_and_write(current_effective, run_context=context)
             result_manifest = json.loads(Path(paths["manifest"]).read_text(encoding="utf-8"))
             run_warnings = result_manifest.get("warnings") or []

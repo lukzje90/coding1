@@ -1939,9 +1939,11 @@ def _format_elapsed_hms(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds_left:02d}"
 
 
-def _bounded_jacobian(fun, lower, upper, batch_fun=None):
+def _bounded_jacobian(fun, lower, upper, batch_fun=None, trial_valid=None):
     def jacobian(vector):
         base = fun(vector)
+        if trial_valid is not None and not trial_valid(vector):
+            return np.zeros((len(base), len(vector)), dtype=float)
         trials = []
         steps = []
         for i, value in enumerate(vector):
@@ -1954,7 +1956,35 @@ def _bounded_jacobian(fun, lower, upper, batch_fun=None):
             trials.append(trial)
             steps.append(step)
         values = batch_fun(trials) if batch_fun is not None else [fun(trial) for trial in trials]
-        columns = [(result - base) / step for result, step in zip(values, steps)]
+        columns = []
+        for i, (trial, result, step) in enumerate(zip(trials, values, steps)):
+            if trial_valid is not None and not trial_valid(trial):
+                # An invalid CPA trajectory is a feasibility boundary, not a
+                # measured residual. Never use its fixed penalty to form a
+                # numerical derivative; probe the other feasible direction
+                # and then reduce the step if necessary.
+                h = abs(step)
+                for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
+                    for direction in (-np.sign(step), np.sign(step)):
+                        if scale == 1.0 and direction == np.sign(step):
+                            continue  # This is the trial already known to be invalid.
+                        alternative_step = float(direction * h * scale)
+                        if not lower[i] <= vector[i] + alternative_step <= upper[i]:
+                            continue
+                        alternative = np.asarray(vector, dtype=float).copy()
+                        alternative[i] += alternative_step
+                        alternative_result = (batch_fun([alternative])[0]
+                                              if batch_fun is not None else fun(alternative))
+                        if trial_valid(alternative):
+                            result, step = alternative_result, alternative_step
+                            break
+                    else:
+                        continue
+                    break
+                else:
+                    columns.append(np.zeros_like(base))
+                    continue
+            columns.append((result - base) / step)
         return np.column_stack(columns)
     return jacobian
 
@@ -2493,6 +2523,7 @@ def run_global_least_squares_refinement(
     eval_count = 0
     candidate_evaluations = 0
     budget_reached = False
+    invalid_trial_vectors: set[bytes] = set()
     optimizer_budget = None if max_model_evaluations is None else int(max_model_evaluations) - 1
     history_fields = ["evaluation", "elapsed_seconds", "objective", "best_objective", "improvement_percent", "phase", "status"]
     history_path: Path | None = FIT_HISTORY_CSV
@@ -2568,6 +2599,7 @@ def run_global_least_squares_refinement(
             objective = float(np.sum(values * values))
             if not np.all(np.isfinite(values)) or not math.isfinite(objective):
                 raise FloatingPointError("non-finite global residual")
+            invalid_trial_vectors.discard(np.asarray(vector, dtype=float).tobytes())
             if objective < best_objective:
                 best_vector = np.asarray(vector).copy()
             record(objective, phase, "ok")
@@ -2575,6 +2607,7 @@ def run_global_least_squares_refinement(
         except EvaluationBudgetReached:
             raise
         except Exception as exc:
+            invalid_trial_vectors.add(np.asarray(vector, dtype=float).tobytes())
             penalty = np.full_like(initial_r, 1e6, dtype=float)
             record(float(np.sum(penalty * penalty)), phase, f"penalty: {type(exc).__name__}: {exc}")
             return penalty
@@ -2589,7 +2622,10 @@ def run_global_least_squares_refinement(
                 cached_residual,
                 x0,
                 bounds=(lo, hi),
-                jac=_bounded_jacobian(cached_residual, lo, hi, serial_jacobian),
+                jac=_bounded_jacobian(
+                    cached_residual, lo, hi, serial_jacobian,
+                    trial_valid=lambda vector: np.asarray(vector, dtype=float).tobytes()
+                    not in invalid_trial_vectors),
                 method=_optimizer_method(x0, lo, hi),
                 loss="linear",
                 x_scale="jac",

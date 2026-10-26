@@ -232,6 +232,31 @@ class RefinementTests(unittest.TestCase):
         np.testing.assert_allclose(jac, [[1.0, 2.0], [1.0, -1.0]], atol=1e-10)
         self.assertEqual(len(evaluated), 3)  # base + one column solve per parameter
 
+    def test_jacobian_uses_feasible_direction_after_cpa_penalty(self):
+        invalid = set()
+        jacobian_probe_count = 0
+
+        def residual(vector):
+            key = np.asarray(vector, dtype=float).tobytes()
+            if vector[0] > 0.5:
+                invalid.add(key)
+                return np.array([1e6])
+            return np.array([vector[0] ** 2])
+
+        def batch(vectors):
+            nonlocal jacobian_probe_count
+            jacobian_probe_count += len(vectors)
+            return [residual(vector) for vector in vectors]
+
+        x = np.array([0.5])
+        jac = ls._bounded_jacobian(
+            residual, np.zeros(1), np.ones(1), batch_fun=batch,
+            trial_valid=lambda vector: np.asarray(vector, dtype=float).tobytes()
+            not in invalid)(x)
+        self.assertEqual(jac.shape, (1, 1))
+        self.assertAlmostEqual(jac[0, 0], 1.0, delta=0.002)
+        self.assertEqual(jacobian_probe_count, 2)
+
     def test_conductivity_detector_delay_is_not_a_uv_fit_parameter(self):
         cfg = config_for()
         paths = {spec.path for spec in ls.fit_parameter_lock_catalog(cfg)}
@@ -351,9 +376,9 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Current Window() << Get Path', launcher)
         self.assertIn('Current Window() << Get File Name', launcher)
         self.assertIn('Get Default Directory()', launcher)
-        self.assertIn('packageMarker = "tdm_r25l_package.marker"', launcher)
+        self.assertIn('packageMarker = "tdm_r25m_package.marker"', launcher)
         self.assertIn('File Exists( candidateDir || packageMarker )', launcher)
-        self.assertTrue((ROOT / "tdm_r25l_package.marker").is_file())
+        self.assertTrue((ROOT / "tdm_r25m_package.marker").is_file())
         self.assertLess(launcher.index('Get Script Name()'),
                         launcher.index('Current Window() << Get Path'))
         self.assertLess(launcher.index('Current Window() << Get File Name'),

@@ -1291,6 +1291,10 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
         lsqStatusText << Set Text("Building alignment preview for the selected runs.");
         Wait(0.01)
     );
+    If(actionText == "RUN_SELECTED",
+        statusText << Set Text("Running prediction for the selected run. JMP will respond when it finishes.");
+        Wait(0.01)
+    );
     If(actionText == "CHECK_RESULT_CURRENT", Save Text File(statusFile, "CHECK_RESULT_CURRENT pending"));
     rc = Python Submit File(bridgeFile);
     If(File Exists(statusFile), statusValue = Load Text File(statusFile), statusValue = "No status file was produced. Check View > Log.");

@@ -10,7 +10,7 @@ import numpy as np
 
 import tdm_least_squares as lsq
 from tdm_minimal_io import MODEL_TDM_CPA
-from tdm_minimal_model import _build_cpa_components, _cpa_model, simulate, write_outputs
+from tdm_minimal_model import _CoverageGuardedBDF, _build_cpa_components, _cpa_model, simulate, write_outputs
 from verify_model import make_config
 
 
@@ -26,6 +26,20 @@ def binding_recipe(delta: float) -> dict:
 
 
 class CPABindingAuditTests(unittest.TestCase):
+    def test_coverage_guard_checks_accepted_state_without_changing_bdf(self):
+        def accumulating_rhs(_time, _state):
+            return np.array([2.0])
+
+        guarded = _CoverageGuardedBDF(
+            accumulating_rhs, 0.0, np.zeros(1), 1.0,
+            coverage_weights=np.ones(1), adsorbed_slice=slice(0, 1),
+            axial_positions=1, species_count=1, max_step=0.1,
+        )
+        with self.assertRaisesRegex(FloatingPointError, "surface coverage"):
+            while guarded.status == "running":
+                guarded.step()
+        self.assertLess(guarded.t, 1.0)
+
     def test_cpa_units_equilibrium_and_kinetics(self):
         cfg = binding_recipe(0.012)
         comp = _build_cpa_components(cfg, need_tdm_kinetics=True)[0]
