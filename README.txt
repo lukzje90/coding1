@@ -1,4 +1,10 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25m)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25n)
+
+TDM+CPA LSQ RECHECK (R25n)
+Both the JMP multi-run fit and the single-run Python fit now avoid using an
+invalid CPA trial's fixed penalty as a numerical Jacobian derivative. The
+single-run route was found during the R25m review and has the same feasible
+direction fallback. The adsorption equations and solver tolerances are unchanged.
 
 TDM+CPA REFINEMENT AND SELECTED PREDICTION (R25m)
 The TDM+CPA fit history can show impossible surface coverage during a
@@ -175,7 +181,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25m_package.marker beside the launcher and Python files. Run the saved
+tdm_r25n_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

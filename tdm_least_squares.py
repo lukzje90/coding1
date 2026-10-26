@@ -2068,6 +2068,7 @@ def run_least_squares_refinement(
         "improvement_percent": 0.0, "phase": "initial", "status": "ok",
     }]
     eval_count = 0
+    invalid_trial_vectors: set[bytes] = set()
 
     def record_objective(objective: float, phase: str, status: str) -> None:
         nonlocal best_objective
@@ -2094,12 +2095,14 @@ def run_least_squares_refinement(
                 raise FloatingPointError("non-finite residual")
             if not math.isfinite(objective):
                 raise FloatingPointError("non-finite objective")
+            invalid_trial_vectors.discard(np.asarray(vector, dtype=float).tobytes())
             if objective < best_objective:
                 best_vector = np.asarray(vector).copy()
             record_objective(objective, "optimizer", "ok")
             return r
         except Exception as exc:
             # Keep the optimizer within the physically/numerically feasible region.
+            invalid_trial_vectors.add(np.asarray(vector, dtype=float).tobytes())
             penalty = np.full_like(initial_r, 1e6, dtype=float)
             record_objective(float(np.sum(penalty * penalty)), "optimizer", f"penalty: {type(exc).__name__}: {exc}")
             return penalty
@@ -2110,7 +2113,10 @@ def run_least_squares_refinement(
             cached_residual,
             x0,
             bounds=(lo, hi),
-            jac=_bounded_jacobian(cached_residual, lo, hi),
+            jac=_bounded_jacobian(
+                cached_residual, lo, hi,
+                trial_valid=lambda vector: np.asarray(vector, dtype=float).tobytes()
+                not in invalid_trial_vectors),
             method=_optimizer_method(x0, lo, hi),
             loss="linear",
             x_scale="jac",

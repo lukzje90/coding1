@@ -1,6 +1,7 @@
 """Check the CPA adsorption law and stage-resolved bind-and-elute diagnostics."""
 import csv
 import copy
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +27,43 @@ def binding_recipe(delta: float) -> dict:
 
 
 class CPABindingAuditTests(unittest.TestCase):
+    def test_single_run_lsq_does_not_differentiate_cpa_penalty(self):
+        cfg = binding_recipe(0.012)
+        initial_delta = cfg["components"][0]["delta_ref"]
+        evaluated = []
+
+        def objective(candidate, *_args, **_kwargs):
+            delta = candidate["components"][0]["delta_ref"]
+            evaluated.append(delta)
+            if delta > initial_delta * (1.0 + 1e-12):
+                raise FloatingPointError("invalid forward CPA probe")
+            return np.array([delta]), {}
+
+        class ProbeComplete(Exception):
+            pass
+
+        def inspect_jacobian(_fun, x0, *, jac, **_kwargs):
+            derivative = jac(x0)
+            self.assertEqual(derivative.shape, (1, 1))
+            self.assertAlmostEqual(derivative[0, 0],
+                                   math.log(10.0) * initial_delta, delta=1e-4)
+            raise ProbeComplete
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "reference.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV"])
+                writer.writerows(((0.0, 0.0), (0.5, 1.0), (1.0, 0.0)))
+            with patch.object(lsq, "_objective_parts", side_effect=objective), \
+                    patch.object(lsq, "least_squares", side_effect=inspect_jacobian):
+                with self.assertRaises(ProbeComplete):
+                    lsq.run_least_squares_refinement(
+                        cfg, mode="CHROMATOGRAM", chromatogram_csv=source,
+                        unlocked_paths=["components[0].delta_ref"])
+        self.assertTrue(any(value > initial_delta for value in evaluated))
+        self.assertTrue(any(value < initial_delta for value in evaluated))
+
     def test_coverage_guard_checks_accepted_state_without_changing_bdf(self):
         def accumulating_rhs(_time, _state):
             return np.array([2.0])
