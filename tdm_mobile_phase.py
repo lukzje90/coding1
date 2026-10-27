@@ -6,13 +6,14 @@ are applied separately, downstream, in accumulated volume rather than time.
 """
 from __future__ import annotations
 
+import time
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.sparse import lil_matrix
 
 
 class MobilePhaseTransport:
-    def __init__(self, config, program, scalar_transport):
+    def __init__(self, config, program, scalar_transport, *, solver_deadline=None):
         self.program = program
         self.config = config
         # Transport analytical salt independently: conductivity is a calibrated
@@ -95,6 +96,7 @@ class MobilePhaseTransport:
                     sparsity[pore_row, pore_row] = 1
         self.segments = []
         start = 0.0
+        deadline_checks = 0
         # Restart at every recipe boundary so short load/wash steps cannot be
         # skipped by an adaptive integration step.
         for end in program.stage_end_time_s:
@@ -102,6 +104,11 @@ class MobilePhaseTransport:
                 continue
             end_inside = np.nextafter(end, start)
             def stage_rhs(t, y, stop=end_inside):
+                nonlocal deadline_checks
+                if solver_deadline is not None:
+                    deadline_checks += 1
+                    if deadline_checks % 32 == 1 and time.perf_counter() >= solver_deadline:
+                        raise TimeoutError("TDM+CPA LSQ trial timed out during buffer transport.")
                 return rhs(min(t, stop), y)
             solution = solve_ivp(stage_rhs, (start, end), y0, method='BDF',
                                  rtol=2e-7, atol=1e-9, dense_output=True,

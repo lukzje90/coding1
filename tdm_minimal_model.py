@@ -6,6 +6,7 @@ import hashlib
 import html
 import json
 import math
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1140,14 +1141,15 @@ def _simulate_tdm_wang(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
+def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None = None) -> dict[str, Any]:
     comps = _build_cpa_components(config, need_tdm_kinetics=True)
     cpa_model = _cpa_model(config, comps)
     rows = active_components(config)
     feed_total_g_L = float(config["feed"]["total_concentration_mg_mL"])
     feed_vector = np.array([feed_total_g_L * c.mass_fraction / c.mw_kDa for c in comps], dtype=float)
     program = _build_program(config, feed_vector)
-    mobile_phase = MobilePhaseTransport(config, program, _scalar_transport)
+    mobile_phase = MobilePhaseTransport(config, program, _scalar_transport,
+                                        solver_deadline=solver_deadline)
 
     L, _V, A = _column_geometry(config)
     tdm = config["tdm"]
@@ -1190,7 +1192,14 @@ def _simulate_tdm_cpa(config: dict[str, Any]) -> dict[str, Any]:
             y[sl_qv].reshape(nx, n),
         )
 
+    deadline_checks = 0
+
     def rhs(t: float, y: np.ndarray) -> np.ndarray:
+        nonlocal deadline_checks
+        if solver_deadline is not None:
+            deadline_checks += 1
+            if deadline_checks % 32 == 1 and time.perf_counter() >= solver_deadline:
+                raise TimeoutError("TDM+CPA LSQ trial timed out during protein integration.")
         cb, cp, qv = unpack(y)
         local_chemistry = mobile_phase.local(t, pore=True)
         inlet_protein, _, _, _ = program.at_time(t)
@@ -1787,7 +1796,7 @@ def _langmuir_affinity_receipt(config: dict[str, Any], stages: list[dict[str, An
     return result
 
 
-def simulate(config: dict[str, Any]) -> dict[str, Any]:
+def simulate(config: dict[str, Any], *, solver_deadline: float | None = None) -> dict[str, Any]:
     config = normalize_config(config)
     errors = validate_config(config, strict=True)
     if errors:
@@ -1798,7 +1807,7 @@ def simulate(config: dict[str, Any]) -> dict[str, Any]:
         if model == MODEL_TDM_WANG:
             sim = _simulate_tdm_wang(config)
         elif model == MODEL_TDM_CPA:
-            sim = _simulate_tdm_cpa(config)
+            sim = _simulate_tdm_cpa(config, solver_deadline=solver_deadline)
         elif model == MODEL_TDM_LANGMUIR:
             sim = _simulate_tdm_langmuir(config)
         elif model == MODEL_EDM_CPA:

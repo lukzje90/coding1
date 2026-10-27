@@ -1,4 +1,15 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25n)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25o)
+
+TDM+CPA LSQ STALLED-TRIAL PROTECTION (R25o)
+A model evaluation that stalls inside TDM+CPA integration cannot be stopped
+by the overall evaluation cap. The LSQ tab now has an adjustable timeout for
+each TDM+CPA model solve (30 minutes by default; 0 disables it). A timed-out
+Jacobian probe is never treated as a valid derivative. The fitter tries the
+opposite direction once and, if that also times out, reports the parameter
+name and stops. least_squares_active_evaluation.txt shows the evaluation and
+parameter currently running; the history CSV records completed evaluations.
+The normal prediction has no timeout. Equations and solver tolerances are
+unchanged. Restart an already-running fit to use this release.
 
 TDM+CPA LSQ RECHECK (R25n)
 Both the JMP multi-run fit and the single-run Python fit now avoid using an
@@ -181,7 +192,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25n_package.marker beside the launcher and Python files. Run the saved
+tdm_r25o_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

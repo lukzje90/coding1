@@ -246,6 +246,11 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
         if cap is None or not cap.is_integer() or not 2 <= cap <= 10000:
             raise ValueError("Safety cap must be a whole number from 2 to 10000 model evaluations.")
         config["least_squares"]["max_nfev"] = int(cap)
+    if "tdm_ui_lsq_max_trial_minutes" in globals():
+        minutes = _num("tdm_ui_lsq_max_trial_minutes")
+        if minutes is None or not 0 <= minutes <= 240:
+            raise ValueError("Trial timeout must be 0–240 minutes; 0 disables the timeout.")
+        config["least_squares"]["max_trial_minutes"] = minutes
     locks = _lsq_unlocked_paths_from_jmp()
     if locks is not None:
         config["least_squares"]["unlocked_paths"] = sorted(locks)
@@ -815,8 +820,12 @@ def main() -> int:
                 f"{len(fitted_paths)} unlocked parameters, "
                 f"{shared_raw['least_squares']['max_nfev']} model-evaluation safety cap (including Jacobian probes and final verification); "
                 "serial model evaluations.\n"
+                f"TDM+CPA trial timeout: {shared_raw['least_squares']['max_trial_minutes']:g} minutes "
+                "(0 means off).\n"
                 f"Each numerical Jacobian needs about {len(profiles) * (len(fitted_paths) + 1)} column solves. "
-                f"Progress: {FIT_HISTORY_CSV}. If this file is locked, the fit continues "
+                f"Progress: {FIT_HISTORY_CSV}; current probe: "
+                f"{FIT_HISTORY_CSV.with_name('least_squares_active_evaluation.txt')}. "
+                "If the history file is locked, the fit continues "
                 "and reports a recovered history path when complete."
             )
             fit = run_global_least_squares_refinement(

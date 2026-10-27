@@ -1642,8 +1642,9 @@ def _objective_parts(
     mode: str,
     composition_refs: list[dict[str, Any]],
     fit_conductivity: bool = False,
+    solver_deadline: float | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    result = simulate(cfg)
+    result = simulate(cfg, solver_deadline=solver_deadline) if solver_deadline is not None else simulate(cfg)
     chrom_r, chrom_info = _chromatogram_residuals(cfg, ref, result["trace"])
     cond_r = np.empty(0, dtype=float)
     cond_info = None
@@ -1673,6 +1674,13 @@ def _objective_parts(
         "chromatogram_raw_sse": float(np.sum((chrom_info["predicted_detector_signal"] - chrom_info["measured"])**2)),
         "composition_sse_normalized": float(np.sum(comp_r**2)) if len(comp_r) else 0.0,
     }
+
+
+def _trial_deadline(config: dict[str, Any]) -> float | None:
+    """Limit one TDM+CPA LSQ solve; normal predictions remain unrestricted."""
+    minutes = float(config["least_squares"].get("max_trial_minutes", 0.0))
+    return (time.perf_counter() + 60.0 * minutes
+            if config["model"] == MODEL_TDM_CPA and minutes > 0 else None)
 
 
 def _cpa_binding_metrics(initial_info: dict[str, Any], final_info: dict[str, Any]) -> dict[str, Any] | None:
@@ -1939,10 +1947,13 @@ def _format_elapsed_hms(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds_left:02d}"
 
 
-def _bounded_jacobian(fun, lower, upper, batch_fun=None, trial_valid=None):
+def _bounded_jacobian(fun, lower, upper, batch_fun=None, trial_valid=None,
+                      trial_timed_out=None, parameter_labels=None, probe_callback=None):
     def jacobian(vector):
         base = fun(vector)
         if trial_valid is not None and not trial_valid(vector):
+            if trial_timed_out is not None and trial_timed_out(vector):
+                raise TimeoutError("TDM+CPA LSQ timed out at the current parameter set; increase the trial timeout or revise the starting parameters.")
             return np.zeros((len(base), len(vector)), dtype=float)
         trials = []
         steps = []
@@ -1959,6 +1970,27 @@ def _bounded_jacobian(fun, lower, upper, batch_fun=None, trial_valid=None):
         columns = []
         for i, (trial, result, step) in enumerate(zip(trials, values, steps)):
             if trial_valid is not None and not trial_valid(trial):
+                if trial_timed_out is not None and trial_timed_out(trial):
+                    # A timed-out direction is not a numerical derivative.
+                    # Try the opposite direction once; if that also fails,
+                    # stop with the exact parameter named instead of silently
+                    # setting a zero Jacobian column or waiting for hours.
+                    reverse_step = -step
+                    if lower[i] <= vector[i] + reverse_step <= upper[i]:
+                        reverse = np.asarray(vector, dtype=float).copy()
+                        reverse[i] += reverse_step
+                        if probe_callback is not None:
+                            probe_callback(i)
+                        reverse_result = (batch_fun([reverse])[0]
+                                          if batch_fun is not None else fun(reverse))
+                        if trial_valid(reverse):
+                            columns.append((reverse_result - base) / reverse_step)
+                            continue
+                    label = (parameter_labels[i] if parameter_labels is not None
+                             else f"parameter {i + 1}")
+                    raise TimeoutError(
+                        f"TDM+CPA LSQ timed out probing {label} in the feasible directions. "
+                        "Lock this parameter or increase the trial timeout, then rerun the fit.")
                 # An invalid CPA trajectory is a feasibility boundary, not a
                 # measured residual. Never use its fixed penalty to form a
                 # numerical derivative; probe the other feasible direction
@@ -1973,6 +2005,8 @@ def _bounded_jacobian(fun, lower, upper, batch_fun=None, trial_valid=None):
                             continue
                         alternative = np.asarray(vector, dtype=float).copy()
                         alternative[i] += alternative_step
+                        if probe_callback is not None:
+                            probe_callback(i)
                         alternative_result = (batch_fun([alternative])[0]
                                               if batch_fun is not None else fun(alternative))
                         if trial_valid(alternative):
@@ -2058,7 +2092,8 @@ def run_least_squares_refinement(
     specs = fit_parameter_specs(config, unlocked_paths=unlocked_paths)
     x0, lo, hi = _encode_initial(specs)
     fit_started = time.perf_counter()
-    initial_r, initial_info = _objective_parts(config, ref, mode, comp_refs)
+    initial_r, initial_info = _objective_parts(config, ref, mode, comp_refs,
+                                              solver_deadline=_trial_deadline(config))
     initial_obj = float(np.sum(initial_r**2))
     best_objective = initial_obj
     best_vector = None  # None preserves the original config without a transform round-trip.
@@ -2069,6 +2104,7 @@ def run_least_squares_refinement(
     }]
     eval_count = 0
     invalid_trial_vectors: set[bytes] = set()
+    timed_out_trial_vectors: set[bytes] = set()
 
     def record_objective(objective: float, phase: str, status: str) -> None:
         nonlocal best_objective
@@ -2089,13 +2125,15 @@ def run_least_squares_refinement(
         eval_count += 1
         try:
             candidate = _apply_vector(config, specs, vector)
-            r, info = _objective_parts(candidate, ref, mode, comp_refs)
+            r, info = _objective_parts(candidate, ref, mode, comp_refs,
+                                       solver_deadline=_trial_deadline(candidate))
             objective = float(np.sum(r*r))
             if not np.all(np.isfinite(r)):
                 raise FloatingPointError("non-finite residual")
             if not math.isfinite(objective):
                 raise FloatingPointError("non-finite objective")
             invalid_trial_vectors.discard(np.asarray(vector, dtype=float).tobytes())
+            timed_out_trial_vectors.discard(np.asarray(vector, dtype=float).tobytes())
             if objective < best_objective:
                 best_vector = np.asarray(vector).copy()
             record_objective(objective, "optimizer", "ok")
@@ -2103,6 +2141,8 @@ def run_least_squares_refinement(
         except Exception as exc:
             # Keep the optimizer within the physically/numerically feasible region.
             invalid_trial_vectors.add(np.asarray(vector, dtype=float).tobytes())
+            if isinstance(exc, TimeoutError):
+                timed_out_trial_vectors.add(np.asarray(vector, dtype=float).tobytes())
             penalty = np.full_like(initial_r, 1e6, dtype=float)
             record_objective(float(np.sum(penalty * penalty)), "optimizer", f"penalty: {type(exc).__name__}: {exc}")
             return penalty
@@ -2116,7 +2156,10 @@ def run_least_squares_refinement(
             jac=_bounded_jacobian(
                 cached_residual, lo, hi,
                 trial_valid=lambda vector: np.asarray(vector, dtype=float).tobytes()
-                not in invalid_trial_vectors),
+                not in invalid_trial_vectors,
+                trial_timed_out=lambda vector: np.asarray(vector, dtype=float).tobytes()
+                in timed_out_trial_vectors,
+                parameter_labels=[spec.label for spec in specs]),
             method=_optimizer_method(x0, lo, hi),
             loss="linear",
             x_scale="jac",
@@ -2140,7 +2183,8 @@ def run_least_squares_refinement(
     else:
         opt.x = best_vector.copy()
         fitted = _apply_vector(config, specs, opt.x)
-    final_r, final_info = _objective_parts(fitted, ref, mode, comp_refs)
+    final_r, final_info = _objective_parts(fitted, ref, mode, comp_refs,
+                                          solver_deadline=_trial_deadline(fitted))
     final_obj = float(np.sum(final_r**2))
     eval_count += 1
     record_objective(final_obj, "final verification", "ok")
@@ -2434,7 +2478,8 @@ def run_global_least_squares_refinement(
         if cfg["least_squares"].get("fit_range_percent") != first["least_squares"].get("fit_range_percent"):
             raise ValueError(f"Global-fit profile {index} has different per-parameter fit ranges; one shared fit needs one shared set of limits.")
         acceptance_fields = ("physical_acceptance_mode", "minimum_bound_percent_after_load",
-                             "minimum_elution_recovery_percent", "minimum_objective_improvement_percent")
+                             "minimum_elution_recovery_percent", "minimum_objective_improvement_percent",
+                             "max_trial_minutes")
         if any(cfg["least_squares"].get(field) != first["least_squares"].get(field)
                for field in acceptance_fields):
             raise ValueError(f"Global-fit profile {index} has different physical acceptance settings.")
@@ -2507,8 +2552,10 @@ def run_global_least_squares_refinement(
         residual_blocks = []
         infos = []
         for cfg, profile, normalized_weight in zip(configs, normalized_profiles, run_weights):
+            deadline = _trial_deadline(cfg)
             r, info = _objective_parts(cfg, profile["reference"], mode,
-                                       profile["composition_references"], profile["fit_conductivity"])
+                                       profile["composition_references"], profile["fit_conductivity"],
+                                       **({"solver_deadline": deadline} if deadline is not None else {}))
             # Preserve the original objective and run weighting exactly.
             scale_factor = math.sqrt(float(normalized_weight)) if weighted_objective else (1.0 / math.sqrt(n_profiles) if normalized_objective else 1.0)
             residual_blocks.append(r * scale_factor)
@@ -2516,6 +2563,14 @@ def run_global_least_squares_refinement(
         return np.concatenate(residual_blocks), infos
 
     base_configs = [copy.deepcopy(p["config"]) for p in normalized_profiles]
+    active_path = FIT_HISTORY_CSV.with_name("least_squares_active_evaluation.txt")
+    try:
+        active_path.write_text(
+            f"Initial model evaluation started {time.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+            f"TDM+CPA trial timeout: {first['least_squares']['max_trial_minutes']:g} minutes (0 = off)\n",
+            encoding="utf-8")
+    except OSError:
+        pass
     initial_r, initial_infos = evaluate(base_configs)
     initial_obj = float(np.sum(initial_r ** 2))
     fit_started = time.perf_counter()
@@ -2530,14 +2585,28 @@ def run_global_least_squares_refinement(
     candidate_evaluations = 0
     budget_reached = False
     invalid_trial_vectors: set[bytes] = set()
+    timed_out_trial_vectors: set[bytes] = set()
     optimizer_budget = None if max_model_evaluations is None else int(max_model_evaluations) - 1
     history_fields = ["evaluation", "elapsed_seconds", "objective", "best_objective", "improvement_percent", "phase", "status"]
     history_path: Path | None = FIT_HISTORY_CSV
+    current_probe_label = ""
     history_backup = FIT_HISTORY_CSV.with_name(
         f"{FIT_HISTORY_CSV.stem}_recovered_{os.getpid()}_{time.time_ns()}.csv")
     history_temp = Path(tempfile.gettempdir()) / history_backup.name
     history_logging_disabled = False
     history_write_error: str | None = None
+
+    def write_active(phase: str) -> None:
+        label = current_probe_label if phase == "jacobian" else ""
+        try:
+            active_path.write_text(
+                f"Evaluation {eval_count} started {time.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                f"Phase: {phase}\n"
+                + (f"Parameter: {label}\n" if label else "")
+                + f"TDM+CPA trial timeout: {first['least_squares']['max_trial_minutes']:g} minutes (0 = off)\n",
+                encoding="utf-8")
+        except OSError:
+            pass  # Progress I/O cannot invalidate a solver evaluation.
 
     def write_history() -> None:
         nonlocal history_path, history_logging_disabled, history_write_error
@@ -2599,6 +2668,7 @@ def run_global_least_squares_refinement(
         eval_count += 1
         if phase == "optimizer":
             candidate_evaluations += 1
+        write_active(phase)
         try:
             candidates = [_apply_vector(cfg, specs, vector) for cfg in base_configs]
             values, _infos = evaluate(candidates, detailed=False)
@@ -2606,6 +2676,7 @@ def run_global_least_squares_refinement(
             if not np.all(np.isfinite(values)) or not math.isfinite(objective):
                 raise FloatingPointError("non-finite global residual")
             invalid_trial_vectors.discard(np.asarray(vector, dtype=float).tobytes())
+            timed_out_trial_vectors.discard(np.asarray(vector, dtype=float).tobytes())
             if objective < best_objective:
                 best_vector = np.asarray(vector).copy()
             record(objective, phase, "ok")
@@ -2614,12 +2685,24 @@ def run_global_least_squares_refinement(
             raise
         except Exception as exc:
             invalid_trial_vectors.add(np.asarray(vector, dtype=float).tobytes())
+            if isinstance(exc, TimeoutError):
+                timed_out_trial_vectors.add(np.asarray(vector, dtype=float).tobytes())
             penalty = np.full_like(initial_r, 1e6, dtype=float)
             record(float(np.sum(penalty * penalty)), phase, f"penalty: {type(exc).__name__}: {exc}")
             return penalty
 
     def serial_jacobian(vectors: list[np.ndarray]) -> list[np.ndarray]:
-        return [residual(vector, "jacobian") for vector in vectors]
+        nonlocal current_probe_label
+        results = []
+        for index, vector in enumerate(vectors):
+            if len(vectors) == len(specs):
+                current_probe_label = specs[index].label
+            results.append(residual(vector, "jacobian"))
+        return results
+
+    def label_probe(index: int) -> None:
+        nonlocal current_probe_label
+        current_probe_label = specs[index].label
 
     if specs:
         cached_residual = _cache_last_evaluation(residual)
@@ -2631,7 +2714,11 @@ def run_global_least_squares_refinement(
                 jac=_bounded_jacobian(
                     cached_residual, lo, hi, serial_jacobian,
                     trial_valid=lambda vector: np.asarray(vector, dtype=float).tobytes()
-                    not in invalid_trial_vectors),
+                    not in invalid_trial_vectors,
+                    trial_timed_out=lambda vector: np.asarray(vector, dtype=float).tobytes()
+                    in timed_out_trial_vectors,
+                    parameter_labels=[spec.label for spec in specs],
+                    probe_callback=label_probe),
                 method=_optimizer_method(x0, lo, hi),
                 loss="linear",
                 x_scale="jac",
@@ -2644,6 +2731,15 @@ def run_global_least_squares_refinement(
             budget_reached = True
             opt = SimpleNamespace(x=x0.copy(), success=False, message=str(exc),
                                   nfev=candidate_evaluations)
+        except TimeoutError as exc:
+            try:
+                active_path.write_text(
+                    f"Least-squares fit stopped: {exc}\n"
+                    f"Completed model residual evaluations: {eval_count}.\n",
+                    encoding="utf-8")
+            except OSError:
+                pass
+            raise
         jac_diagnostics = _jacobian_diagnostics(opt, best_vector if best_vector is not None else x0, specs)
         if best_vector is None:
             fitted_configs = [copy.deepcopy(cfg) for cfg in base_configs]
@@ -2894,6 +2990,7 @@ def run_global_least_squares_refinement(
         "locked_parameter_paths": [p for p in candidate_paths if p not in {s.path for s in specs}],
         "max_nfev": int(max_nfev),
         "max_model_evaluations": int(max_model_evaluations) if max_model_evaluations is not None else None,
+        "max_trial_minutes": float(first["least_squares"]["max_trial_minutes"]),
         "evaluation_cap_reached": budget_reached,
         "composition_profile_metrics": composition_profile_metrics,
         "CPA_binding_audit_by_run": binding_metrics_by_run,
@@ -3011,6 +3108,12 @@ def run_global_least_squares_refinement(
     settings["fit_elapsed_hms"] = fit_elapsed_hms
     settings["model_residual_evaluations"] = eval_count
     settings["fit_quality_warning"] = fit_quality_warning
+    try:
+        active_path.write_text(
+            f"Least-squares fit completed {time.strftime('%Y-%m-%d %H:%M:%S %Z')}.\n"
+            f"Model residual evaluations: {eval_count}.\n", encoding="utf-8")
+    except OSError:
+        pass
     FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
     FIT_REPORT_HTML.write_text(f"""<!doctype html>
 <meta charset="utf-8"><title>Global least-squares refinement</title>
