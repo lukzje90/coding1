@@ -31,6 +31,16 @@ def _write_uv(path: Path, x, uv, x_header: str):
 
 
 class AlignmentPreviewTests(unittest.TestCase):
+    def test_lsq_chromatogram_heading_names_the_selected_model_run(self):
+        self.assertEqual(lsq._lsq_display_label({
+            "run_number": 5, "run_name": "LSQ Run 5",
+            "model_run_name": "Protein A polishing",
+        }), "Run 5 LSQ — Protein A polishing")
+        self.assertEqual(lsq._lsq_display_label({
+            "run_number": 5, "run_name": "Sample 17",
+            "model_run_name": "Protein A polishing",
+        }), "Run 5 LSQ — Protein A polishing (profile: Sample 17)")
+
     def test_dense_reference_plot_is_robust_but_fit_uses_every_raw_sample(self):
         raw_cv = np.linspace(0.0, 1.0, 5001)
         raw_uv = np.exp(-0.5 * ((raw_cv - 0.6) / 0.03) ** 2)
@@ -267,7 +277,7 @@ class AlignmentPreviewTests(unittest.TestCase):
             ], output_html=report)
             self.assertEqual([item["mass_percent_observations"] for item in preview["profiles"]], [0, 4])
             markup = report.read_text(encoding="utf-8")
-            self.assertIn('<option value="2" selected>LSQ Run 2: Fraction run — 4 mass% points</option>', markup)
+            self.assertIn('<option value="2" selected>Run 2 LSQ — Fraction run — 4 mass% points</option>', markup)
             self.assertIn('data-run="1" hidden', markup)
             self.assertIn('data-run="2"><h2>', markup)
             self.assertIn('<h3 id="mass-preview-run-2">Fraction mass% at midpoints</h3>', markup)

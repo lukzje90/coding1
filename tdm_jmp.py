@@ -600,7 +600,11 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
                                 _q("|"), f'Char({var}FitRangePercent << Get)', _q(";")])
         range_chunks.append('Concat(' + ", ".join(range_parts) + ')')
     if range_chunks:
-        sends.append('Python Send(Concat(' + ", ".join(range_chunks) + '), Python Name("tdm_ui_lsq_parameter_fit_ranges"));')
+        # Sending every parameter in one JMP expression can exceed the host's
+        # expression/string limits and silently lose the selected fit bounds.
+        sends.append(f'Python Send({len(range_chunks)}, Python Name("tdm_ui_lsq_parameter_fit_range_chunk_count"));')
+        for index, chunk in enumerate(range_chunks, 1):
+            sends.append(f'Python Send({chunk}, Python Name("tdm_ui_lsq_parameter_fit_ranges_{index}"));')
     set_all_lock_lines = " ".join(
         f'{lock_var} << Set(If(Uppercase(Char(state)) == "UNLOCKED", 2, 1));'
         for lock_var, _parameter_path in fit_lock_vars
@@ -802,6 +806,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
             );'''
         )
 
+    shared_sends = "\n    ".join(sends)
     jsl = f'''Names Default To Here(1);
 projectDir = {_path(PROJECT_DIR)};
 bridgeFile = {_path(BRIDGE_PATH)};
@@ -864,6 +869,23 @@ ResolvedBufferSalt = Function({{condBox, saltBox, modeBox}}, {{c, f}},
 BlendBufferPH = Function({{pct}}, {{f, a, b}},
     If(Is Missing(pct), Return(.));
     f = Max(0, Min(100, pct)) / 100; a = bufferAPH << Get; b = bufferBPH << Get;
+    If(Is Missing(a) | Is Missing(b), ., (1-f)*a + f*b)
+);
+ResolvedBufferCond = Function({{condBox, saltBox, modeBox}}, {{c, factor}},
+    c = condBox << Get;
+    If(Char(modeBox << Get Selected) == "SALT_M",
+        If(!Is Missing(c), Return(c));
+        factor = condToSalt << Get;
+        If(Is Missing(factor) | factor <= 0, Return(.));
+        Return((saltBox << Get) / factor)
+    );
+    Return(c)
+);
+BlendBufferCond = Function({{pct}}, {{f, a, b}},
+    If(Is Missing(pct), Return(.));
+    f = Max(0, Min(100, pct)) / 100;
+    a = ResolvedBufferCond(bufferACond, bufferASalt, bufferASaltMode);
+    b = ResolvedBufferCond(bufferBCond, bufferBSalt, bufferBSaltMode);
     If(Is Missing(a) | Is Missing(b), ., (1-f)*a + f*b)
 );
 BlendBufferSalt = Function({{pct}}, {{f, a, b}},
@@ -1179,7 +1201,7 @@ ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r,
     If(mn > mx, 0, mx - mn)
 );
 
-UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLangmuir, isWang, isHIC, plwCount, elutionCount, stepMode, stepControl, startPct, endPct, startSalt, endSalt, activeStart, activeEnd, batchPHSpan, fitPHSpan, reqText, lsqUsesComposition, lsqRefCount, loadSaltValue, loadSourceLabel, stationaryFraction, nominalCapacity, targetDose, speciesName}},
+UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLangmuir, isWang, isHIC, plwCount, elutionCount, stepMode, stepControl, startPct, endPct, startSalt, endSalt, activeStart, activeEnd, batchPHSpan, fitPHSpan, reqText, lsqUsesComposition, lsqRefCount, loadSaltValue, loadSourceLabel, loadPHValue, loadCondValue, stationaryFraction, nominalCapacity, targetDose, speciesName}},
     modelLabel = Char(modelBox << Get Selected);
     SyncLangmuirDerived();
     impurityCount = Num(impurityCountBox << Get Selected); If(Is Missing(impurityCount), impurityCount = 0);
@@ -1230,10 +1252,22 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
         Char(ResolvedBufferSalt(bufferBCond, bufferBSalt, bufferBSaltMode)) || " M (" ||
         Char(bufferBSaltMode << Get Selected) || "); load start " || Char(loadSaltValue) || " M.");
     loadChemControlRow << Visibility("Collapse");
+    loadMaterialModeRow << Visibility("Collapse");
     equilibrationDirectPanel << Visibility(If(Uppercase(Char(equilibrationSource << Get Selected)) == "DIRECT", "Visible", "Collapse"));
-    loadChemPanel << Visibility("Visible");
-    loadPH << Visibility("Visible"); loadPHLabel << Visibility("Visible");
-    loadCond << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse")); loadCondLabel << Visibility(If(isCPA | isLangmuir | isWang, "Visible", "Collapse"));
+    loadChemPanel << Visibility("Collapse");
+    If(Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT",
+        loadPHValue = If(loadSourceLabel == "BUFFER_A", bufferAPH << Get,
+            loadSourceLabel == "BUFFER_B", bufferBPH << Get, loadPH << Get);
+        loadCondValue = If(loadSourceLabel == "BUFFER_A", ResolvedBufferCond(bufferACond, bufferASalt, bufferASaltMode),
+            loadSourceLabel == "BUFFER_B", ResolvedBufferCond(bufferBCond, bufferBSalt, bufferBSaltMode),
+            ResolvedBufferCond(loadCond, loadSalt, loadSaltMode));
+        loadMaterialStatus << Set Text("Saved explicit load chemistry: pH " || Char(loadPHValue) ||
+            ", conductivity " || Char(loadCondValue) || " mS/cm. Edit load %B to use the Buffer A/B blend.");
+    ,
+        loadMaterialStatus << Set Text("Load chemistry from Buffer A/B: start pH " || Char(BlendBufferPH(loadStartB << Get)) ||
+            ", conductivity " || Char(BlendBufferCond(loadStartB << Get)) || " mS/cm; end pH " ||
+            Char(BlendBufferPH(loadEndB << Get)) || ", conductivity " || Char(BlendBufferCond(loadEndB << Get)) || " mS/cm.");
+    );
     tdmPanel << Visibility(If(isTDM, "Visible", "Collapse")); edmPanel << Visibility(If(isEDM, "Visible", "Collapse"));
     cpaSystemPanel << Visibility(If(isCPA & !isHIC, "Visible", "Collapse"));
     wangSharedPanel << Visibility(If(isWang, "Visible", "Collapse"));
@@ -1263,7 +1297,7 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
 );
 
 SendSharedModel = Function({{}}, {{}},
-    {''.join(sends)}
+    {shared_sends}
 );
 
 SendAndRun = Function({{actionText}}, {{rc, statusValue}},
@@ -1427,10 +1461,11 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                         H List Box(Text Box("Calculated load volume [mL]", << Set Width(290)), loadVolumeML = Number Edit Box(., 9, << Set Width(92), << Enable(0))),
                         loadSaturationStatus = Text Box("", << Set Wrap(680)),
                         H List Box(Text Box("Load mode", << Set Width(290)), loadMode = Combo Box({{"SET_POINT", "LINEAR", "STEP"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-                        H List Box(Text Box("Load start / set-point Buffer B [%]", << Set Width(290)), loadStartB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-                        H List Box(Text Box("Load end Buffer B [%]", << Set Width(290)), loadEndB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+                        H List Box(Text Box("Load start / set-point Buffer B [%]", << Set Width(290)), loadStartB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(1); loadChemControl << Set(1); SaveCurrentRun(); UpdateUI()))))),
+                        H List Box(Text Box("Load end Buffer B [%]", << Set Width(290)), loadEndB = Number Edit Box(0, 9, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, loadMaterialMode << Set(1); loadChemControl << Set(1); SaveCurrentRun(); UpdateUI()))))),
+                        loadMaterialStatus = Text Box("", << Set Wrap(700)),
                         loadChemControlRow = H List Box(Text Box("Load chemistry control", << Set Width(290)), loadChemControl = Combo Box({{"BUFFER_B_PERCENT", "ENDPOINT_CHEMISTRY"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "ENDPOINT_CHEMISTRY", loadMaterialMode << Set(2), loadMaterialMode << Set(1)); SaveCurrentRun(); UpdateUI()))))),
-                        H List Box(Text Box("Load chemistry mode", << Set Width(290)), loadMaterialMode = Combo Box({{"BUFFER_RECIPE", "EXPLICIT"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "BUFFER_RECIPE", loadChemControl << Set(1), loadChemControl << Set(2)); If(Uppercase(Char(this << Get Selected)) == "EXPLICIT", loadSource << Set(1)); SaveCurrentRun(); UpdateUI()))))),
+                        loadMaterialModeRow = H List Box(Text Box("Load chemistry mode", << Set Width(290)), loadMaterialMode = Combo Box({{"BUFFER_RECIPE", "EXPLICIT"}}, << Set Width(190), << Set Function(Function({{this}}, If(!isLoading, If(Uppercase(Char(this << Get Selected)) == "BUFFER_RECIPE", loadChemControl << Set(1), loadChemControl << Set(2)); If(Uppercase(Char(this << Get Selected)) == "EXPLICIT", loadSource << Set(1)); SaveCurrentRun(); UpdateUI()))))),
                         Text Box("Load volume is calculated from capacity, feed concentration and column volume.", << Set Wrap(700)),
                         {_nrow("Number of time steps", "timeStepsBox", 700)},
                         {_nrow("Number of axial positions", "axialPositionsBox", 20)},

@@ -1326,7 +1326,7 @@ def preview_lsq_alignment(
         }
         metrics.append(metric)
         sections.append((str(run_number),
-            f"<h2>LSQ Run {html.escape(str(run_number))}: {html.escape(run_name)}</h2>"
+            f"<h2>{html.escape(_lsq_display_label(context))}</h2>"
             f"<p><b>Model UV recipe:</b> {html.escape(metric['model_run_label'])} — "
             f"{html.escape(metric['model_run_name'])}. The model was simulated from the saved recipe for this preview.</p>"
             f"<p><b>Process setup:</b> column volume {metric['column_volume_mL']:.6g} mL; "
@@ -1363,7 +1363,7 @@ def preview_lsq_alignment(
     choices = [
         f'<option value="{html.escape(str(item["run_number"]), quote=True)}"'
         + (' selected' if str(item["run_number"]) == default_run else '')
-        + f'>LSQ Run {html.escape(str(item["run_number"]))}: {html.escape(item["run_name"])}'
+        + f'>{html.escape(_lsq_display_label(item))}'
         + (f' — {item["mass_percent_observations"]} mass% points' if item["mass_percent_observations"] else '')
         + '</option>'
         for item in metrics
@@ -1469,6 +1469,16 @@ def _composition_residuals(
     return arr, rows
 
 
+def _lsq_display_label(context: dict[str, Any]) -> str:
+    number = context.get("run_number", 1)
+    profile_name = str(context.get("run_name") or f"LSQ Run {number}").strip()
+    model_name = str(context.get("model_run_name") or profile_name).strip()
+    label = f"Run {number} LSQ — {model_name}"
+    if profile_name not in {f"LSQ Run {number}", f"Run {number}", model_name}:
+        label += f" (profile: {profile_name})"
+    return label
+
+
 def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, Any]],
                              trace: dict[str, Any]) -> str:
     """Plot midpoint observations and model fractions without bridging data gaps.
@@ -1485,7 +1495,7 @@ def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, 
     x_max = max(float(sim_cv[-1]), max(float(ref["CV"]) for ref in references), 1e-6) * x_factor
     left, top, width, height = 75.0, 30.0, 680.0, 345.0
     px = lambda cv: left + width * (float(cv) * x_factor - x_min) / (x_max - x_min)
-    py = lambda pct: top + height * (2.0 - math.log10(max(float(pct), 0.01))) / 4.0
+    py = lambda pct: top + height * (1.0 - float(np.clip(pct, 0.0, 100.0)) / 100.0)
 
     def contiguous(a: dict[str, Any], b: dict[str, Any]) -> bool:
         if int(b["fraction_index"]) != int(a["fraction_index"]) + 1:
@@ -1503,7 +1513,7 @@ def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, 
     svg = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" '
            'role="img" aria-label="Fraction midpoint mass percent compared with model; missing values leave gaps">',
            '<rect width="960" height="440" fill="white"/>']
-    for tick in (0.01, 0.1, 1.0, 10.0, 100.0):
+    for tick in (0, 25, 50, 75, 100):
         y = py(tick)
         svg.append(f'<line x1="{left}" y1="{y:.2f}" x2="{left+width}" y2="{y:.2f}" stroke="#e2e6ea"/>')
         svg.append(f'<text x="{left-12}" y="{y+4:.2f}" text-anchor="end" font-size="12">{tick:g}</text>')
@@ -1514,7 +1524,7 @@ def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, 
         svg.append(f'<text x="{x:.2f}" y="{top+height+20}" text-anchor="middle" font-size="12">{display_value:.3g}</text>')
     x_label = "mL" if show_ml else "CV"
     svg.append(f'<text x="{left+width/2}" y="425" text-anchor="middle" font-size="14">Fraction midpoint [{x_label} from run start]</text>')
-    svg.append('<text x="18" y="203" transform="rotate(-90 18 203)" text-anchor="middle" font-size="14">Mass% (log scale; zero at floor)</text>')
+    svg.append('<text x="18" y="203" transform="rotate(-90 18 203)" text-anchor="middle" font-size="14">Mass% [0–100]</text>')
 
     for species_index, name in enumerate(names):
         color = colors[species_index]
@@ -2859,6 +2869,7 @@ def run_global_least_squares_refinement(
             metric = {
                 "run_number": int(context["run_number"]),
                 "run_name": str(context["run_name"]),
+                "display_name": _lsq_display_label(context),
                 "model_run_label": str(context["model_run_label"]),
                 "model_run_name": str(context["model_run_name"]),
                 "chromatogram_csv": context["chromatogram_csv"],
@@ -2882,7 +2893,7 @@ def run_global_least_squares_refinement(
                 chrom["predicted_detector_signal"], difference, norm_difference, sample_weights,
             ):
                 writer.writerow({
-                    "Run_Number": metric["run_number"], "Run_Name": metric["run_name"],
+                    "Run_Number": metric["run_number"], "Run_Name": metric["display_name"],
                     "Model_Run": metric["model_run_label"], "Model_Run_Name": metric["model_run_name"],
                     "Chromatogram_CSV": metric["chromatogram_csv"], "CV": float(cv),
                     "Measured_Signal": float(measured), "Simulated_Total_Protein_g_L": float(sim_total),
@@ -2916,7 +2927,7 @@ def run_global_least_squares_refinement(
                 for row in final_species], dtype=float)
             composition_profile_metrics.append({
                 "run_number": int(profile["run_context"]["run_number"]),
-                "run_name": str(profile["run_context"]["run_name"]),
+                "run_name": _lsq_display_label(profile["run_context"]),
                 "protein_species": name,
                 "observed_fractions": len(final_species),
                 "initial_rmse_percentage_points": float(np.sqrt(np.mean(before ** 2))),
@@ -2932,7 +2943,7 @@ def run_global_least_squares_refinement(
                 continue
             context = profile["run_context"]
             for cv, measured, predicted in zip(cond["CV"], cond["measured"], cond["predicted"]):
-                writer.writerow({"Run_Number": context["run_number"], "Run_Name": context["run_name"],
+                writer.writerow({"Run_Number": context["run_number"], "Run_Name": _lsq_display_label(context),
                                  "Model_Run": context["model_run_label"], "Conductivity_Column": cond["column"],
                                  "CV": float(cv), "Measured_mS_cm": float(measured),
                                  "Predicted_mS_cm": float(predicted), "Residual_mS_cm": float(predicted - measured)})
@@ -2944,7 +2955,7 @@ def run_global_least_squares_refinement(
             context = profile["run_context"]
             for raw in info["composition"]:
                 row = {
-                    "Run_Number": context["run_number"], "Run_Name": context["run_name"],
+                    "Run_Number": context["run_number"], "Run_Name": _lsq_display_label(context),
                     **raw,
                     "Residual_mass_percent": float(raw["Measured_mass_percent"]) - float(raw["Simulated_mass_percent"]),
                 }
@@ -3007,7 +3018,7 @@ def run_global_least_squares_refinement(
     ) or '<tr><td colspan="4">No parameters were unlocked; model values were evaluated without optimization.</td></tr>'
     profile_rows = "".join(
         "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
-            metric["run_number"], metric["run_name"], metric["model_run_label"], metric["overlap_points"],
+            metric["run_number"], metric["display_name"], metric["model_run_label"], metric["overlap_points"],
             f'{metric["normalized_nrmse"]:.6g}', f'{metric["initial_raw_rmse"]:.6g}', f'{metric["raw_rmse"]:.6g}', f'{metric["weighted_rmse"]:.6g}', f'{metric["run_weight"]:.6g}',
             "—" if not math.isfinite(metric["r_squared"]) else f'{metric["r_squared"]:.6g}',
             "—" if metric["conductivity_rmse_mS_cm"] is None else f'{metric["conductivity_rmse_mS_cm"]:.6g}',
@@ -3040,7 +3051,7 @@ def run_global_least_squares_refinement(
         "</tr></thead><tbody>" + composition_metric_rows + "</tbody></table>"
     ) if composition_profile_metrics else ""
     recipe_details = "".join(
-        f'<details><summary>Run {p["run_context"]["run_number"]} — {html.escape(p["run_context"]["run_name"])} recipe and input CSV</summary>'
+        f'<details><summary>{html.escape(_lsq_display_label(p["run_context"]))} recipe and input CSV</summary>'
         f'<pre>{html.escape(json.dumps({"run_context": p["run_context"], "configuration": p["config"]}, indent=2, ensure_ascii=False))}</pre></details>'
         for p in normalized_profiles
     )
@@ -3058,7 +3069,7 @@ def run_global_least_squares_refinement(
                      + _composition_profile_svg(cfg, refs, info["result"]["trace"])
                      + "<p>Only populated species cells for collected fraction intervals contribute mass% residuals. The measured target is solid, measured impurities are dotted, model target is dashed, and model impurities use lighter dots. Blank cells leave gaps; connecting lines are for display.</p>")
         profile_plots.append(
-            f'<h3>Run {profile["run_context"]["run_number"]}: {html.escape(profile["run_context"]["run_name"])}'
+            f'<h3>{html.escape(_lsq_display_label(profile["run_context"]))}'
             f' vs {html.escape(profile["run_context"]["model_run_label"])}</h3>'
             + plot + _cpa_binding_html(binding_row["audit"]))
     overlays_html = "".join(profile_plots)

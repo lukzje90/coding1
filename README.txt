@@ -1,4 +1,16 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25o)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25p)
+
+LOAD BLEND, FIT LIMITS AND LSQ DISPLAY (R25p)
+The load %B entries now select the Buffer A/B blend for both pH and
+conductivity. The calculated load values are shown in Process Setup, while
+the old direct conductivity entry is hidden. Saved explicit-load recipes
+retain their original chemistry until their load %B is edited; editing %B
+switches that run to the buffer blend. The mechanistic load stage consumes
+the resolved pH, conductivity and salt. Least-squares Fit ±% controls now
+reach Python in checked chunks, avoiding an oversized JMP send expression.
+The bounded optimizer uses the resulting per-parameter limits and lists the
+actual allowed values in its fit report. The fraction mass% plot uses a
+linear 0–100% scale, and LSQ plots name their selected model run.
 
 TDM+CPA LSQ STALLED-TRIAL PROTECTION (R25o)
 A model evaluation that stalls inside TDM+CPA integration cannot be stopped
@@ -192,7 +204,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25o_package.marker beside the launcher and Python files. Run the saved
+tdm_r25p_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

@@ -353,6 +353,8 @@ class FractionMassTests(unittest.TestCase):
         self.assertEqual(rows[0]["Protein_Species"], names[0])
         self.assertAlmostEqual(rows[0]["Simulated_mass_percent"], 100 * 1.3 / 2.3)
         svg = lsq._composition_profile_svg(cfg, refs, trace)
+        self.assertIn("Mass% [0–100]", svg)
+        self.assertNotIn("log scale", svg)
         self.assertEqual(svg.count('stroke-width="2.3"'), 2)  # one connected segment per species
         self.assertIn("Blank: no fit or line", svg)
         self.assertIn('stroke-dasharray="1 6"', svg)

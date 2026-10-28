@@ -28,7 +28,24 @@ class FitRangeTests(unittest.TestCase):
         _validate_jsl(jsl)
         self.assertIn('c1DappFitRangeMode = Combo Box({"Default", "Limited"}, << Set(2)', jsl)
         self.assertIn('c1DappFitRangePercent = Number Edit Box(20', jsl)
-        self.assertIn('tdm_ui_lsq_parameter_fit_ranges', jsl)
+        self.assertIn('tdm_ui_lsq_parameter_fit_range_chunk_count', jsl)
+        self.assertIn('tdm_ui_lsq_parameter_fit_ranges_1', jsl)
+        self.assertLess(max(len(line) for line in jsl.splitlines()
+                            if 'tdm_ui_lsq_parameter_fit_ranges_' in line), 8000)
+        with patch.dict(tdm_bridge.__dict__, {
+            "tdm_ui_lsq_parameter_fit_range_chunk_count": 2,
+            "tdm_ui_lsq_parameter_fit_ranges_1": f"{path}|Limited|",
+            "tdm_ui_lsq_parameter_fit_ranges_2": "20;system.uv_dead_volume_mL|Default|.;",
+        }):
+            self.assertEqual(tdm_bridge._lsq_fit_range_percent_from_jmp(), {path: 20.0})
+            self.assertEqual(tdm_bridge.build_shared_config_from_jmp()["least_squares"]["fit_range_percent"],
+                             {path: 20.0})
+        with patch.dict(tdm_bridge.__dict__, {
+            "tdm_ui_lsq_parameter_fit_range_chunk_count": 2,
+            "tdm_ui_lsq_parameter_fit_ranges_1": f"{path}|Limited|20;",
+        }):
+            with self.assertRaisesRegex(ValueError, "Incomplete per-parameter"):
+                tdm_bridge._lsq_fit_range_percent_from_jmp()
         with patch.dict(tdm_bridge.__dict__, {
             "tdm_ui_lsq_parameter_fit_ranges":
                 f"{path}|Limited|20;system.uv_dead_volume_mL|Default|.;",
@@ -80,6 +97,11 @@ class FitRangeTests(unittest.TestCase):
         truth["numerics"].update(time_steps=50, axial_positions=6)
         truth["least_squares"]["objective"] = "NORMALIZED_MSE"
         path = "conversion.uv_to_protein_mAU_L_g"
+        with patch.dict(tdm_bridge.__dict__, {
+            "tdm_ui_lsq_parameter_fit_range_chunk_count": 1,
+            "tdm_ui_lsq_parameter_fit_ranges_1": f"{path}|Limited|10;",
+        }):
+            bounds_from_ui = tdm_bridge.build_shared_config_from_jmp()["least_squares"]["fit_range_percent"]
         start_factor = truth["conversion"]["uv_to_protein_mAU_L_g"] / 2
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -96,7 +118,7 @@ class FitRangeTests(unittest.TestCase):
                     writer.writerows(zip(measured["CV"], measured["uv_mAU"]))
                 starting = copy.deepcopy(target)
                 starting["conversion"]["uv_to_protein_mAU_L_g"] = start_factor
-                starting["least_squares"]["fit_range_percent"] = {path: 10.0}
+                starting["least_squares"]["fit_range_percent"] = bounds_from_ui
                 unrestricted = copy.deepcopy(starting)
                 unrestricted["least_squares"]["fit_range_percent"] = {}
                 np.testing.assert_allclose(simulate(starting)["trace"]["uv_mAU"],

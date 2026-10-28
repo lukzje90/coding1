@@ -486,7 +486,16 @@ def _lsq_unlocked_paths_from_jmp() -> set[str] | None:
 
 def _lsq_fit_range_percent_from_jmp() -> dict[str, float] | None:
     """Read optional per-parameter ±% bounds from the JMP model controls."""
-    raw = _text("tdm_ui_lsq_parameter_fit_ranges")
+    if "tdm_ui_lsq_parameter_fit_range_chunk_count" in globals():
+        count = _num("tdm_ui_lsq_parameter_fit_range_chunk_count")
+        if count is None or not count.is_integer() or not 1 <= count <= 100:
+            raise ValueError("Invalid number of per-parameter LSQ fit-range chunks from JMP.")
+        names = [f"tdm_ui_lsq_parameter_fit_ranges_{index}" for index in range(1, int(count) + 1)]
+        if any(name not in globals() for name in names):
+            raise ValueError("Incomplete per-parameter LSQ fit ranges from JMP; resend the model inputs.")
+        raw = "".join(_text(name) for name in names)
+    else:
+        raw = _text("tdm_ui_lsq_parameter_fit_ranges")
     if not raw:
         return None  # Direct Python/older JMP callers retain default bounds.
     ranges: dict[str, float] = {}

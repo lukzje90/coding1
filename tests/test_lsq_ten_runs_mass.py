@@ -77,7 +77,8 @@ class TenRunMassTests(unittest.TestCase):
                 profiles.append({
                     "config": shared,
                     "chromatogram_csv": source,
-                    "run_context": {"run_number": number, "run_name": f"LSQ Run {number}"},
+                    "run_context": {"run_number": number, "run_name": f"LSQ Run {number}",
+                                    "model_run_name": "Protein A polishing" if number == 5 else f"Run {number}"},
                     "composition_references": [{"fraction_index": 1, "start": 0.1, "end": 0.2,
                                                 "x_unit": "CV", "mass_percent": {
                                                     "Target protein": float(number)}}],
@@ -93,10 +94,14 @@ class TenRunMassTests(unittest.TestCase):
                     mass_fit = list(csv.DictReader(stream))
                 with lsq.FIT_TRACE_CSV.open(newline="", encoding="utf-8") as stream:
                     uv_fit = list(csv.DictReader(stream))
+                report = lsq.FIT_REPORT_HTML.read_text(encoding="utf-8")
             self.assertEqual(len(result["profile_metrics"]), 10)
             self.assertEqual({(row["Run_Number"], row["Measured_mass_percent"])
                               for row in mass_fit}, {(str(i), str(float(i))) for i in range(1, 11)})
             self.assertEqual({row["Run_Number"] for row in uv_fit}, {str(i) for i in range(1, 11)})
+            self.assertEqual({row["Run_Name"] for row in uv_fit if row["Run_Number"] == "5"},
+                             {"Run 5 LSQ — Protein A polishing"})
+            self.assertIn("Run 5 LSQ — Protein A polishing", report)
             self.assertEqual({(row["run_number"], row["initial_rmse_percentage_points"],
                                row["final_rmse_percentage_points"])
                               for row in result["composition_profile_metrics"]},
@@ -167,8 +172,8 @@ class TenRunMassTests(unittest.TestCase):
             self.assertEqual([Path(p["chromatogram_csv"]).name for p in captured],
                              ["uv_run_4.csv", "uv_run_2.csv"])
             markup = report.read_text()
-            self.assertIn("LSQ Run 4", markup)
-            self.assertIn("LSQ Run 2", markup)
+            self.assertIn("Run 4 LSQ — LSQ profile four", markup)
+            self.assertIn("Run 2 LSQ — Batch recipe seven", markup)
             self.assertEqual(markup.count("Fraction mass% at midpoints"), 2)
 
             outputs = ("FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
