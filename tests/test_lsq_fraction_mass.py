@@ -17,6 +17,88 @@ from verify_model import make_config
 
 
 class FractionMassTests(unittest.TestCase):
+    def test_cpa_empty_fraction_has_uv_anchored_species_gradient(self):
+        cfg = make_config(MODEL_TDM_CPA, 1, multistep=False)
+        names = [row["name"] for row in cfg["components"][:2]]
+        ref = lsq.validate_composition_references(cfg, [{
+            "start": 0.5, "end": 1.5, "x_unit": "CV",
+            "mass_percent": {names[0]: 60.0, names[1]: 40.0},
+        }])
+        measured = lsq.ChromatogramReference(
+            cv=np.array([0.0, 1.0, 2.0]), signal=np.array([100.0, 100.0, 100.0]),
+            x_column="CV", signal_column="UV mAU", x_unit="CV", source_path="synthetic")
+        empty = {"CV": np.array([0.0, 1.0, 2.0]),
+                 "component_g_L": np.zeros((3, 2)),
+                 "uv_response_factors_mAU_L_g": np.array([200.0, 200.0])}
+        approaching = copy.deepcopy(empty)
+        approaching["component_g_L"] = np.tile([0.3, 0.2], (3, 1))
+        empty_anchor = lsq._cpa_fraction_uv_residuals(cfg, ref, empty, measured, 0.0)
+        fitted_anchor = lsq._cpa_fraction_uv_residuals(cfg, ref, approaching, measured, 0.0)
+        self.assertGreater(float(empty_anchor @ empty_anchor), 0.0)
+        np.testing.assert_allclose(fitted_anchor, 0.0, atol=1e-12)
+        partial = copy.deepcopy(ref)
+        partial[0]["mass_percent"].pop(names[1])
+        self.assertEqual(len(lsq._cpa_fraction_uv_residuals(cfg, partial, empty, measured, 0.0)), 0)
+
+    def test_four_species_cpa_affinity_recovers_from_uv_and_fraction_mass(self):
+        truth = make_config(MODEL_TDM_CPA, 3, multistep=False)
+        truth["numerics"].update(time_steps=60, axial_positions=6)
+        truth["feed"]["load_density_mg_mL_resin"] = 6.0
+        truth["process"]["buffer_A"]["conductivity_mS_cm"] = 2.0
+        truth["process"]["plw_steps"][0]["CV"] = 1.0
+        truth["process"]["elution_steps"][0].update(CV=4.0, end_percent_B=100.0)
+        truth["least_squares"]["objective"] = "NORMALIZED_MSE"
+        measured = simulate(truth)
+        audit = measured["simulation"]["diagnostics"]["CPA_adsorption_audit"]["species"]
+        self.assertTrue(all(row["end_load_bound_percent_of_load"] > 95.0 for row in audit))
+        self.assertTrue(all(row["peak_outlet_stage_kind"] == "ELUTION" for row in audit))
+        self.assertTrue(all(row["elution_outlet_percent_of_load"] > 95.0 for row in audit))
+        self.assertTrue(all(abs(error) < 1.0
+                            for stage in measured["simulation"]["diagnostics"]["CPA_adsorption_audit"]["stages"]
+                            for error in stage["cumulative_mass_balance_error_percent_of_load"]))
+        names = [row["name"] for row in truth["components"][:4]]
+        trace = measured["trace"]
+        fractions = []
+        for index in range(6):
+            start = 4.75 + 0.1 * index
+            end = start + 0.1
+            values, quantifiable = lsq._predicted_fraction_mass_percent(
+                truth, trace, {"fraction_index": index + 1, "start": start,
+                               "end": end, "x_unit": "CV", "CV": (start + end) / 2})
+            self.assertTrue(quantifiable)
+            fractions.append({"fraction_index": index + 1, "start": start, "end": end,
+                              "x_unit": "CV", "mass_percent": dict(zip(names, map(float, values)))})
+        initial = copy.deepcopy(truth)
+        initial["components"][0]["delta_ref"] = 0.002
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "reference.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV mAU"])
+                writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
+            outputs = ("FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
+                       "FIT_CONDUCTIVITY_CSV", "FIT_REPORT_HTML", "FIT_CONFIG_JSON",
+                       "FIT_APPLY_JSL", "FIT_SETTINGS_JSON", "FIT_HISTORY_CSV",
+                       "FIT_IMPROVED_CSV", "FIT_IMPROVED_TXT", "CONFIG_PATH")
+            with patch.multiple(lsq, **{name: root / getattr(lsq, name).name
+                                        for name in outputs}):
+                fit = lsq.run_global_least_squares_refinement(
+                    [{"config": initial, "chromatogram_csv": source,
+                      "composition_references": fractions}],
+                    mode=lsq.MODE_CHROMATOGRAM_AND_COMPOSITION,
+                    unlocked_paths=["components[0].delta_ref"],
+                    max_nfev=8, max_model_evaluations=18)
+                report = lsq.FIT_REPORT_HTML.read_text(encoding="utf-8")
+            self.assertTrue(fit["accepted"])
+            self.assertLess(fit["final_objective"], fit["initial_objective"] * 1e-6)
+            self.assertAlmostEqual(fit["fitted_config"]["components"][0]["delta_ref"],
+                                   truth["components"][0]["delta_ref"], delta=1e-4)
+            self.assertTrue(all(row["final_rmse_percentage_points"] <
+                                max(row["initial_rmse_percentage_points"] * 1e-4, 1e-4)
+                                for row in fit["composition_profile_metrics"]))
+            self.assertIn("complete mass% row also constrains", report)
+
     def test_fraction_mass_uses_collected_interval_with_interpolated_boundaries(self):
         cfg = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
         cfg["column"]["volume_mL"] = 2.0

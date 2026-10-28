@@ -1,4 +1,21 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25r)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25s)
+
+TARGET UV RESPONSE (R25s)
+The target protein has its own UV → protein response factor beside its other
+Model Parameters. Each impurity keeps its separate response factor. The target
+control reads and writes the same saved target conversion value as earlier
+packages, so normal predictions, LSQ locks, and saved fit values still use
+the selected target response factor without changing existing recipes.
+
+CPA FRACTION FIT CHECK (R25s)
+The TDM+CPA mass% objective now uses each complete fraction's measured UV
+and protein/impurity mass percentages to constrain the individual predicted
+species signals. This gives the optimizer a useful residual when a trial
+predicts almost no protein in that fraction. The reported mass percentages
+remain the actual integrated species fractions. Rows with blank species cells
+still use only their entered mass% values. A four-species bind-and-elute
+recovery test and CPA paper equation audit are in CPA_PAPER_AUDIT_R25S.md.
+
 
 LSQ LOCK SELECTION HANDOFF (R25r)
 The JMP model sends parameter lock/unlock states in small numbered messages,
@@ -223,7 +240,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25r_package.marker beside the launcher and Python files. Run the saved
+tdm_r25s_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

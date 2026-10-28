@@ -1472,6 +1472,72 @@ def _composition_residuals(
     return arr, rows
 
 
+def _cpa_fraction_uv_residuals(config: dict[str, Any], references: list[dict[str, Any]],
+                               trace: dict[str, Any], reference: ChromatogramReference,
+                               baseline: float) -> np.ndarray:
+    """Constrain measured species amounts when a CPA trial has an empty fraction.
+
+    A mass percentage is undefined when the model predicts zero collected
+    protein. The fraction's measured UV and a complete mass% row together
+    specify each species' share of that UV. Comparing the corresponding model
+    UV contributions is continuous at zero predicted protein, so the Jacobian
+    can still steer the CPA retention parameters. Partial rows retain only the
+    ordinary mass% residual because their unmeasured species are unknown.
+    """
+    names = [str(row["name"]) for row in active_components(config)]
+    factors = np.asarray(trace["uv_response_factors_mAU_L_g"], dtype=float)
+    cv = np.asarray(trace["CV"], dtype=float)
+    components = np.maximum(np.asarray(trace["component_g_L"], dtype=float), 0.0)
+    measured_cv = np.asarray(reference.cv, dtype=float)
+    measured_uv = np.asarray(reference.signal, dtype=float) - baseline
+    signal_floor = max(1e-6, 0.01 * float(np.max(measured_uv) - np.min(measured_uv)))
+    anchors: list[float] = []
+    for row in references:
+        percentages = row["mass_percent"]
+        if len(percentages) != len(names) or not all(name in percentages for name in names):
+            continue
+        fractions = np.asarray([percentages[name] / 100.0 for name in names], dtype=float)
+        if not 0.995 <= float(np.sum(fractions)) <= 1.005:
+            continue
+        if row.get("legacy_point"):
+            points = np.asarray([float(row["CV"])])
+            weights = None
+        else:
+            factor = float(config["column"]["volume_mL"]) if row["x_unit"] == "ML" else 1.0
+            start, end = float(row["start"]) / factor, float(row["end"]) / factor
+            points = np.r_[start, cv[(cv > start) & (cv < end)],
+                           measured_cv[(measured_cv > start) & (measured_cv < end)], end]
+            points = np.unique(points)
+            weights = np.diff(points)
+        if points[0] < measured_cv[0] or points[-1] > measured_cv[-1]:
+            continue
+        measured = np.interp(points, measured_cv, measured_uv)
+        predicted = np.column_stack([np.interp(points, cv, components[:, i])
+                                     for i in range(len(names))])
+        if weights is None:
+            measured_average = float(measured[0])
+            predicted_average = predicted[0]
+        else:
+            measured_average = float(np.sum((measured[:-1] + measured[1:]) * 0.5 * weights)
+                                     / np.sum(weights))
+            predicted_average = np.sum((predicted[:-1] + predicted[1:]) *
+                                       (0.5 * weights)[:, None], axis=0) / np.sum(weights)
+        if measured_average <= signal_floor:
+            continue
+        weighted_response = float(fractions @ factors)
+        expected_uv = measured_average * fractions * factors / weighted_response
+        predicted_uv = predicted_average * factors
+        # The original percentage objective must dominate whenever the model
+        # already predicts a measurable fraction. Use the UV share only to
+        # escape its zero-mass singularity; the smooth taper avoids a hard
+        # objective discontinuity as a peak enters the fraction.
+        signal_ratio = float(np.sum(predicted_uv)) / (0.05 * measured_average)
+        empty_fraction_weight = 1.0 / (1.0 + signal_ratio**4)
+        anchors.extend(empty_fraction_weight * (predicted_uv - expected_uv) / measured_average)
+    return (np.asarray(anchors, dtype=float) / math.sqrt(len(anchors))
+            if anchors else np.empty(0, dtype=float))
+
+
 def _lsq_display_label(context: dict[str, Any]) -> str:
     number = context.get("run_number", 1)
     profile_name = str(context.get("run_name") or f"LSQ Run {number}").strip()
@@ -1667,6 +1733,13 @@ def _objective_parts(
     comp_rows: list[dict[str, Any]] = []
     if mode == MODE_CHROMATOGRAM_AND_COMPOSITION:
         comp_r, comp_rows = _composition_residuals(cfg, composition_refs, result["trace"])
+        if cfg["model"] == MODEL_TDM_CPA:
+            uv_anchor = _cpa_fraction_uv_residuals(
+                cfg, composition_refs, result["trace"], ref, chrom_info["baseline"])
+            if len(uv_anchor):
+                # Preserve the original mass% residual and its weight. The
+                # tapered anchor adds information only near an empty fraction.
+                comp_r = np.concatenate([comp_r, uv_anchor])
         if cfg["least_squares"]["objective"] == "RAW_SSE":
             # Keep the literal UV SSE, but express the dimensionless mass%
             # group in comparable UV units. Without this, mAU residuals can
@@ -2979,6 +3052,8 @@ def run_global_least_squares_refinement(
         "profile_count": n_profiles,
         "objective": first["least_squares"]["objective"],
         "equation_9": "min_theta sum_runs sum_UV_points (predicted_UV - measured_UV)^2; enabled conductivity and mass% add separately scaled residual groups",
+        "cpa_fraction_uv_anchor": ("Complete TDM+CPA mass% rows also constrain each species' share of measured fraction UV, using its current UV response factor. The additional residual tapers to zero when the trial predicts measurable protein; partial rows retain mass% only."
+                                   if first["model"] == MODEL_TDM_CPA and mode == MODE_CHROMATOGRAM_AND_COMPOSITION else None),
         "weighted_rmse_formula": "sqrt(sum_runs (run_weight/sum_run_weights) * sum_points(point_weight*residual^2)/sum_point_weights)",
         "optimizer": f"scipy.optimize.least_squares(method={_optimizer_method(x0, lo, hi)}, loss=linear, ftol=1e-4, xtol=1e-4, gtol=1e-7); bounded residual-vector least squares",
         "baseline_mode": first["least_squares"]["baseline_mode"],
@@ -3130,6 +3205,9 @@ def run_global_least_squares_refinement(
     settings["fit_elapsed_hms"] = fit_elapsed_hms
     settings["model_residual_evaluations"] = eval_count
     settings["fit_quality_warning"] = fit_quality_warning
+    mass_anchoring_note = (" For TDM+CPA, a complete mass% row also constrains each species' share of the measured UV averaged over that fraction. This helps when the model predicts an empty fraction and tapers away as its fraction becomes measurable. Rows with blank species cells use mass% only."
+                           if first["model"] == MODEL_TDM_CPA and mode == MODE_CHROMATOGRAM_AND_COMPOSITION else "")
+    composition_channel_label = ("Fraction fit" if mass_anchoring_note else "Mass%")
     try:
         active_path.write_text(
             f"Least-squares fit completed {time.strftime('%Y-%m-%d %H:%M:%S %Z')}.\n"
@@ -3150,12 +3228,12 @@ def run_global_least_squares_refinement(
 {f'<p><b>Fit quality warning:</b> {html.escape(fit_quality_warning)}</p>' if fit_quality_warning else ''}
 <h2>Per-profile chromatogram metrics</h2><p>Objective: {html.escape(first["least_squares"]["objective"])}. Baseline policy: {html.escape(first["least_squares"]["baseline_mode"])}. Default RAW_SSE uses the exact pointwise UV equation 9; optional NORMALIZED_MSE gives equal normalized profile weights. UV is predicted as the sum of each species concentration multiplied by its own response factor. Conductivity, when enabled for a run, adds measured detector residuals normalized by that run's conductivity signal scale and sample count; in RAW_SSE these are rescaled to the measured UV scale.</p>
 <table><thead><tr><th>Run</th><th>Profile</th><th>Model run</th><th>Overlap points</th><th>Normalized NRMSE</th><th>Initial UV RMSE</th><th>Fitted UV RMSE</th><th>Weighted UV RMSE</th><th>Run weight</th><th>UV R²</th><th>Conductivity RMSE [mS/cm]</th></tr></thead><tbody>{profile_rows}</tbody></table>
-<h2>Objective by measurement type</h2><p>Per-run squared residual sums before optional multi-run weighting. Mass% is zero when that channel is not selected.</p><table><thead><tr><th>Run</th><th>Initial UV</th><th>Fitted UV</th><th>Initial mass%</th><th>Fitted mass%</th></tr></thead><tbody>{channel_rows}</tbody></table>
+<h2>Objective by measurement type</h2><p>Per-run squared residual sums before optional multi-run weighting. The fraction channel is zero when it is not selected.</p><table><thead><tr><th>Run</th><th>Initial UV</th><th>Fitted UV</th><th>Initial {composition_channel_label}</th><th>Fitted {composition_channel_label}</th></tr></thead><tbody>{channel_rows}</tbody></table>
 {composition_metrics_html}
 <h2>Measured and predicted chromatograms</h2><p>The predicted UV and process overlays span each full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>{overlays_html}
 <h2>Improved shared parameters</h2><p><a href="{FIT_IMPROVED_CSV.name}">Parameter list CSV</a> · <a href="{FIT_IMPROVED_TXT.name}">Parameter list text</a></p><table><thead><tr><th>Parameter</th><th>Initial</th><th>Fitted</th><th>Fit limit ±%</th><th>Allowed min</th><th>Allowed max</th></tr></thead><tbody>{parameter_rows}</tbody></table>
 <h2>Profile recipes used</h2>{recipe_details}
-<h2>Objective construction</h2><p>UV uses every measured detector sample. RAW_SSE preserves the pointwise UV residual; NORMALIZED_MSE divides by the measured signal scale and sqrt(sample count). Conductivity is included only when enabled. Each entered species mass% is compared with 100 times its integrated detector concentration divided by the integrated concentration of all active species over that collected fraction. CV is cumulative volume, so changing flow is included. The mass% residual group is divided by 100 and sqrt(the populated species-observation count), then expressed in comparable UV units for RAW_SSE. Legacy point-only observations retain midpoint comparison. Blank cells add no residual; chart lines are display-only. Each selected run's process settings remain fixed. Only unlocked active-model parameters are shared and refined.</p>
+<h2>Objective construction</h2><p>UV uses every measured detector sample. RAW_SSE preserves the pointwise UV residual; NORMALIZED_MSE divides by the measured signal scale and sqrt(sample count). Conductivity is included only when enabled. Each entered species mass% is compared with 100 times its integrated detector concentration divided by the integrated concentration of all active species over that collected fraction. CV is cumulative volume, so changing flow is included. The mass% residual group is divided by 100 and sqrt(the populated species-observation count), then expressed in comparable UV units for RAW_SSE. Legacy point-only observations retain midpoint comparison. Blank cells add no residual; chart lines are display-only.{mass_anchoring_note} Each selected run's process settings remain fixed. Only unlocked active-model parameters are shared and refined.</p>
 <h2>Objective improvement over time</h2><p>{history_file_html}</p>{history_plot}
 <p>Files: {FIT_TRACE_CSV.name}, {FIT_CONDUCTIVITY_CSV.name}, {FIT_RESULTS_CSV.name}, {FIT_COMPOSITION_CSV.name}, {FIT_SETTINGS_JSON.name}.</p>
 """, encoding="utf-8")

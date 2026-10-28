@@ -1,0 +1,19 @@
+# TDM–CPA equation and fraction-fit audit (R25s)
+
+Reference: Briskot et al., *Analysis of complex protein elution behavior in preparative ion exchange processes using a colloidal particle adsorption model*, Journal of Chromatography A 1654 (2021) 462439 (the supplied “CPA Paper 2.pdf”). The separately supplied Lorenz-Cristea et al. (2025) calibration paper supplies the species accessibility factor.
+
+| Published relation | Implementation | Check |
+| --- | --- | --- |
+| Bulk TDM balance, paper Eq. 1–3 | `tdm_minimal_model._simulate_tdm_cpa`, `dcb` and conservative finite-volume `_scalar_transport` | Interstitial velocity, axial dispersion, film transfer and Danckwerts-type boundary flux use SI units. |
+| Pore balance, Eq. 4 | `dcp` in `_simulate_tdm_cpa` | `6/dp = 3/rp`. The code also divides by `Facc = epsilon_p,i / epsilon_p`, as in the 2025 paper Eq. 4–5. |
+| CPA rate, Eq. 13 | `CPAModel.kinetic_rate` | Adsorption and desorption use `kkin * (Kv * cp - qv)` in mol/m³ skeleton/s. |
+| Kinetic factor, Eq. 18 | `CPAModel._fkin` | Uses the stable small- and large-energy limits of `0.5*y²/(cosh(y)-1)`. |
+| Partition factor, Eq. 19 | `CPAModel.equilibrium_factors` | Uses Delta, available surface, lateral energy and `(1-exp(-y))/y`; ionic strength is converted from M to mol/m³ before electrostatic evaluation. |
+| Protein radius, Eq. 23 | `_build_cpa_components` | User diameter is halved to radius; molecular mass is inferred from the paper's empirical radius relation for molar/mass conversion. |
+| pH response, Eq. 24–25 | `CPAComponent.Z` and `CPAComponent.delta` | Applied when a selected process has a pH-changing program; constant-pH runs use the supplied reference charge and Delta. |
+
+The paper refers the detailed adsorption-energy `uA` and available-surface `B(Theta)` expressions to its earlier reference [32]. This model retains its existing linearized electrostatic energy and steric surface approximation. It also fixes the lateral protein charge to zero, following the 2025 calibration example. **Those submodels are approximations, so this audit does not establish numerical equivalence with the authors' ChromX implementation, which was not supplied.** The core transport solver and CPA equations were left unchanged in R25s.
+
+The four-species regression case uses a 6 mg/mL-resin load, low-salt load buffer, one wash and a salt-gradient elution. All four species bind above 95% after loading, elute above 95% of their loaded amounts, and peak in elution; each stage closes mass balance within 1%. Starting with the target `delta_ref` at 0.002 instead of 0.012, the synthetic UV plus six fully measured mass% fractions recovers `delta_ref` to within 0.0001 and substantially reduces the objective. The earlier single-species tests also check strong versus weak binding, coverage, equilibrium, and grid refinement.
+
+The uploaded objective histories show a different problem from a disconnected mass% input: an all-unlocked 44-parameter Jacobian requires approximately 44 expensive column solves, and one history recorded 15 impossible surface-coverage trials among its first 37 evaluations. A single run with seven fractions cannot independently identify all of those correlated parameters. For TDM+CPA, R25s adds a measured-UV species constraint when every species in a fraction has a mass% value and its UV is above 1% of the measured signal span. Its weight tapers smoothly to zero as the model predicts measurable protein, preserving the existing mass% fit where it already works. The constraint remains continuous if the predicted fraction is empty. Partial rows retain the previous mass% objective, and all CSV/report mass% values continue to use true integrated fraction percentages. A close fit to a specific experimental chromatogram still requires that run's actual process recipe, reference UV, fraction table, and physically plausible initial CPA parameters.

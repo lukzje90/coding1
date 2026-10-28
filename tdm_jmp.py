@@ -118,7 +118,7 @@ def _trow(label: str, var: str, value: Any, label_width: int = 290) -> str:
 
 
 def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str, str]],
-                     default_unlocked_paths: set[str]) -> tuple[str, list[str], str]:
+                     default_unlocked_paths: set[str], target_uv_response: Any) -> tuple[str, list[str], str]:
     p = f"c{i}"
     title = "Target protein" if i == 1 else f"Impurity {i-1}"
     qmax = row.get("qmax_g_L")
@@ -139,7 +139,9 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
               fit_path=f"components[{i-1}].uv_response_factor_mAU_L_g", fit_lock_vars=fit_lock_vars,
               default_unlocked_paths=default_unlocked_paths)
         if i > 1 else
-        'Text Box("Uses the shared target UV response factor.", << Set Wrap(620))'
+        _nrow("Target protein UV → protein response factor [mAU·L/g]", "uvToProtein", target_uv_response, 360,
+              fit_path="conversion.uv_to_protein_mAU_L_g", fit_lock_vars=fit_lock_vars,
+              default_unlocked_paths=default_unlocked_paths)
     )
     body = f'''{p}Panel = Outline Box({_q(title)},
         V List Box(
@@ -397,7 +399,8 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
                 f"{prefix}.wang_beta1_per_M",
             })
     for i, row in enumerate(cfg["components"], start=1):
-        b, s, v = _component_panel(i, row, fit_lock_vars, default_unlocked_paths)
+        b, s, v = _component_panel(i, row, fit_lock_vars, default_unlocked_paths,
+                                  conv.get("uv_to_protein_mAU_L_g"))
         component_bodies.append(b); component_sends.extend(s); component_vis.append(v)
     wang_q0_row = _nrow("Wang shared q0 [g/L stationary phase]", "wangQ0", cfg["wang"]["q0_g_L"], 360,
                         fit_path="wang.q0_g_L", fit_lock_vars=fit_lock_vars,
@@ -1509,9 +1512,7 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                     H List Box(Text Box("Show conductivity overlay", << Set Width(360)), conductivityToggle = Combo Box({{"On", "Off"}}, << Set({1 if sys['show_conductivity'] else 2}))),
                     H List Box(Text Box("Show flow-rate overlay", << Set Width(360)), flowRateToggle = Combo Box({{"On", "Off"}}, << Set({1 if sys['show_flow_rate'] else 2})))
                 )),
-                signalConversionPanel = Outline Box("Signal conversion parameters — direct inputs", V List Box(
-                    {_nrow("Target UV → protein response factor [mAU·L/g]", "uvToProtein", conv.get("uv_to_protein_mAU_L_g"), 360,
-                           fit_path="conversion.uv_to_protein_mAU_L_g", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                signalConversionPanel = Outline Box("Salt signal conversion parameter — direct input", V List Box(
                     condConversionRow = {_nrow("Conductivity → salt factor [M per (mS/cm)]", "condToSalt", conv.get("conductivity_to_salt_M_per_mS_cm"), 360,
                            "If(!isLoading, UpdateUI())", fit_path="conversion.conductivity_to_salt_M_per_mS_cm",
                            fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},

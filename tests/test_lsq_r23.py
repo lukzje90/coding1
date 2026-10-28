@@ -376,9 +376,9 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Current Window() << Get Path', launcher)
         self.assertIn('Current Window() << Get File Name', launcher)
         self.assertIn('Get Default Directory()', launcher)
-        self.assertIn('packageMarker = "tdm_r25r_package.marker"', launcher)
+        self.assertIn('packageMarker = "tdm_r25s_package.marker"', launcher)
         self.assertIn('File Exists( candidateDir || packageMarker )', launcher)
-        self.assertTrue((ROOT / "tdm_r25r_package.marker").is_file())
+        self.assertTrue((ROOT / "tdm_r25s_package.marker").is_file())
         self.assertLess(launcher.index('Get Script Name()'),
                         launcher.index('Current Window() << Get Path'))
         self.assertLess(launcher.index('Current Window() << Get File Name'),
@@ -403,6 +403,7 @@ class RefinementTests(unittest.TestCase):
             self.assertIn(expected, jsl)
         self.assertLess(jsl.index("Number of runs to fit [1–10]"), jsl.index("LSQ run 1"))
         self.assertLess(jsl.index("LSQ run 10"), jsl.index('Outline Box("Fit settings"'))
+
         self.assertIn('Column(dtLSQRuns, "LSQ_Chromatogram_CSV")[r] = Trim(Char(LSQPathText(slot)))', jsl)
         self.assertIn('Column(dtLSQRuns, "LSQ_X_Origin")[r] = LSQOriginSelected(slot)', jsl)
         self.assertIn('Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot]', jsl)
@@ -425,6 +426,21 @@ class RefinementTests(unittest.TestCase):
                 self.assertIn(f'lsqXOrigin{slot} = Combo Box', jsl)
                 self.assertIn(f'Return(RunNumberFromLabel(lsqRunSlot{slot} << Get Selected))', jsl)
                 self.assertIn(f'lsqCsvPath{slot} << Set Text(path)', jsl)
+
+    def test_target_uv_response_is_in_target_model_parameters(self):
+        jsl = build_jsl()
+        _validate_jsl(jsl)
+        target_panel = jsl[jsl.index('c1Panel = Outline Box("Target protein"'):
+                           jsl.index('c2Panel = Outline Box("Impurity 1"')]
+        conversion_panel = jsl[jsl.index('signalConversionPanel = Outline Box('):
+                               jsl.index('tdmPanel = Outline Box(')]
+        self.assertIn('uvToProtein = Number Edit Box(', target_panel)
+        self.assertIn('Target protein UV → protein response factor', target_panel)
+        self.assertNotIn('uvToProtein = Number Edit Box(', conversion_panel)
+        self.assertIn('Python Send(uvToProtein << Get, Python Name("tdm_ui_uv_to_protein_factor"));', jsl)
+        with patch.dict(tdm_bridge.__dict__, {'tdm_ui_uv_to_protein_factor': 321.0}):
+            config = tdm_bridge.build_shared_config_from_jmp()
+        self.assertEqual(config['conversion']['uv_to_protein_mAU_L_g'], 321.0)
 
     def test_conference_cv_and_ml_mau_axes_align_with_solver(self):
         cfg = config_for()
