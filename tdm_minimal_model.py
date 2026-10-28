@@ -2033,6 +2033,7 @@ def _svg_plot(
     flow_mL_min=None, total_cv=None, show_percent_B=True, show_conductivity=True,
     show_flow_rate=True,
     width=1100, height=650, y_axis_label="UV absorbance (mAU)",
+    aria_label="Predicted UV chromatogram with programmed percent B, lagged conductivity and flow rate",
 ) -> str:
     """Plot a full program, with optional independent sample CVs for each signal."""
     if series_x is None:
@@ -2070,7 +2071,7 @@ def _svg_plot(
     def YF(v): return bottom - float(v) / fmax * ph
     axis = '#222'
     palette = ['#222222', '#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#ff7f0e', '#8c564b']
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" style="max-width:100%;height:auto" role="img" aria-label="Predicted UV chromatogram with programmed percent B, lagged conductivity and flow rate">',
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}" style="max-width:100%;height:auto" role="img" aria-label="{html.escape(aria_label, quote=True)}">',
              f'<rect width="{width}" height="{height}" fill="white"/>']
     for i, (name, _) in enumerate(series):
         lx = left + (i % 2) * (pw / 2)
@@ -2145,6 +2146,32 @@ def _svg_plot(
     return ''.join(parts)
 
 
+def _impurity_profile_svg(config: dict[str, Any], result: dict[str, Any]) -> str:
+    """Plot each impurity's fitted/forward detector concentration on its own axis.
+
+    The detector-delayed species traces are the same values exported to the
+    results CSV and used to construct the total UV signal. Excluding the target
+    keeps low-concentration impurity peaks visible.
+    """
+    trace = result["trace"]
+    names = result["simulation"]["component_names"]
+    concentration = np.asarray(trace["component_g_L"], dtype=float)
+    if concentration.ndim != 2 or concentration.shape[1] != len(names):
+        raise ValueError("Impurity profile does not match the simulated component names.")
+    if len(names) < 2:
+        return ""
+    program = result["simulation"]["program"]
+    return _svg_plot(
+        np.asarray(trace["CV"], dtype=float),
+        [(str(name), concentration[:, i]) for i, name in enumerate(names) if i > 0],
+        stages=_stage_receipt(config, program), total_cv=program.total_CV,
+        time_min=trace["time_min"], show_percent_B=False,
+        show_conductivity=False, show_flow_rate=False,
+        y_axis_label="Predicted impurity at detector (g/L)",
+        aria_label="Predicted impurity concentration chromatogram by CV",
+    )
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:
@@ -2212,8 +2239,13 @@ def check_result_freshness(
         expected_name = str(context.get("run_name") or f"Run {expected_number}")
         if int(manifest.get("run_number", -1)) != expected_number or str(manifest.get("run_name")) != expected_name:
             return False, "The chromatogram belongs to a different selected run. Run the selected model again."
-        for key in ("html", "csv", "svg"):
-            output_path = root / f"latest_results.{key}"
+        for key, filename in (("html", "latest_results.html"),
+                              ("csv", "latest_results.csv"),
+                              ("svg", "latest_results.svg"),
+                              ("impurity_svg", "latest_impurity_profile.svg")):
+            if key == "impurity_svg" and key not in manifest.get("output_sha256", {}):
+                continue  # A saved run with no impurities has no species chart.
+            output_path = root / filename
             if not output_path.is_file() or _sha256_file(output_path) != manifest.get("output_sha256", {}).get(key):
                 return False, f"The {key.upper()} result changed after the run receipt was written. Run the selected model again."
         return True, f"Result matches Run {expected_number} — {expected_name}; build {RESULT_GUARD_BUILD}."
@@ -2302,6 +2334,12 @@ def write_outputs(
     )
     svg_path = output_dir / "latest_results.svg"
     svg_path.write_text(svg, encoding="utf-8")
+    impurity_svg = _impurity_profile_svg(config, result)
+    impurity_svg_path = output_dir / "latest_impurity_profile.svg"
+    if impurity_svg:
+        impurity_svg_path.write_text(impurity_svg, encoding="utf-8")
+    else:
+        impurity_svg_path.unlink(missing_ok=True)
     derived = html.escape(json.dumps(derived_input_summary(config), indent=2))
     diagnostics = html.escape(json.dumps(result["simulation"]["diagnostics"], indent=2))
     parameter_receipt = html.escape(json.dumps(result.get("parameter_receipt", {}), indent=2, ensure_ascii=False))
@@ -2406,6 +2444,7 @@ def write_outputs(
 &nbsp; <label><input type="checkbox" {'checked' if config['system']['show_conductivity'] else ''} onchange="document.querySelectorAll('[data-overlay=conductivity]').forEach(el=>el.style.display=this.checked?'':'none')"> Show conductivity</label>
 &nbsp; <label><input type="checkbox" {'checked' if config['system'].get('show_flow_rate', True) else ''} onchange="document.querySelectorAll('[data-overlay=flow-rate]').forEach(el=>el.style.display=this.checked?'':'none')"> Show flow rate</label></p>
 {svg}
+{('<h2>Predicted impurity chromatogram</h2><p>Each line is an impurity concentration at the UV detector in g/L, plotted across the full programmed run. The target is omitted so smaller impurity peaks remain visible. These are model predictions, not measured impurity signals.</p>' + impurity_svg) if impurity_svg else ''}
 <p>{html.escape(' '.join(result['simulation']['diagnostics'].get('warnings', [])))}</p>
 <h2>Resolved buffer chemistry</h2>
 <p>Buffer references and %B stages use these current definitions. Direct endpoint stages use the recipe table below. HIC binding uses salt molarity; native CPA ion exchange uses ionic strength. The conversion factor is {config['conversion']['conductivity_to_salt_M_per_mS_cm']:g} M/(mS/cm). SALT_FACTOR_ESTIMATE marks an estimated conductivity overlay.</p>
@@ -2449,10 +2488,13 @@ def write_outputs(
         "target_peak": result.get("parameter_receipt", {}).get("target_peak"),
         "output_sha256": {
             "html": _sha256_file(html_path), "csv": _sha256_file(csv_path), "svg": _sha256_file(svg_path),
+            **({"impurity_svg": _sha256_file(impurity_svg_path)} if impurity_svg else {}),
         },
     }
     _write_manifest(manifest_path, manifest)
-    return {"csv": str(csv_path), "html": str(html_path), "svg": str(svg_path), "manifest": str(manifest_path)}
+    return {"csv": str(csv_path), "html": str(html_path), "svg": str(svg_path),
+            **({"impurity_svg": str(impurity_svg_path)} if impurity_svg else {}),
+            "manifest": str(manifest_path)}
 
 
 def run_and_write(
@@ -2533,7 +2575,12 @@ def run_batch_and_write(
         })
         rel_html = Path(paths["html"]).relative_to(root).as_posix()
         rel_svg = Path(paths["svg"]).relative_to(root).as_posix()
-        cards.append(f'<section><h2>{html.escape(run_name)}</h2><img src="{html.escape(rel_svg)}" style="display:block;width:100%;max-width:1000px;height:auto;background:#fff"><p><a href="{html.escape(rel_html)}">Open detailed result</a></p></section>')
+        impurity_card = (
+            '<h3>Predicted impurity chromatogram</h3>'
+            f'<img src="{html.escape(Path(paths["impurity_svg"]).relative_to(root).as_posix())}" '
+            'style="display:block;width:100%;max-width:1000px;height:auto;background:#fff">'
+        ) if paths.get("impurity_svg") else ""
+        cards.append(f'<section><h2>{html.escape(run_name)}</h2><img src="{html.escape(rel_svg)}" style="display:block;width:100%;max-width:1000px;height:auto;background:#fff">{impurity_card}<p><a href="{html.escape(rel_html)}">Open detailed result</a></p></section>')
     summary_path = root / "batch_summary.csv"
     with summary_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(rows[0]))

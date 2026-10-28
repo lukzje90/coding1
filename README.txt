@@ -1,4 +1,14 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25p)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25q)
+
+PREDICTED IMPURITY CHROMATOGRAM (R25q)
+Normal run results and the batch gallery now show a separate chromatogram
+for every selected impurity, using its detector concentration in g/L. The
+target is excluded from this chart so small impurity peaks stay visible.
+Each run with impurities saves its own latest_impurity_profile.svg; the run
+receipt checks that file along with the main chromatogram. The LSQ alignment preview shows
+the current predicted impurity chromatogram, and each fit report shows the
+predicted impurity chromatogram from that run's fitted parameters. These
+species curves are predictions, not independently measured impurity data.
 
 LOAD BLEND, FIT LIMITS AND LSQ DISPLAY (R25p)
 The load %B entries now select the Buffer A/B blend for both pH and
@@ -204,7 +214,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25p_package.marker beside the launcher and Python files. Run the saved
+tdm_r25q_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

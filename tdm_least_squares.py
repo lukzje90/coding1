@@ -54,7 +54,7 @@ from tdm_minimal_io import (
     validate_config,
     is_hic,
 )
-from tdm_minimal_model import simulate, _build_program, _svg_plot, _stage_receipt
+from tdm_minimal_model import simulate, _build_program, _svg_plot, _stage_receipt, _impurity_profile_svg
 
 PROJECT_DIR = Path(__file__).resolve().parent
 ATTACHED_CHROMATOGRAM_CSV = PROJECT_DIR / "least_squares_reference_chromatogram.csv"
@@ -1349,6 +1349,9 @@ def preview_lsq_alignment(
                '<p><b>Fraction mass% alignment:</b> no observations enabled for this run. '
                'Select mass% refinement mode, turn on this run\'s fraction mass%, and enter fraction values to include them.</p>')
             + _chromatogram_fit_svg(config, info)
+            + ("<h3>Predicted impurity chromatogram before refinement</h3>"
+               + _impurity_profile_svg(config, info["result"])
+               if len(info["result"]["simulation"]["component_names"]) > 1 else "")
             + (_conductivity_fit_svg(info) if info["conductivity"] else "")
             + (f'<h3 id="mass-preview-run-{html.escape(str(run_number), quote=True)}">Fraction mass% at midpoints</h3>'
                + _composition_profile_svg(config, comp_refs, info["result"]["trace"])
@@ -2306,6 +2309,7 @@ def run_least_squares_refinement(
     improvement_percent = _objective_improvement_percent(initial_obj, final_obj)
     history_plot = _objective_history_svg(history)
     chromatogram_plot = _chromatogram_fit_svg(fitted, final_info)
+    impurity_plot = _impurity_profile_svg(fitted, final_info["result"])
     fraction_uv_plot = ("<h2>UV chromatogram with collected fraction mass%</h2>"
                         + _fraction_uv_overlay_svg(fitted, comp_refs, final_info)
                         if comp_refs else "")
@@ -2337,6 +2341,7 @@ Converged flag: {bool(opt.success)}; decision: {acceptance['status']}; applied t
 <h2>Measured and predicted chromatogram</h2>
 <p>The predicted UV and process overlays span the full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>
 {chromatogram_plot}
+{('<h2>Predicted impurity chromatogram after refinement</h2><p>Final reported impurity concentrations at the UV detector in g/L, over the complete programmed run. Each line is one impurity; these are model predictions, not measured species signals.</p>' + impurity_plot) if impurity_plot else ''}
 {fraction_uv_plot}
 {composition_plot}
 {_cpa_binding_html(binding_metrics)}
@@ -3059,6 +3064,12 @@ def run_global_least_squares_refinement(
     for profile, cfg, info, binding_row in zip(normalized_profiles, fitted_configs, final_infos,
                                                 binding_metrics_by_run):
         plot = _chromatogram_fit_svg(cfg, info)
+        impurity_plot = _impurity_profile_svg(cfg, info["result"])
+        if impurity_plot:
+            plot += ("<h4>Predicted impurity chromatogram after refinement</h4>"
+                     "<p>Final reported detector concentrations in g/L for this run's impurities. "
+                     "These are model predictions, not measured species signals.</p>"
+                     + impurity_plot)
         if info["conductivity"]:
             plot += _conductivity_fit_svg(info)
         refs = profile["composition_references"]
