@@ -1,6 +1,7 @@
 """Optional per-parameter percentage limits reach the bounded LSQ optimizer."""
 import copy
 import csv
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -30,8 +31,41 @@ class FitRangeTests(unittest.TestCase):
         self.assertIn('c1DappFitRangePercent = Number Edit Box(20', jsl)
         self.assertIn('tdm_ui_lsq_parameter_fit_range_chunk_count', jsl)
         self.assertIn('tdm_ui_lsq_parameter_fit_ranges_1', jsl)
+        self.assertIn('tdm_ui_lsq_parameter_lock_chunk_count', jsl)
+        self.assertIn('tdm_ui_lsq_parameter_lock_states_1', jsl)
         self.assertLess(max(len(line) for line in jsl.splitlines()
                             if 'tdm_ui_lsq_parameter_fit_ranges_' in line), 8000)
+        self.assertLess(max(len(line) for line in jsl.splitlines()
+                            if 'tdm_ui_lsq_parameter_lock_states_' in line), 8000)
+        for control, transmitted in (
+            (r'\b(\w+)FitLock = Combo Box', r'\b(\w+)FitLock << Get Selected'),
+            (r'\b(\w+)FitRangeMode = Combo Box', r'\b(\w+)FitRangeMode << Get Selected'),
+        ):
+            self.assertEqual(set(re.findall(control, jsl)), set(re.findall(transmitted, jsl)))
+            self.assertEqual(len(set(re.findall(control, jsl))), 170)
+        with patch.dict(tdm_bridge.__dict__, {
+            "tdm_ui_lsq_parameter_lock_chunk_count": 2,
+            "tdm_ui_lsq_parameter_lock_states_1": f"{path}=Unlocked;",
+            "tdm_ui_lsq_parameter_lock_states_2": "system.uv_dead_volume_mL=Locked;",
+        }):
+            self.assertEqual(tdm_bridge._lsq_unlocked_paths_from_jmp(), {path})
+            self.assertEqual(tdm_bridge.build_shared_config_from_jmp()["least_squares"]["unlocked_paths"], [path])
+        with patch.dict(tdm_bridge.__dict__, {
+            "tdm_ui_lsq_parameter_lock_chunk_count": 2,
+            "tdm_ui_lsq_parameter_lock_states_1": f"{path}=Unlocked;",
+        }):
+            with self.assertRaisesRegex(ValueError, "Incomplete per-parameter LSQ lock states"):
+                tdm_bridge._lsq_unlocked_paths_from_jmp()
+        with patch.dict(tdm_bridge.__dict__, {
+            "tdm_ui_lsq_parameter_lock_chunk_count": 1,
+            "tdm_ui_lsq_parameter_lock_states_1": f"{path}=Unlocked",
+        }):
+            with self.assertRaisesRegex(ValueError, "Incomplete per-parameter LSQ lock states"):
+                tdm_bridge._lsq_unlocked_paths_from_jmp()
+        with patch.dict(tdm_bridge.__dict__, {
+            "tdm_ui_lsq_parameter_lock_states": f"{path}=Unlocked;",
+        }):
+            self.assertEqual(tdm_bridge._lsq_unlocked_paths_from_jmp(), {path})
         with patch.dict(tdm_bridge.__dict__, {
             "tdm_ui_lsq_parameter_fit_range_chunk_count": 2,
             "tdm_ui_lsq_parameter_fit_ranges_1": f"{path}|Limited|",
@@ -100,8 +134,12 @@ class FitRangeTests(unittest.TestCase):
         with patch.dict(tdm_bridge.__dict__, {
             "tdm_ui_lsq_parameter_fit_range_chunk_count": 1,
             "tdm_ui_lsq_parameter_fit_ranges_1": f"{path}|Limited|10;",
+            "tdm_ui_lsq_parameter_lock_chunk_count": 1,
+            "tdm_ui_lsq_parameter_lock_states_1": f"{path}=Unlocked;",
         }):
-            bounds_from_ui = tdm_bridge.build_shared_config_from_jmp()["least_squares"]["fit_range_percent"]
+            ui_lsq = tdm_bridge.build_shared_config_from_jmp()["least_squares"]
+            bounds_from_ui = ui_lsq["fit_range_percent"]
+            unlocked_from_ui = ui_lsq["unlocked_paths"]
         start_factor = truth["conversion"]["uv_to_protein_mAU_L_g"] / 2
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -132,7 +170,7 @@ class FitRangeTests(unittest.TestCase):
             with patch.multiple(lsq, **{name: root / getattr(lsq, name).name
                                         for name in outputs}):
                 fit = lsq.run_global_least_squares_refinement(
-                    profiles, unlocked_paths=[path], max_nfev=8,
+                    profiles, unlocked_paths=unlocked_from_ui, max_nfev=8,
                     max_model_evaluations=25)
                 with lsq.FIT_RESULTS_CSV.open(newline="", encoding="utf-8") as stream:
                     rows = list(csv.DictReader(stream))

@@ -471,14 +471,31 @@ def _preview_lsq_profile_rows(rows: list[dict[str, Any]]) -> list[tuple[int, dic
 
 def _lsq_unlocked_paths_from_jmp() -> set[str] | None:
     """Read parameter lock states sent by the per-parameter JMP selectors."""
-    raw = _text("tdm_ui_lsq_parameter_lock_states")
+    if "tdm_ui_lsq_parameter_lock_chunk_count" in globals():
+        count = _num("tdm_ui_lsq_parameter_lock_chunk_count")
+        if count is None or not count.is_integer() or not 1 <= count <= 100:
+            raise ValueError("Invalid number of per-parameter LSQ lock-state chunks from JMP.")
+        names = [f"tdm_ui_lsq_parameter_lock_states_{index}" for index in range(1, int(count) + 1)]
+        if any(name not in globals() for name in names):
+            raise ValueError("Incomplete per-parameter LSQ lock states from JMP; resend the model inputs.")
+        chunks = [_text(name) for name in names]
+        if any(not chunk for chunk in chunks) or not "".join(chunks).endswith(";"):
+            raise ValueError("Incomplete per-parameter LSQ lock states from JMP; resend the model inputs.")
+        raw = "".join(chunks)
+    else:
+        raw = _text("tdm_ui_lsq_parameter_lock_states")
     if not raw:
         return None  # Direct Python/older UI calls keep the established defaults.
     unlocked: set[str] = set()
     for item in raw.split(";"):
         if "=" not in item:
+            if item.strip() and "tdm_ui_lsq_parameter_lock_chunk_count" in globals():
+                raise ValueError("Invalid per-parameter LSQ lock state from JMP.")
             continue
         path, state = item.rsplit("=", 1)
+        if "tdm_ui_lsq_parameter_lock_chunk_count" in globals() and (
+                not path.strip() or state.strip().upper() not in {"LOCKED", "UNLOCKED"}):
+            raise ValueError("Invalid per-parameter LSQ lock state from JMP.")
         if path.strip() and state.strip().upper() == "UNLOCKED":
             unlocked.add(canonical_fit_parameter_path(path.strip()))
     return unlocked
@@ -493,7 +510,10 @@ def _lsq_fit_range_percent_from_jmp() -> dict[str, float] | None:
         names = [f"tdm_ui_lsq_parameter_fit_ranges_{index}" for index in range(1, int(count) + 1)]
         if any(name not in globals() for name in names):
             raise ValueError("Incomplete per-parameter LSQ fit ranges from JMP; resend the model inputs.")
-        raw = "".join(_text(name) for name in names)
+        chunks = [_text(name) for name in names]
+        if any(not chunk for chunk in chunks) or not "".join(chunks).endswith(";"):
+            raise ValueError("Incomplete per-parameter LSQ fit ranges from JMP; resend the model inputs.")
+        raw = "".join(chunks)
     else:
         raw = _text("tdm_ui_lsq_parameter_fit_ranges")
     if not raw:

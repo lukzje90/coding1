@@ -586,25 +586,9 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         for i in range(1, MAX_LSQ_PROFILES + 1)
     )
     lsq_control_dispatch = "\n".join(lsq_getters + lsq_setters)
-    lock_state_parts = []
-    for lock_var, parameter_path in fit_lock_vars:
-        lock_state_parts.extend([_q(parameter_path + "="), f'{lock_var} << Get Selected', _q(";")])
-    if lock_state_parts:
-        sends.append('Python Send(Concat(' + ", ".join(lock_state_parts) + '), Python Name("tdm_ui_lsq_parameter_lock_states"));')
-    range_chunks = []
-    for offset in range(0, len(fit_lock_vars), 20):
-        range_parts = []
-        for lock_var, parameter_path in fit_lock_vars[offset:offset + 20]:
-            var = lock_var.removesuffix("FitLock")
-            range_parts.extend([_q(parameter_path + "|"), f'{var}FitRangeMode << Get Selected',
-                                _q("|"), f'Char({var}FitRangePercent << Get)', _q(";")])
-        range_chunks.append('Concat(' + ", ".join(range_parts) + ')')
-    if range_chunks:
-        # Sending every parameter in one JMP expression can exceed the host's
-        # expression/string limits and silently lose the selected fit bounds.
-        sends.append(f'Python Send({len(range_chunks)}, Python Name("tdm_ui_lsq_parameter_fit_range_chunk_count"));')
-        for index, chunk in enumerate(range_chunks, 1):
-            sends.append(f'Python Send({chunk}, Python Name("tdm_ui_lsq_parameter_fit_ranges_{index}"));')
+    # Some controls are created while interpolating the UI template below.
+    # Fill these placeholders after that template has registered every control.
+    sends.extend(("__LSQ_LOCK_SENDS__", "__LSQ_FIT_RANGE_SENDS__"))
     set_all_lock_lines = " ".join(
         f'{lock_var} << Set(If(Uppercase(Char(state)) == "UNLOCKED", 2, 1));'
         for lock_var, _parameter_path in fit_lock_vars
@@ -1625,12 +1609,30 @@ LoadLSQMassReference(1);
 UpdateUI();
 UpdateLSQRunSummary();
 '''
-    final_lock_parts = []
-    for lock_var, path in fit_lock_vars:
-        final_lock_parts.extend([_q(path + "="), f'{lock_var} << Get Selected', _q(";")])
-    final_send = 'Python Send(Concat(' + ", ".join(final_lock_parts) + '), Python Name("tdm_ui_lsq_parameter_lock_states"));'
-    lock_send = next((send for send in sends if 'tdm_ui_lsq_parameter_lock_states' in send), None)
-    jsl = jsl.replace(lock_send, final_send) if lock_send is not None else jsl
+    final_lock_sends = []
+    final_range_sends = []
+    for offset in range(0, len(fit_lock_vars), 20):
+        lock_parts = []
+        range_parts = []
+        for lock_var, path in fit_lock_vars[offset:offset + 20]:
+            var = lock_var.removesuffix("FitLock")
+            lock_parts.extend((_q(path + "="), f'{lock_var} << Get Selected', _q(";")))
+            range_parts.extend((_q(path + "|"), f'{var}FitRangeMode << Get Selected',
+                                _q("|"), f'Char({var}FitRangePercent << Get)', _q(";")))
+        final_lock_sends.append('Concat(' + ", ".join(lock_parts) + ')')
+        final_range_sends.append('Concat(' + ", ".join(range_parts) + ')')
+    lock_send_lines = [f'Python Send({len(final_lock_sends)}, Python Name("tdm_ui_lsq_parameter_lock_chunk_count"));']
+    lock_send_lines.extend(
+        f'Python Send({chunk}, Python Name("tdm_ui_lsq_parameter_lock_states_{i}"));'
+        for i, chunk in enumerate(final_lock_sends, 1)
+    )
+    range_send_lines = [f'Python Send({len(final_range_sends)}, Python Name("tdm_ui_lsq_parameter_fit_range_chunk_count"));']
+    range_send_lines.extend(
+        f'Python Send({chunk}, Python Name("tdm_ui_lsq_parameter_fit_ranges_{i}"));'
+        for i, chunk in enumerate(final_range_sends, 1)
+    )
+    jsl = jsl.replace("__LSQ_LOCK_SENDS__", "\n    ".join(lock_send_lines))
+    jsl = jsl.replace("__LSQ_FIT_RANGE_SENDS__", "\n    ".join(range_send_lines))
     final_lock_lines = " ".join(f'{var} << Set(If(Uppercase(Char(state)) == "UNLOCKED", 2, 1));' for var, _ in fit_lock_vars)
     jsl = jsl.replace(set_all_lock_lines, final_lock_lines)
     return jsl

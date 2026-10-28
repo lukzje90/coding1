@@ -97,6 +97,7 @@ def _check_generated_contract(config: dict) -> dict:
             re.fullmatch(r"tdm_ui_c[1-6]_[A-Za-z0-9_]+", name)
             or re.fullmatch(r"tdm_ui_system_(?:buffer_dispersion_mL|salt_dispersion_mm2_s|uv_dead_volume_mL|conductivity_dead_volume_mL|buffer_dispersion_enabled|salt_dispersion_enabled|show_percent_B|show_conductivity|show_flow_rate)", name)
             or re.fullmatch(r"tdm_ui_lsq_selected_run_(?:[1-9]|10)", name)
+            or re.fullmatch(r"tdm_ui_lsq_parameter_lock_states_(?:[1-9]|10)", name)
             or re.fullmatch(r"tdm_ui_lsq_parameter_fit_ranges_(?:[1-9]|10)", name)
             or re.fullmatch(r"tdm_ui_lsq_r(?:[1-9]|[12][0-9]|30)_(?:start|end|c[1-6]_mass_percent)", name)
         )

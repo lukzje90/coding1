@@ -1,4 +1,13 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25q)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25r)
+
+LSQ LOCK SELECTION HANDOFF (R25r)
+The JMP model sends parameter lock/unlock states in small numbered messages,
+as it already did for fit-range limits. Python checks that every message
+arrived before starting refinement. This avoids a single oversized JMP
+expression silently omitting unlocked parameters. The fit-range messages are
+now also assembled after all model controls exist; nine late-created controls
+(including the UV response factor and bead radius) were previously absent
+from those messages. Solver equations and fitting objectives are unchanged.
 
 PREDICTED IMPURITY CHROMATOGRAM (R25q)
 Normal run results and the batch gallery now show a separate chromatogram
@@ -214,7 +223,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25q_package.marker beside the launcher and Python files. Run the saved
+tdm_r25r_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)
