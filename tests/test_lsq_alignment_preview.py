@@ -73,6 +73,7 @@ class AlignmentPreviewTests(unittest.TestCase):
             self.assertEqual(loads.call_count, 1)
             self.assertEqual(lsq_rows[0]["LSQ_Chromatogram_CSV"], str(source.resolve()))
             self.assertIn("points: 301", status[-1])
+            self.assertIn("Imported UV (mAU): first 0; last 300; range 0–300", status[-1])
             self.assertIn("Measured CV aligned directly", status[-1])
 
     def test_lsq_chromatogram_heading_names_the_selected_model_run(self):
@@ -107,6 +108,21 @@ class AlignmentPreviewTests(unittest.TestCase):
         self.assertEqual(len(residual), len(cv))
         self.assertEqual(fit_info["overlap_points"], len(cv))
         self.assertGreater(float(np.max(abs(residual))), 90.0)
+
+    def test_linear_x_pixel_spikes_do_not_create_black_preview_peaks(self):
+        cv = np.linspace(0.0, 1.0, 745)
+        baseline = np.exp(-0.5 * ((cv - 0.6) / 0.03) ** 2)
+        raw_uv = baseline.copy()
+        raw_uv[(cv < 0.15) & (np.arange(len(cv)) % 3 == 0)] += 10.0
+        shown_cv, shown_uv = lsq._reference_display_series(cv, raw_uv, 1.0)
+        self.assertLess(float(np.max(shown_uv[shown_cv < 0.15])), 0.1)
+        self.assertGreater(float(np.max(shown_uv)), 0.95)
+        reference = lsq.ChromatogramReference(cv, raw_uv, "CV", "UV 280 [mAU]", "CV", "synthetic.csv")
+        trace = {"CV": cv, "total_g_L": np.zeros_like(cv), "uv_mAU": baseline}
+        residual, fit_info = lsq._chromatogram_residuals(
+            make_config(MODEL_EDM_LANGMUIR, 0, multistep=False), reference, trace)
+        self.assertEqual(fit_info["overlap_points"], len(cv))
+        self.assertGreater(float(np.max(np.abs(residual))), 9.0)
 
     def test_new_lsq_table_tracks_normal_runs_but_legacy_table_keeps_independent_recipe(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -281,6 +297,7 @@ class AlignmentPreviewTests(unittest.TestCase):
             self.assertIn(str(first_csv), markup)
             self.assertIn(str(second_csv), markup)
             self.assertIn("<b>Process setup:</b> column volume", markup)
+            self.assertIn("<b>Imported UV check:</b>", markup)
             self.assertFalse((root / "least_squares_fit_report.html").exists())
         self.assertEqual(first, original_first)
         self.assertEqual(second, original_second)

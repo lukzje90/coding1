@@ -16,7 +16,7 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-10-29-R25V-SPECIES-PROFILE"
+RESULT_GUARD_BUILD = "2026-10-29-R25W-CPA-IONS-ALIGNMENT"
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
 LSQ_MASS_CSV = PROJECT_DIR / "tdm_lsq_fraction_mass.csv"
@@ -1213,12 +1213,17 @@ def _validate_hic_salt_domain(
             )
 
 
-def _validate_buffer_definition(config: dict[str, Any], key: str, label: str, errors: list[str], *, require_pH: bool = True) -> None:
+def _validate_buffer_definition(config: dict[str, Any], key: str, label: str, errors: list[str], *,
+                                require_pH: bool = True, require_ion_composition: bool = False) -> None:
     buffer = config.get("process", {}).get(key, {})
     if require_pH:
         _number(buffer.get("pH"), f"{label} pH", errors, lower=0, upper=14)
     _validate_salt_input(buffer, "", label, errors)
-    if str(buffer.get("ionic_strength_source", "SALT_PROXY")).upper() == "ION_COMPOSITION":
+    ion_source = str(buffer.get("ionic_strength_source", "SALT_PROXY")).upper()
+    if require_ion_composition and ion_source != "ION_COMPOSITION":
+        errors.append(f"{label}: CPA requires ION_COMPOSITION. Enter each buffer ion's species, concentration [M], and signed charge z.")
+    if ion_source == "ION_COMPOSITION":
+        has_cation = has_anion = False
         for i, ion in enumerate(list(buffer.get("ions", []))[:MAX_BUFFER_IONS], start=1):
             species = str(ion.get("species") or "").strip()
             has_c = not _missing(ion.get("concentration_M"))
@@ -1230,6 +1235,16 @@ def _validate_buffer_definition(config: dict[str, Any], key: str, label: str, er
                 z = _number(ion.get("valency"), f"{label} ion {i} valency", errors)
                 if z is not None and abs(z) < 1e-15:
                     errors.append(f"{label} ion {i} valency must be non-zero.")
+                concentration = _as_float(ion.get("concentration_M"))
+                if species and concentration is not None and concentration > 0 and z is not None:
+                    has_cation |= z > 0
+                    has_anion |= z < 0
+        if require_ion_composition:
+            if not has_cation or not has_anion:
+                errors.append(f"{label}: CPA needs at least one positive and one negative ion with nonzero concentration to calculate ionic strength.")
+            ionic = buffer_ionic_strength_M(buffer)
+            if ionic is None or ionic <= 0:
+                errors.append(f"{label}: CPA ionic strength must be positive and calculated from complete ion rows.")
 
 
 def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
@@ -1263,7 +1278,7 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
     needs_process_salt = uses_cpa(model) or uses_langmuir(model) or uses_wang(model)
     hic_salt_sources: list[tuple[str, dict[str, Any]]] = []
     if needs_process_salt:
-        used_buffers: set[str] = set()
+        used_buffers: set[str] = {"BUFFER_A", "BUFFER_B"} if uses_cpa(model) and not is_hic(config) else set()
         initial_source = str(p.get("equilibration_source") or "MATCH_LOAD").strip().upper()
         if initial_source == "DIRECT":
             _number(p.get("equilibration_pH"), "Initial equilibration pH", errors, lower=0, upper=14)
@@ -1337,11 +1352,12 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
         for src in sorted(used_buffers):
             key = "buffer_A" if src == "BUFFER_A" else "buffer_B"
             _validate_buffer_definition(config, key, "Buffer A" if key == "buffer_A" else "Buffer B", errors,
-                                        require_pH=uses_cpa(model) or uses_wang(model) or initial_source == src)
+                                        require_pH=uses_cpa(model) or uses_wang(model) or initial_source == src,
+                                        require_ion_composition=uses_cpa(model) and not is_hic(config))
             buffer = p.get(key, {})
             if is_hic(config):
                 hic_salt_sources.append(("Buffer A" if key == "buffer_A" else "Buffer B", buffer))
-            if (str(buffer.get("ionic_strength_source", "SALT_PROXY")).upper() == "ION_COMPOSITION"
+            if (not uses_cpa(model) and str(buffer.get("ionic_strength_source", "SALT_PROXY")).upper() == "ION_COMPOSITION"
                     and buffer_ionic_strength_M(buffer) is None):
                 errors.append(f"{'Buffer A' if key == 'buffer_A' else 'Buffer B'} is set to ION_COMPOSITION but has no complete ion rows.")
     if is_hic(config):

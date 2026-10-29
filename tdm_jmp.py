@@ -262,7 +262,7 @@ def _buffer_panel(prefix: str, title: str) -> str:
         H List Box(Text Box("Conductivity [mS/cm]", << Set Width(220)), {prefix}Cond = Number Edit Box(5, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         {prefix}IonicSourceRow = H List Box(Text Box("Ionic strength source", << Set Width(220)), {prefix}IonicSource = Combo Box({{"SALT_PROXY", "ION_COMPOSITION"}}, << Set Width(170), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         {prefix}IonSection = Outline Box("Buffer ion composition", V List Box(
-        Text Box("For CPA ion exchange, enter ion concentrations and charges to calculate ionic strength. SALT_PROXY uses salt molarity as an approximation.", << Set Wrap(680)),
+        Text Box("Enter each charged species, molarity and signed charge. CPA calculates I = 0.5 × sum(c × z²). Include both cations and anions.", << Set Wrap(680)),
             {', '.join(ion_rows)}
         )),
         {prefix}Derived = Text Box("", << Set Wrap(680))
@@ -1221,8 +1221,17 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     bufferSection << Visibility("Visible");
     bufferAIonicSourceRow << Visibility("Visible");
     bufferBIonicSourceRow << Visibility("Visible");
-    bufferAIonSection << Visibility(If(Uppercase(Char(bufferAIonicSource << Get Selected)) == "ION_COMPOSITION", "Visible", "Collapse"));
-    bufferBIonSection << Visibility(If(Uppercase(Char(bufferBIonicSource << Get Selected)) == "ION_COMPOSITION", "Visible", "Collapse"));
+    bufferAIonSection << Visibility(If(isCPA | Uppercase(Char(bufferAIonicSource << Get Selected)) == "ION_COMPOSITION", "Visible", "Collapse"));
+    bufferBIonSection << Visibility(If(isCPA | Uppercase(Char(bufferBIonicSource << Get Selected)) == "ION_COMPOSITION", "Visible", "Collapse"));
+    cpaIonStatus << Visibility(If(isCPA, "Visible", "Collapse"));
+    If(isCPA,
+        cpaIonStatus << Set Text(If(
+            Uppercase(Char(bufferAIonicSource << Get Selected)) != "ION_COMPOSITION" |
+            Uppercase(Char(bufferBIonicSource << Get Selected)) != "ION_COMPOSITION",
+            "CPA requires ion composition for Buffer A and B. Select ION_COMPOSITION in both buffers, then enter each ion's species, concentration and signed charge.",
+            "CPA uses the entered ion concentrations and charges to calculate ionic strength for each buffer and %B blend. Enter at least one cation and one anion per buffer."
+        ))
+    );
     bufferASaltRow << Visibility(If(Char(bufferASaltMode << Get Selected) == "SALT_M", "Visible", "Collapse"));
     bufferBSaltRow << Visibility(If(Char(bufferBSaltMode << Get Selected) == "SALT_M", "Visible", "Collapse"));
     loadSaltRow << Visibility(If(Char(loadSaltMode << Get Selected) == "SALT_M", "Visible", "Collapse"));
@@ -1438,6 +1447,7 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                 bufferSection = V List Box(
                     Text Box("Buffers for this run", << Set Font Style("Bold")),
                     Text Box("Buffer A = 0% B; Buffer B = 100% B. Choose conductivity or salt molarity as the salt input.", << Set Wrap(720)),
+                    cpaIonStatus = Text Box("", << Set Wrap(720)),
                     {buffer_a_panel},
                     {buffer_b_panel}
                 ),

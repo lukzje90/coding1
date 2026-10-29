@@ -914,6 +914,7 @@ def main() -> int:
                 f"Active model folder: {PROJECT_DIR}\n"
                 f"Selected chromatogram: {info['source_path']}\n"
                 f"X: {info['x_column']} ({info['x_unit']}, zero at {info['x_origin']}); Y: {info['signal_column']} (UV compared in mAU; AU-labelled values converted); points: {info['rows']}; conductivity: {info['conductivity_column'] or 'Off'}.\n"
+                f"Imported UV (mAU): first {float(reference.signal[0]):.6g}; last {float(reference.signal[-1]):.6g}; range {float(np.min(reference.signal)):.6g}–{float(np.max(reference.signal)):.6g}.\n"
                 f"Aligned measured range: {cv_min:.4g}–{cv_max:.4g} CV; saved recipe: 0–{program.total_CV:.4g} CV. {x_receipt}{x_warning}\n"
                 f"LSQ profile associations: {LSQ_RUNS_CSV}"
             )

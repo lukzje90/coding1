@@ -23,6 +23,15 @@ from tdm_minimal_model import _build_program, simulate
 from verify_model import make_config
 
 
+def _enter_cpa_buffer_ions(row):
+    for prefix, concentration in (("BufferA", 0.05), ("BufferB", 1.0)):
+        row[f"{prefix}_Ionic_Strength_Source"] = "ION_COMPOSITION"
+        for index, species, charge in ((1, "Na+", 1), (2, "Cl-", -1)):
+            row[f"{prefix}_Ion{index}_Species"] = species
+            row[f"{prefix}_Ion{index}_Concentration_M"] = concentration
+            row[f"{prefix}_Ion{index}_Valency"] = charge
+
+
 class LoadVolumeMLTests(unittest.TestCase):
     def test_all_models_consume_equivalent_saved_load_and_salt_inputs(self):
         models = (MODEL_TDM_CPA, MODEL_TDM_WANG, MODEL_TDM_LANGMUIR,
@@ -46,6 +55,7 @@ class LoadVolumeMLTests(unittest.TestCase):
                        Load_Conductivity_mS_cm=20.0,
                        PLW_Count=0, Elution_Count=1, Elution1_CV=0.2,
                        Time_Steps=50, Axial_Positions=6, **amounts)
+            _enter_cpa_buffer_ions(row)
             rows.append(row)
         conductivity_row = dict(rows[0], Run_Number=4,
                                 Load_Salt_Input_Mode="CONDUCTIVITY",
@@ -138,6 +148,7 @@ class LoadVolumeMLTests(unittest.TestCase):
         row.update(Load_Material_Chemistry_Mode="EXPLICIT",
                    Load_Source="DIRECT", Load_Salt_Input_Mode="SALT_M",
                    Load_Salt_M=0.2, Load_Conductivity_mS_cm="")
+        _enter_cpa_buffer_ions(row)
         config, _ = apply_batch_shared_parameters(shared, batch_row_to_run_config(row))
         self.assertEqual(validate_operating_conditions(config), [])
         stage = _build_program(config, np.zeros(1)).stages[0]

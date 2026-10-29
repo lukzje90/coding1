@@ -44,6 +44,13 @@ class LoadPercentBTests(unittest.TestCase):
                            Load_Chemistry_Control="BUFFER_B_PERCENT",
                            BufferA_pH=6.0, BufferA_Conductivity_mS_cm=5.0,
                            BufferB_pH=6.4, BufferB_Conductivity_mS_cm=35.0)
+                if model in (MODEL_TDM_CPA, MODEL_EDM_CPA):
+                    for prefix, concentration in (("BufferA", 0.05), ("BufferB", 0.35)):
+                        row[f"{prefix}_Ionic_Strength_Source"] = "ION_COMPOSITION"
+                        for index, species, charge in ((1, "Na+", 1), (2, "Cl-", -1)):
+                            row[f"{prefix}_Ion{index}_Species"] = species
+                            row[f"{prefix}_Ion{index}_Concentration_M"] = concentration
+                            row[f"{prefix}_Ion{index}_Valency"] = charge
                 recipe, _ = apply_batch_shared_parameters(shared, batch_row_to_run_config(row))
                 self.assertEqual(validate_config(recipe, strict=True), [])
                 load = _build_program(recipe, np.zeros(1)).stages[0]

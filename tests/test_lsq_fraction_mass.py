@@ -45,6 +45,8 @@ class FractionMassTests(unittest.TestCase):
         truth["numerics"].update(time_steps=60, axial_positions=6)
         truth["feed"]["load_density_mg_mL_resin"] = 6.0
         truth["process"]["buffer_A"]["conductivity_mS_cm"] = 2.0
+        for ion in truth["process"]["buffer_A"]["ions"][:2]:
+            ion["concentration_M"] = 0.02
         truth["process"]["plw_steps"][0]["CV"] = 1.0
         truth["process"]["elution_steps"][0].update(CV=4.0, end_percent_B=100.0)
         truth["least_squares"]["objective"] = "NORMALIZED_MSE"

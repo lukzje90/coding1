@@ -53,6 +53,12 @@ def make_config(model: str, n_imp: int = 1, *, multistep: bool = True) -> dict:
     for buf in (p['buffer_A'], p['buffer_B']):
         for ion in buf['ions']:
             ion.update(species='', concentration_M=None, valency=None)
+        if uses_cpa(model):
+            # Match the former 1:1 salt proxy exactly in existing solver tests.
+            salt = float(buf['salt_concentration_M'])
+            buf['ionic_strength_source'] = 'ION_COMPOSITION'
+            buf['ions'][0].update(species='Na+', concentration_M=salt, valency=1)
+            buf['ions'][1].update(species='Cl-', concentration_M=salt, valency=-1)
     p['plw_steps'][0].update(mode='SET_POINT', CV=0.06, flow_mL_min=1.1, chemistry_control='BUFFER_B_PERCENT', start_percent_B=0.0, end_percent_B=0.0, start_pH=6.0, end_pH=11.0, start_conductivity_mS_cm=5.0, end_conductivity_mS_cm=90.0)
     p['plw_steps'][1].update(mode='STEP', CV=0.05, flow_mL_min=0.9, chemistry_control='BUFFER_B_PERCENT', start_percent_B=0.0, end_percent_B=20.0, start_pH=2.0, end_pH=6.0, start_conductivity_mS_cm=90.0, end_conductivity_mS_cm=8.0)
     p['elution_steps'][0].update(mode='LINEAR', CV=0.18, flow_mL_min=0.8, chemistry_control='BUFFER_B_PERCENT', start_percent_B=0.0, end_percent_B=70.0, start_pH=6.0, end_pH=6.0, start_conductivity_mS_cm=8.0, end_conductivity_mS_cm=35.0)

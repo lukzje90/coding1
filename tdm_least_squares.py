@@ -1188,7 +1188,8 @@ def _reference_display_series(cv: np.ndarray, signal: np.ndarray, total_cv: floa
     """Show one robust reference value per horizontal pixel without changing fit data.
 
     Drawing thousands of raw samples into a few SVG pixels repeatedly paints
-    nearly vertical black strokes, which can look like a filled peak. The full
+    nearly vertical black strokes, which can look like a filled peak. A short
+    display-only median filter removes isolated pixel-scale spikes. The full
     unbinned reference remains in the least-squares residual and trace CSV.
     """
     x = np.asarray(cv, dtype=float)
@@ -1207,10 +1208,12 @@ def _reference_display_series(cv: np.ndarray, signal: np.ndarray, total_cv: floa
     x, y = x[order], y[order]
     columns = np.clip(np.floor(x / total_cv * pixel_columns).astype(int), 0, pixel_columns - 1)
     boundaries = np.r_[0, np.flatnonzero(np.diff(columns)) + 1, len(columns)]
-    return (
-        np.array([np.median(x[a:b]) for a, b in zip(boundaries[:-1], boundaries[1:])]),
-        np.array([np.median(y[a:b]) for a, b in zip(boundaries[:-1], boundaries[1:])]),
-    )
+    display_x = np.array([np.median(x[a:b]) for a, b in zip(boundaries[:-1], boundaries[1:])])
+    display_y = np.array([np.median(y[a:b]) for a, b in zip(boundaries[:-1], boundaries[1:])])
+    if len(x) > pixel_columns and len(display_y) >= 5:
+        padded = np.pad(display_y, (2, 2), mode="reflect")
+        display_y = np.array([np.median(padded[i:i + 5]) for i in range(len(display_y))])
+    return display_x, display_y
 
 
 def _chromatogram_fit_svg(config: dict[str, Any], info: dict[str, Any]) -> str:
@@ -1327,6 +1330,10 @@ def preview_lsq_alignment(
             "model_run_label": str(context.get("model_run_label") or f"Independent LSQ recipe Run {run_number}"),
             "model_run_name": str(context.get("model_run_name") or run_name),
             "sample_points": int(len(measured)),
+            "imported_uv_first_mAU": float(measured[0]),
+            "imported_uv_last_mAU": float(measured[-1]),
+            "imported_uv_min_mAU": float(np.min(measured)),
+            "imported_uv_max_mAU": float(np.max(measured)),
             "measured_start_CV": float(reference.cv[0]),
             "measured_end_CV": float(reference.cv[-1]),
             "programmed_end_CV": program_end,
@@ -1356,6 +1363,10 @@ def preview_lsq_alignment(
             f"<b>Axis:</b> {html.escape(reference.x_column)} [{html.escape(reference.x_unit)}], "
             f"{html.escape(metric['x_axis_assumption'])}; "
             f"<b>signal:</b> {html.escape(reference.signal_column)}<br>"
+            f"<b>Imported UV check:</b> first {metric['imported_uv_first_mAU']:.6g}, "
+            f"last {metric['imported_uv_last_mAU']:.6g}, "
+            f"minimum {metric['imported_uv_min_mAU']:.6g}, "
+            f"maximum {metric['imported_uv_max_mAU']:.6g} mAU.<br>"
             f"<b>Measured span:</b> {metric['measured_start_CV']:.6g}–{metric['measured_end_CV']:.6g} CV "
             f"({metric['sample_points']} samples); <b>programmed end:</b> {program_end:.6g} CV; "
             f"<b>UV RMSE before refinement:</b> {rmse:.6g} mAU.</p>"
@@ -2431,7 +2442,7 @@ Converged flag: {bool(opt.success)}; decision: {acceptance['status']}; applied t
 <b>Improvement:</b> {improvement_percent:.4g}%<br><b>Final chromatogram objective ({html.escape(config['least_squares']['objective'])}):</b> {final_info['chromatogram_sse_normalized']:.7g}</p>
 {comp_note}
 <h2>Measured and predicted chromatogram</h2>
-<p>The predicted UV and process overlays span the full programmed run. Measured UV is displayed as the median imported sample in each chart pixel column to prevent dark overdraw; every imported sample contributes to the chromatogram objective.</p>
+<p>The predicted UV and process overlays span the full programmed run. The measured line uses a per-pixel median and a short display-only median filter to prevent dark overdraw; every imported sample still contributes unchanged to the chromatogram objective.</p>
 {chromatogram_plot}
 {('<h2>Predicted main protein and impurity chromatogram after refinement</h2><p>Final detector concentrations in g/L over the complete programmed run. Impurities use the left axis; the main protein uses the right axis. These are model predictions.</p>' + impurity_plot) if impurity_plot else ''}
 {fraction_uv_plot}

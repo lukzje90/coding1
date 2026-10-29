@@ -1,4 +1,21 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25v)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25w)
+
+CPA BUFFER IONS AND ALIGNMENT DISPLAY (R25w)
+For EDM/TDM–CPA ion exchange, each run now requires Buffer A and Buffer B ion
+composition. In Process Setup, select ION_COMPOSITION for each buffer and enter
+at least one cation and anion with species, concentration [M], and signed charge.
+The model calculates ionic strength as 0.5 × sum(c × z²) and blends the two
+buffer values according to %B. Salt molarity/conductivity remain separate
+process inputs. Existing CPA recipes using SALT_PROXY must be completed before
+prediction or LSQ. Direct chemistry endpoints still use their explicitly
+entered salt value as an ionic-strength proxy; choose Buffer A/B or %B stages
+when ion-derived ionic strength is needed through the full process.
+
+Dense measured UV lines in the alignment preview and fit report now use a
+short display-only median filter after pixel grouping, removing isolated dark
+spikes. Every imported sample still contributes unchanged to LSQ. The attach
+status and preview list the imported UV first/last and minimum/maximum values
+in mAU so the worksheet and signal selection can be checked locally.
 
 MAIN PROTEIN IN SPECIES PROFILE (R25v)
 The separate predicted impurity chromatogram now also shows the main protein.

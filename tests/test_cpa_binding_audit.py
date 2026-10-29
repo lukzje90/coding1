@@ -19,7 +19,9 @@ def binding_recipe(delta: float) -> dict:
     cfg = make_config(MODEL_TDM_CPA, 0, multistep=False)
     cfg["numerics"].update(time_steps=90, axial_positions=8)
     cfg["feed"]["load_density_mg_mL_resin"] = 6.0  # 3 CV at 2 mg/mL
-    cfg["process"]["buffer_A"]["conductivity_mS_cm"] = 2.0  # 0.02 M via saved conversion
+    cfg["process"]["buffer_A"]["conductivity_mS_cm"] = 2.0
+    for ion in cfg["process"]["buffer_A"]["ions"][:2]:
+        ion["concentration_M"] = 0.02  # Match the former 0.02 M 1:1 salt proxy.
     cfg["process"]["plw_steps"][0]["CV"] = 1.0
     cfg["process"]["elution_steps"][0].update(CV=4.0, end_percent_B=100.0)
     cfg["components"][0]["delta_ref"] = delta

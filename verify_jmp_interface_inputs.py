@@ -163,6 +163,12 @@ def _run_row() -> dict:
         "Elution1_Start_Percent_B": 100.0,
         "Elution1_End_Percent_B": 0.0,
     })
+    for prefix, concentration in (("BufferA", 0.2), ("BufferB", 1.4)):
+        row[f"{prefix}_Ionic_Strength_Source"] = "ION_COMPOSITION"
+        for index, species, charge in ((1, "Na+", 1), (2, "Cl-", -1)):
+            row[f"{prefix}_Ion{index}_Species"] = species
+            row[f"{prefix}_Ion{index}_Concentration_M"] = concentration
+            row[f"{prefix}_Ion{index}_Valency"] = charge
     return row
 
 
@@ -224,6 +230,11 @@ def main() -> None:
         assert abs(receipt["load_input_used"]["material_salt_M"] - 0.8) < 1e-12
         assert abs(receipt["buffer_chemistry_used"]["buffer_A"]["salt_concentration_M"] - 0.2) < 1e-12
         assert receipt["buffer_chemistry_used"]["buffer_B"]["salt_concentration_M"] == 1.4
+        if not uses_langmuir(model):
+            assert abs(receipt["buffer_chemistry_used"]["buffer_A"]["ionic_strength_M"] - 0.2) < 1e-12
+            assert abs(receipt["buffer_chemistry_used"]["buffer_B"]["ionic_strength_M"] - 1.4) < 1e-12
+            assert abs(stages[2]["start_ionic_strength_M"] - 1.4) < 1e-12
+            assert abs(stages[2]["end_ionic_strength_M"] - 0.2) < 1e-12
         assert [stages[i]["flow_mL_min"] for i in range(3)] == [1.3, 0.8, 2.4]
         assert stages[2]["start_salt_M"] == 1.4 and abs(stages[2]["end_salt_M"] - 0.2) < 1e-12
         assert stages[2]["start_salt_source"] == "BUFFER_BLEND"
