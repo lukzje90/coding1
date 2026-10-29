@@ -193,8 +193,8 @@ class FractionMassTests(unittest.TestCase):
             self.assertLess(max(abs(float(row["Residual_mass_percent"]))
                                 for row in mass_rows), 0.02)
             self.assertIn("UV chromatogram with collected fraction mass%", report_html)
-            self.assertIn("Predicted impurity chromatogram after refinement", report_html)
-            self.assertEqual(report_html.count('aria-label="Predicted impurity concentration chromatogram by CV"'), 1)
+            self.assertIn("Predicted main protein and impurity chromatogram after refinement", report_html)
+            self.assertEqual(report_html.count('aria-label="Predicted main protein and impurity concentrations by CV"'), 1)
             self.assertIn("Mass% (right axis)", report_html)
             self.assertNotIn("Residual_DOF", parameter_rows[0])
 

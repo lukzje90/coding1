@@ -34,15 +34,23 @@ class ImpurityChromatogramTests(unittest.TestCase):
             impurity_svg = Path(paths["impurity_svg"]).read_text(encoding="utf-8")
             chart = ET.fromstring(impurity_svg)
             text = [node.text or "" for node in chart.findall("{http://www.w3.org/2000/svg}text")]
-            self.assertIn("Predicted impurity chromatogram", markup)
-            self.assertEqual(markup.count('aria-label="Predicted impurity concentration chromatogram by CV"'), 1)
-            self.assertEqual([label for label in text if label in names], names[1:])
+            self.assertIn("Predicted main protein and impurity chromatogram", markup)
+            self.assertEqual(markup.count('aria-label="Predicted main protein and impurity concentrations by CV"'), 1)
+            self.assertEqual([label for label in text if label in names], names)
             self.assertIn(f'run ends at {result["simulation"]["program"].total_CV:g} CV', impurity_svg)
-            self.assertIn("Predicted impurity at detector (g/L)", impurity_svg)
-            self.assertEqual(len(chart.findall("{http://www.w3.org/2000/svg}polyline")), 2)
+            self.assertIn("Predicted impurities at detector (g/L)", impurity_svg)
+            self.assertIn("Main protein at detector (g/L)", impurity_svg)
+            plotted = chart.findall("{http://www.w3.org/2000/svg}polyline")
+            self.assertEqual(len(plotted), 3)
+            def peak_height(line):
+                return min(float(point.split(",")[1]) for point in line.attrib["points"].split())
+            # The separate axes give the main protein and the largest impurity
+            # useful vertical range, even when their g/L values differ widely.
+            self.assertAlmostEqual(peak_height(plotted[0]),
+                                   min(peak_height(line) for line in plotted[1:]), delta=0.02)
             with Path(paths["csv"]).open(newline="", encoding="utf-8") as stream:
                 rows = list(csv.DictReader(stream))
-            for i, name in enumerate(names[1:], start=1):
+            for i, name in enumerate(names):
                 np.testing.assert_allclose([float(row[f"{name}_g_L"]) for row in rows],
                                            trace["component_g_L"][:, i], rtol=1e-12, atol=1e-12)
             receipt = json.loads(Path(paths["manifest"]).read_text(encoding="utf-8"))
@@ -86,10 +94,10 @@ class ImpurityChromatogramTests(unittest.TestCase):
             preview_path = root / "preview.html"
             lsq.preview_lsq_alignment(profiles, output_html=preview_path)
             preview = preview_path.read_text(encoding="utf-8")
-            self.assertEqual(preview.count("Predicted impurity chromatogram before refinement"), 2)
+            self.assertEqual(preview.count("Predicted main protein and impurity chromatogram before refinement"), 2)
             self.assertIn("Run 2 LSQ — Process 2", preview)
             self.assertIn("Run 4 LSQ — Process 4", preview)
-            self.assertEqual(preview.count('aria-label="Predicted impurity concentration chromatogram by CV"'), 2)
+            self.assertEqual(preview.count('aria-label="Predicted main protein and impurity concentrations by CV"'), 2)
 
             outputs = ("FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
                        "FIT_CONDUCTIVITY_CSV", "FIT_REPORT_HTML", "FIT_CONFIG_JSON",
@@ -98,8 +106,8 @@ class ImpurityChromatogramTests(unittest.TestCase):
             with patch.multiple(lsq, **{name: root / getattr(lsq, name).name for name in outputs}):
                 lsq.run_global_least_squares_refinement(profiles, unlocked_paths=[])
                 report = lsq.FIT_REPORT_HTML.read_text(encoding="utf-8")
-            self.assertEqual(report.count("Predicted impurity chromatogram after refinement"), 2)
-            self.assertEqual(report.count('aria-label="Predicted impurity concentration chromatogram by CV"'), 2)
+            self.assertEqual(report.count("Predicted main protein and impurity chromatogram after refinement"), 2)
+            self.assertEqual(report.count('aria-label="Predicted main protein and impurity concentrations by CV"'), 2)
             for end_cv in end_cvs:
                 self.assertIn(f"run ends at {end_cv:g} CV", report)
 

@@ -1,4 +1,10 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25u)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25v)
+
+MAIN PROTEIN IN SPECIES PROFILE (R25v)
+The separate predicted impurity chromatogram now also shows the main protein.
+Impurity concentrations use the left g/L axis; the main protein uses the right
+g/L axis so smaller impurity peaks remain visible. This applies to normal and
+batch predictions, alignment previews, and LSQ fit reports.
 
 FASTER EXCEL ATTACHMENT (R25u)
 Attaching a chromatogram now reads its Excel workbook once. Column detection

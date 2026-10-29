@@ -2036,6 +2036,7 @@ def _svg_plot(
     show_flow_rate=True,
     width=1100, height=650, y_axis_label="UV absorbance (mAU)",
     aria_label="Predicted UV chromatogram with programmed percent B, lagged conductivity and flow rate",
+    secondary_series_indices=None, secondary_y_axis_label=None,
 ) -> str:
     """Plot a full program, with optional independent sample CVs for each signal."""
     if series_x is None:
@@ -2062,12 +2063,18 @@ def _svg_plot(
             end_b = start_b
         command_b.extend([start_b, end_b])
         command_flow.extend([stage["flow_mL_min"]] * 2)
-    ymax = max([float(np.max(y)) for _, y in series] + [1e-12]) * 1.05
+    secondary_indices = set(secondary_series_indices or ())
+    if any(i < 0 or i >= len(series) for i in secondary_indices):
+        raise ValueError("Secondary plot series index is out of range.")
+    ymax = max([float(np.max(y)) for i, (_, y) in enumerate(series)
+                if i not in secondary_indices] + [1e-12]) * 1.05
+    secondary_ymax = max([float(np.max(series[i][1])) for i in secondary_indices] + [1e-12]) * 1.05
     cmax = max(float(np.nanmax(conductivity)) if conductivity is not None else 1.0, 1e-12) * 1.05
     fmax = max(float(np.nanmax(command_flow if command_flow else flow_mL_min))
                if command_flow or flow_mL_min is not None else 1.0, 1e-12) * 1.05
     def X(v): return left + float(v) / xmax * pw
     def Y(v): return bottom - float(v) / ymax * ph
+    def Y2(v): return bottom - float(v) / secondary_ymax * ph
     def YB(v): return bottom - float(v) / 100.0 * ph
     def YC(v): return bottom - float(v) / cmax * ph
     def YF(v): return bottom - float(v) / fmax * ph
@@ -2112,7 +2119,18 @@ def _svg_plot(
         if points: result.append(points)
         return ''.join(f'<polyline fill="none" stroke="{color}" stroke-width="{stroke_width}" stroke-dasharray="{dash}" points="{" ".join(segment)}"/>' for segment in result)
     for i, (_, values) in enumerate(series):
-        parts.append(poly(values, Y, palette[i%7], stroke_width=2.2 if i==0 else 1.5, sample_cv=series_x[i]))
+        parts.append(poly(values, Y2 if i in secondary_indices else Y,
+                          palette[i%7], stroke_width=2.2 if i==0 else 1.5, sample_cv=series_x[i]))
+    if secondary_indices:
+        right_x = left + pw
+        parts.append(f'<line x1="{right_x}" y1="{top}" x2="{right_x}" y2="{bottom}" stroke="{palette[0]}"/>')
+        for j in range(5):
+            value = secondary_ymax * j / 4
+            yp = Y2(value)
+            parts.append(f'<text x="{right_x+8}" y="{yp+4:.2f}" font-size="11" fill="{axis}">{value:.4g}</text>')
+        label_x = right_x + 85
+        parts.append(f'<text x="{label_x}" y="{(top+bottom)/2}" transform="rotate(-90 {label_x} {(top+bottom)/2})" '
+                     f'text-anchor="middle" font-size="13" fill="{axis}">{html.escape(secondary_y_axis_label or "Secondary signal")}</text>')
     for label, attr, visible, xpos, max_value, ordinate, color in [
         ('Buffer B (%)', 'percent-b', show_percent_B, left+pw, 100.0, YB, '#008c95'),
         ('Conductivity (mS/cm)', 'conductivity', show_conductivity, left+pw+82, cmax, YC, '#b36b00'),
@@ -2149,11 +2167,11 @@ def _svg_plot(
 
 
 def _impurity_profile_svg(config: dict[str, Any], result: dict[str, Any]) -> str:
-    """Plot each impurity's fitted/forward detector concentration on its own axis.
+    """Plot the main protein and impurities from the detector species traces.
 
     The detector-delayed species traces are the same values exported to the
-    results CSV and used to construct the total UV signal. Excluding the target
-    keeps low-concentration impurity peaks visible.
+    results CSV and used to construct the total UV signal. The main protein has
+    its own axis so low-concentration impurity peaks remain visible.
     """
     trace = result["trace"]
     names = result["simulation"]["component_names"]
@@ -2165,12 +2183,14 @@ def _impurity_profile_svg(config: dict[str, Any], result: dict[str, Any]) -> str
     program = result["simulation"]["program"]
     return _svg_plot(
         np.asarray(trace["CV"], dtype=float),
-        [(str(name), concentration[:, i]) for i, name in enumerate(names) if i > 0],
+        [(str(name), concentration[:, i]) for i, name in enumerate(names)],
         stages=_stage_receipt(config, program), total_cv=program.total_CV,
         time_min=trace["time_min"], show_percent_B=False,
         show_conductivity=False, show_flow_rate=False,
-        y_axis_label="Predicted impurity at detector (g/L)",
-        aria_label="Predicted impurity concentration chromatogram by CV",
+        y_axis_label="Predicted impurities at detector (g/L)",
+        secondary_series_indices={0},
+        secondary_y_axis_label="Main protein at detector (g/L)",
+        aria_label="Predicted main protein and impurity concentrations by CV",
     )
 
 
@@ -2464,7 +2484,7 @@ def write_outputs(
 &nbsp; <label><input type="checkbox" {'checked' if config['system']['show_conductivity'] else ''} onchange="document.querySelectorAll('[data-overlay=conductivity]').forEach(el=>el.style.display=this.checked?'':'none')"> Show conductivity</label>
 &nbsp; <label><input type="checkbox" {'checked' if config['system'].get('show_flow_rate', True) else ''} onchange="document.querySelectorAll('[data-overlay=flow-rate]').forEach(el=>el.style.display=this.checked?'':'none')"> Show flow rate</label></p>
 {svg}
-{('<h2>Predicted impurity chromatogram</h2><p>Each line is an impurity concentration at the UV detector in g/L, plotted across the full programmed run. The target is omitted so smaller impurity peaks remain visible. These are model predictions, not measured impurity signals.</p>' + impurity_svg) if impurity_svg else ''}
+{('<h2>Predicted main protein and impurity chromatogram</h2><p>Detector concentrations across the full programmed run. Impurities use the left g/L axis; the main protein uses the right g/L axis so smaller impurity peaks remain visible. These lines are model predictions.</p>' + impurity_svg) if impurity_svg else ''}
 <p>{html.escape(' '.join(result['simulation']['diagnostics'].get('warnings', [])))}</p>
 <h2>Resolved buffer chemistry</h2>
 <p>Buffer references and %B stages use these current definitions. Direct endpoint stages use the recipe table below. HIC binding uses salt molarity; native CPA ion exchange uses ionic strength. The conversion factor is {config['conversion']['conductivity_to_salt_M_per_mS_cm']:g} M/(mS/cm). SALT_FACTOR_ESTIMATE marks an estimated conductivity overlay.</p>
@@ -2596,7 +2616,7 @@ def run_batch_and_write(
         rel_html = Path(paths["html"]).relative_to(root).as_posix()
         rel_svg = Path(paths["svg"]).relative_to(root).as_posix()
         impurity_card = (
-            '<h3>Predicted impurity chromatogram</h3>'
+            '<h3>Predicted main protein and impurity chromatogram</h3>'
             f'<img src="{html.escape(Path(paths["impurity_svg"]).relative_to(root).as_posix())}" '
             'style="display:block;width:100%;max-width:1000px;height:auto;background:#fff">'
         ) if paths.get("impurity_svg") else ""
