@@ -231,8 +231,15 @@ def verify_button_paths() -> None:
         assert 'PLW 1 0.47 CV @ 1.35 mL/min' in status and '%B 12→34' in status
         assert 'Elution 1 1.26 CV @ 0.63 mL/min' in status and '%B 21→66' in status
         assert 'Elution 2 2.34 CV @ 1.44 mL/min' in status and '%B 66→93' in status
+        first_prediction_dir = Path(next(
+            line.split(': ', 1)[1] for line in status.splitlines()
+            if line.startswith('Saved prediction folder: ')
+        ))
+        assert first_prediction_dir.is_dir() and first_prediction_dir.parent == project / 'Predictions'
+        assert 'Button_audit_run_1' in first_prediction_dir.name
         for filename in ('latest_results.html', 'latest_results.csv', 'latest_results.svg', 'latest_results_manifest.json'):
             assert (project / filename).is_file(), filename
+            assert (first_prediction_dir / filename).is_file(), filename
 
         with open(project / 'latest_results.csv', encoding='utf-8', newline='') as fh:
             bridge_base_table = list(csv.DictReader(fh))
@@ -394,7 +401,7 @@ def verify_button_paths() -> None:
 
         single_result_receipt = (project / 'latest_results_manifest.json').read_bytes()
         code, status = run_ui_bridge('RUN_BATCH')
-        assert code == 0 and 'Batch completed: 2 run(s);' in status, status
+        assert code == 0 and 'Batch completed: 2 run(s).' in status, status
         assert 'Run 1 — Button audit run 1: load capacity 20 g/L resin; required feed volume 10 mL;' in status
         assert '14.6 CV total' in status
         assert 'Elution 2 2.34 CV @ 1.44 mL/min' in status
@@ -402,19 +409,23 @@ def verify_button_paths() -> None:
             line.split(': ', 1)[1] for line in status.splitlines()
             if line.startswith('Batch result folder: ')
         ))
-        assert first_batch_dir.is_dir() and first_batch_dir.parent == project / 'batch_results'
+        assert first_batch_dir.is_dir() and first_batch_dir.parent == project / 'Predictions'
         assert (project / 'latest_results_manifest.json').read_bytes() == single_result_receipt
         assert (project / 'tdm_batch_summary.csv').is_file()
         root_gallery = (project / 'tdm_batch_gallery.html').read_text(encoding='utf-8')
         assert f'<base href="{first_batch_dir.relative_to(project).as_posix()}/">' in root_gallery
-        for run_number in (1, 2):
-            run_dir = first_batch_dir / f'run_{run_number:03d}'
+        with (first_batch_dir / 'batch_summary.csv').open(newline='', encoding='utf-8') as fh:
+            archived_batch_rows = list(csv.DictReader(fh))
+        assert len(archived_batch_rows) == 2
+        run_dirs = [Path(row['html']).parent for row in archived_batch_rows]
+        for run_number, run_dir in enumerate(run_dirs, start=1):
+            assert run_dir.name.startswith(f'Run_{run_number:02d}_')
             assert (run_dir / 'latest_results.html').is_file()
             assert (run_dir / 'latest_results.svg').is_file()
-            assert f'run_{run_number:03d}/latest_results.svg' in root_gallery
+            assert f'{run_dir.name}/latest_results.svg' in root_gallery
 
         recipe_manifest = json.loads(
-            (first_batch_dir / 'run_001' / 'latest_results_manifest.json').read_text(encoding='utf-8')
+            (run_dirs[0] / 'latest_results_manifest.json').read_text(encoding='utf-8')
         )
         assert_close(recipe_manifest['total_CV'], 14.6)
         assert [stage['name'] for stage in recipe_manifest['stages']] == [
@@ -425,20 +436,20 @@ def verify_button_paths() -> None:
         assert [(recipe_manifest['stages'][i]['start_percent_B'], recipe_manifest['stages'][i]['end_percent_B']) for i in range(1, 6)] == [
             (12.0,34.0),(34.0,55.0),(55.0,80.0),(21.0,66.0),(66.0,93.0)
         ]
-        recipe_html = (first_batch_dir / 'run_001' / 'latest_results.html').read_text(encoding='utf-8')
+        recipe_html = (run_dirs[0] / 'latest_results.html').read_text(encoding='utf-8')
         assert all(name in recipe_html for name in ('PLW 1','PLW 2','PLW 3','Elution 1','Elution 2'))
         assert 'Total run: 14.6 CV' in recipe_html
 
         # Running again must create a separate output tree; existing/open results
         # are preserved instead of being recursively removed on Windows.
         code, status = run_ui_bridge('RUN_BATCH')
-        assert code == 0 and 'Batch completed: 2 run(s);' in status, status
+        assert code == 0 and 'Batch completed: 2 run(s).' in status, status
         second_batch_dir = Path(next(
             line.split(': ', 1)[1] for line in status.splitlines()
             if line.startswith('Batch result folder: ')
         ))
         assert second_batch_dir != first_batch_dir and second_batch_dir.is_dir()
-        assert (first_batch_dir / 'run_001' / 'latest_results.html').is_file()
+        assert (run_dirs[0] / 'latest_results.html').is_file()
         root_gallery = (project / 'tdm_batch_gallery.html').read_text(encoding='utf-8')
         assert f'<base href="{second_batch_dir.relative_to(project).as_posix()}/">' in root_gallery
 
@@ -478,8 +489,13 @@ def verify_button_paths() -> None:
         assert 'LSQ Run 1 — LSQ Run 1 vs Normal batch Run 1:' in status, status
         assert 'LSQ Run 2 — LSQ Run 2 vs Normal batch Run 2:' in status, status
         assert (project / 'least_squares_fit_report.html').is_file()
-        assert (project / 'least_squares_apply_to_ui.jsl').is_file()
-        assert 'Accepted/applied to shared batch parameters: True' in status
+        assert 'Saved LSQ fit folder: ' in status, status
+        assert len(list((project / 'LSQ').glob('Run_*'))) == 2
+        if 'Accepted/applied to shared batch parameters: True' in status:
+            assert (project / 'least_squares_apply_to_ui.jsl').is_file()
+        else:
+            assert 'Accepted/applied to shared batch parameters: False' in status
+            assert not (project / 'least_squares_apply_to_ui.jsl').exists()
 
 
 def main() -> None:

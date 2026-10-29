@@ -114,14 +114,171 @@ from tdm_minimal_io import (
     validate_mechanistic_config,
 )
 
-BATCH_RESULTS_ROOT = PROJECT_DIR / "batch_results"
+PREDICTIONS_ROOT = PROJECT_DIR / "Predictions"
+BATCH_RESULTS_ROOT = PREDICTIONS_ROOT
 FIT_HANDOFF_JSON = PROJECT_DIR / "least_squares_fit_handoff.json"
 
 
 def _new_batch_results_dir() -> Path:
     """Give each batch a fresh directory so Windows/OneDrive locks cannot block reruns."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return BATCH_RESULTS_ROOT / f"batch_{stamp}_{uuid.uuid4().hex[:8]}"
+    from tdm_minimal_model import _uk_archive_stamp
+    return BATCH_RESULTS_ROOT / f"Batch_{_uk_archive_stamp()}_{uuid.uuid4().hex[:6]}"
+
+
+def _archive_prediction(paths: dict[str, str], context: dict[str, Any]) -> Path:
+    """Keep a dated, run-named copy while JMP continues to use latest_results.*."""
+    from tdm_minimal_model import _saved_run_folder_name, check_result_freshness
+    manifest_path = Path(paths["manifest"])
+    receipt = json.loads(manifest_path.read_text(encoding="utf-8"))
+    generated = datetime.fromisoformat(str(receipt["generated_uk_time"]))
+    folder = manifest_path.parent / "Predictions" / _saved_run_folder_name(
+        int(receipt["run_number"]), str(receipt["run_name"]), generated)
+    folder.mkdir(parents=True, exist_ok=False)
+    try:
+        for key in ("html", "csv", "svg", "impurity_svg", "manifest"):
+            if key in paths:
+                source = Path(paths[key])
+                shutil.copy2(source, folder / source.name)
+        valid, reason = check_result_freshness(receipt["configuration"],
+                                                {"run_number": receipt["run_number"],
+                                                 "run_name": receipt["run_name"]}, folder)
+        if not valid:
+            raise RuntimeError(f"Saved prediction receipt did not verify: {reason}")
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return folder
+
+
+def _archive_run_csv(source: Path, destination: Path, run_number: int) -> int:
+    """Write only this LSQ run's rows, retaining the original CSV headings."""
+    with source.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        if not reader.fieldnames or "Run_Number" not in reader.fieldnames:
+            raise ValueError(f"LSQ output has no Run_Number column: {source}")
+        rows = [row for row in reader if int(row["Run_Number"]) == run_number]
+        fields = reader.fieldnames
+    with destination.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)
+
+
+def _archive_lsq_fit(fit: dict[str, Any], profiles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Save one complete global fit and a separate, labelled folder per run."""
+    from tdm_minimal_model import _saved_run_folder_name, _uk_archive_stamp
+    report = Path(fit["fit_report_html"])
+    root = report.parent / "LSQ"
+    instant = datetime.now(timezone.utc)
+    stamp = _uk_archive_stamp(instant)
+    identifier = uuid.uuid4().hex[:6]
+    global_dir = root / f"Fit_{stamp}_{identifier}"
+    created: list[Path] = []
+    try:
+        global_dir.mkdir(parents=True, exist_ok=False)
+        created.append(global_dir)
+        output_keys = (
+            "fit_results_csv", "fit_trace_csv", "fit_conductivity_csv",
+            "fit_composition_csv", "fit_report_html", "fit_config_json",
+            "fit_settings_json", "fit_history_csv", "improved_parameters_csv",
+            "improved_parameters_txt",
+        )
+        saved_global: dict[str, str] = {}
+        archive_warnings: list[str] = []
+        for key in output_keys:
+            raw = fit.get(key)
+            if raw and Path(raw).is_file():
+                source = Path(raw)
+                try:
+                    shutil.copy2(source, global_dir / source.name)
+                    saved_global[key] = source.name
+                except OSError as exc:
+                    if key in {"fit_report_html", "fit_trace_csv"}:
+                        raise
+                    archive_warnings.append(f"{source.name} could not be copied: {type(exc).__name__}: {exc}")
+        if "fit_report_html" not in saved_global or "fit_trace_csv" not in saved_global:
+            raise FileNotFoundError("The completed LSQ report or trace is missing; archive was not created.")
+        if fit.get("accepted") and fit.get("apply_jsl") and Path(fit["apply_jsl"]).is_file():
+            source = Path(fit["apply_jsl"])
+            try:
+                shutil.copy2(source, global_dir / source.name)
+                saved_global["apply_jsl"] = source.name
+            except OSError as exc:
+                archive_warnings.append(f"{source.name} could not be copied: {type(exc).__name__}: {exc}")
+        run_archives: list[dict[str, Any]] = []
+        metrics_by_number = {int(item["run_number"]): item for item in fit["profile_metrics"]}
+        for profile in profiles:
+            context = profile["run_context"]
+            number = int(context["run_number"])
+            name = str(context.get("run_name") or f"Run {number}")
+            run_dir = root / _saved_run_folder_name(number, name, instant)
+            run_dir.mkdir(parents=True, exist_ok=False)
+            created.append(run_dir)
+            row_counts = {}
+            for key in ("fit_trace_csv", "fit_conductivity_csv", "fit_composition_csv"):
+                if key in saved_global:
+                    source = global_dir / saved_global[key]
+                    row_counts[key] = _archive_run_csv(source, run_dir / source.name, number)
+            reference_path = Path(profile["chromatogram_csv"])
+            reference_copy = f"reference_chromatogram{reference_path.suffix.lower()}"
+            reference_error = None
+            try:
+                shutil.copy2(reference_path, run_dir / reference_copy)
+            except OSError as exc:
+                reference_copy = None
+                reference_error = f"{type(exc).__name__}: {exc}"
+                archive_warnings.append(f"Run {number} reference file could not be copied: {reference_error}")
+            metric = metrics_by_number[number]
+            fitted_recipe_file = None
+            if isinstance(fit.get("fitted_config"), dict):
+                fitted_recipe, _ignored = apply_batch_shared_parameters(
+                    fit["fitted_config"], profile["config"])
+                fitted_recipe_file = "fitted_recipe.json"
+                (run_dir / fitted_recipe_file).write_text(
+                    json.dumps(fitted_recipe, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+            details = {
+                "run_number": number, "run_name": name,
+                "model_run_name": context.get("model_run_name"),
+                "model_run_label": context.get("model_run_label"),
+                "saved_uk_time": stamp, "accepted": bool(fit["accepted"]),
+                "reference_source": str(reference_path),
+                "reference_copy": reference_copy,
+                "reference_copy_error": reference_error,
+                "global_fit_folder": global_dir.name,
+                "global_report": str(Path("..") / global_dir.name / report.name),
+                "csv_row_counts": row_counts, "metrics": metric,
+                "recipe": profile["config"], "fitted_recipe_file": fitted_recipe_file,
+                "composition_references": profile.get("composition_references") or [],
+            }
+            (run_dir / "run_manifest.json").write_text(
+                json.dumps(details, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+            report_link = html.escape(f"../{global_dir.name}/{report.name}", quote=True)
+            (run_dir / "run_report.html").write_text(
+                '<!doctype html><meta charset="utf-8"><title>LSQ run archive</title>'
+                f'<h1>LSQ Run {number} — {html.escape(name)}</h1>'
+                f'<p>Saved {html.escape(stamp)}. Model process: '
+                f'{html.escape(str(context.get("model_run_name") or ""))}.</p>'
+                f'<p>Accepted fit: {bool(fit["accepted"])}. '
+                f'UV RMSE: {float(metric["raw_rmse"]):.6g} mAU.</p>'
+                f'<p><a href="{report_link}">Open complete global fit report</a></p>'
+                '<p>Run-specific UV, conductivity and mass% rows are in the CSV files '
+                'beside this report. The recipe and source-file details are in run_manifest.json.</p>',
+                encoding="utf-8")
+            run_archives.append({"run_number": number, "run_name": name,
+                                 "folder": str(run_dir), "relative_folder": run_dir.name,
+                                 "reference_copy": reference_copy})
+        (global_dir / "archive_index.json").write_text(
+            json.dumps({"saved_uk_time": stamp, "accepted": bool(fit["accepted"]),
+                        "global_files": saved_global, "runs": run_archives,
+                        "warnings": archive_warnings},
+                       indent=2, ensure_ascii=False), encoding="utf-8")
+        return {"global_folder": str(global_dir), "runs": run_archives,
+                "warnings": archive_warnings}
+    except Exception:
+        for path in reversed(created):
+            shutil.rmtree(path, ignore_errors=True)
+        raise
 
 
 def _g(name: str, default: Any = None) -> Any:
@@ -868,6 +1025,16 @@ def main() -> int:
                 fitted_shared = sanitize_config_for_selected_model(fit["fitted_config"])
                 save_config(fitted_shared, CONFIG_PATH)
                 _save_fit_handoff(shared_raw, fitted_shared, fit["parameters"])
+            try:
+                fit_archive = _archive_lsq_fit(fit, profiles)
+                archive_line = (f"Saved LSQ fit folder: {fit_archive['global_folder']}\n"
+                                f"Run folders: "
+                                + "; ".join(row["folder"] for row in fit_archive["runs"]) + "\n"
+                                + ("LSQ archive warnings: " + "; ".join(fit_archive["warnings"]) + "\n"
+                                   if fit_archive["warnings"] else ""))
+            except Exception as exc:
+                archive_line = (f"LSQ archive warning: {type(exc).__name__}: {exc}. "
+                                "Latest fit files remain in the model folder.\n")
             profile_summary = "\n".join(
                 f"LSQ Run {p['run_number']} — {p['run_name']} vs {p['model_run_label']}: {p['overlap_points']} points, weighted RMSE {p['weighted_rmse']:.6g}; run weight {p['run_weight']:.6g}"
                 + (f"; conductivity RMSE {p['conductivity_rmse_mS_cm']:.6g} mS/cm"
@@ -895,6 +1062,7 @@ def main() -> int:
                 f"Acceptance status: {fit['acceptance']['status']}; "
                 f"details: {'; '.join(fit['acceptance']['reasons']) or 'all enabled checks passed'}\n"
                 f"Improved parameters:\n{improved_list}\n"
+                f"{archive_line}"
                 f"Report: {fit['fit_report_html']}\nParameter list CSV: {fit['improved_parameters_csv']}\nObjective history CSV: {fit['latest_fit_history_csv'] or 'unavailable; history is plotted in the fit report'}"
             )
             return 0
@@ -908,6 +1076,12 @@ def main() -> int:
             context = _selected_run_context(run_number)
             _write_status(f"Running prediction for Run {run_number} — {context['run_name']}.")
             paths = run_and_write(current_effective, run_context=context)
+            try:
+                saved_prediction = _archive_prediction(paths, context)
+                archive_line = f"Saved prediction folder: {saved_prediction}\n"
+            except Exception as exc:
+                archive_line = (f"Prediction archive warning: {type(exc).__name__}: {exc}. "
+                                "Latest result files remain in the model folder.\n")
             result_manifest = json.loads(Path(paths["manifest"]).read_text(encoding="utf-8"))
             run_warnings = result_manifest.get("warnings") or []
             peak = result_manifest.get("target_peak") or {}
@@ -943,6 +1117,7 @@ def main() -> int:
                 + peak_line
                 + affinity_line
                 + ("Run warnings:\n- " + "\n- ".join(run_warnings) + "\n" if run_warnings else "") +
+                archive_line +
                 f"HTML: {paths['html']}\nCSV: {paths['csv']}\nSVG: {paths['svg']}\nRun receipt: {paths['manifest']}"
             )
             return 0

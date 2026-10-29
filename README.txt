@@ -1,4 +1,17 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25s)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25t)
+
+SAVED PREDICTIONS AND LSQ FITS (R25t)
+The extracted package contains Predictions and LSQ folders. Each normal
+prediction is copied to a new Predictions folder named for its run and UK
+date/time. Batch predictions are grouped by batch, with each run in its own
+named, dated folder. Each completed LSQ is copied to a dated global fit folder
+and separate named, dated folders for its selected runs. The run folders
+contain run-specific UV, conductivity, and fraction mass% CSVs, the starting
+and fitted process recipes, a short report, and a copy of the attached
+reference file when it is available. Latest result buttons still open the
+latest files. Past results are retained. Folder names include GMT or BST and
+a short uniqueness suffix. Long run names are shortened in folder names for
+Windows; the full name remains in each run receipt.
 
 TARGET UV RESPONSE (R25s)
 The target protein has its own UV → protein response factor beside its other
@@ -240,7 +253,7 @@ Extract the complete ZIP, open its saved
 finds the model files beside itself. It also checks the editor window and the
 current directory for this package's marker when JMP does not report the
 script path. It no longer opens a folder or file picker. Keep
-tdm_r25s_package.marker beside the launcher and Python files. Run the saved
+tdm_r25t_package.marker beside the launcher and Python files. Run the saved
 launcher file; an unsaved pasted script has no folder for JMP to identify.
 
 UK CHROMATOGRAM TIME AND ONE-KEY JMP START (R24s)

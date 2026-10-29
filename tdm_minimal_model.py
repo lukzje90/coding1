@@ -6,7 +6,9 @@ import hashlib
 import html
 import json
 import math
+import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2201,6 +2203,24 @@ def _uk_local_time(instant_utc: datetime) -> datetime:
         return instant_utc.astimezone(timezone(offset, "BST" if offset else "GMT"))
 
 
+def _uk_archive_stamp(instant: datetime | None = None) -> str:
+    """Filesystem-safe UK local date and time, including GMT/BST."""
+    return _uk_local_time(instant or datetime.now(timezone.utc)).strftime("%Y-%m-%d_%H-%M-%S_%Z")
+
+
+def _saved_run_folder_name(run_number: int, run_name: str,
+                           instant: datetime | None = None) -> str:
+    """Name an immutable result folder without Windows path separators.
+
+    Keep the user label short because the extracted ZIP may already live under
+    a deep OneDrive path. The random suffix prevents two solves in one second
+    from replacing each other.
+    """
+    label = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(run_name))
+    label = re.sub(r"_+", "_", re.sub(r"\s+", "_", label)).strip(" ._")[:20].rstrip(" ._") or "Unnamed"
+    return f"Run_{int(run_number):02d}_{label}_{_uk_archive_stamp(instant)}_{uuid.uuid4().hex[:6]}"
+
+
 def _write_manifest(path: Path, manifest: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
@@ -2562,7 +2582,7 @@ def run_batch_and_write(
     for raw_run, item in zip(run_configs, batch_results):
         run_number = int(item["result"]["batch"]["run_number"])
         run_name = str(raw_run.get("_run_name") or raw_run.get("run_name") or f"Run {run_number}")
-        run_dir = root / f"run_{run_number:03d}"
+        run_dir = root / _saved_run_folder_name(run_number, run_name)
         paths = write_outputs(item["config"], item["result"], run_dir, run_context={"run_number": run_number, "run_name": run_name})
         rows.append({
             "run_number": run_number,
