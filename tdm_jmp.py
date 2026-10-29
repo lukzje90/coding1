@@ -1313,6 +1313,10 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
         lsqStatusText << Set Text("Building alignment preview for the selected runs.");
         Wait(0.01)
     );
+    If(actionText == "ATTACH_LSQ_CSV",
+        lsqStatusText << Set Text("Reading the selected Excel / CSV chromatogram. JMP will respond when validation finishes.");
+        Wait(0.01)
+    );
     If(actionText == "RUN_SELECTED",
         statusText << Set Text("Running prediction for the selected run. JMP will respond when it finishes.");
         Wait(0.01)

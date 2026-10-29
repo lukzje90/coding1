@@ -229,10 +229,11 @@ def _read_numeric_rows(path: Path, *, sheet_name: str | None = None) -> tuple[li
                         records.append([str(c) if c is not None else "" for c in row])
                 if not records:
                     continue
-                buffer = io.StringIO()
-                csv.writer(buffer).writerows(records)
                 try:
-                    fields, rows = _read_numeric_rows_text(buffer.getvalue())
+                    parsed = _best_numeric_table(records)
+                    if parsed is None:
+                        continue
+                    _score, fields, rows = parsed
                     x, y, _unit = _detect_columns(fields, rows)
                     count = sum(_is_number(r.get(y)) and (x == SAMPLE_ORDER_FIELD or _is_number(r.get(x))) for r in rows)
                 except ValueError:
@@ -293,60 +294,9 @@ def _read_numeric_rows_text(text: str) -> tuple[list[str], list[dict[str, str]]]
             records = list(csv.reader(io.StringIO(text), delimiter=delimiter, skipinitialspace=True))
         except csv.Error:
             continue
-        records = [[str(cell).strip().lstrip("\ufeff") for cell in record] for record in records]
-        records = [record for record in records if any(cell for cell in record)]
-        for header_index, raw_header in enumerate(records[:40]):
-            if not raw_header or not any(raw_header):
-                continue
-            fields = [cell or f"Column_{i + 1}" for i, cell in enumerate(raw_header)]
-            # Make repeated/blank instrument column names safe for DictReader-like use.
-            seen: dict[str, int] = {}
-            unique_fields: list[str] = []
-            for i, field in enumerate(fields):
-                count = seen.get(field, 0) + 1
-                seen[field] = count
-                unique_fields.append(field if count == 1 else f"{field}_{count}")
-            data_records = records[header_index + 1:]
-            pair_rows = 0
-            numeric_cells = 0
-            single_numeric_rows = 0
-            for record in data_records:
-                values = [_parse_numeric_cell(record[i] if i < len(record) else "") for i in range(len(fields))]
-                count = sum(value is not None for value in values)
-                numeric_cells += count
-                if count >= 2:
-                    pair_rows += 1
-                elif count == 1:
-                    single_numeric_rows += 1
-            if len(fields) > 1:
-                usable_rows = pair_rows
-            else:
-                usable_rows = single_numeric_rows
-            if usable_rows < 3:
-                continue
-            normalized_header = " ".join(_norm_header(field) for field in unique_fields)
-            header_quality = sum(
-                token in normalized_header
-                for token in ("time", "volume", "cv", "retention", "sample", "index", "uv", "signal", "absorbance", "detector", "response", "concentration")
-            )
-            score = (usable_rows, numeric_cells, header_quality, header_index)
-            data: list[dict[str, str]] = []
-            for record in data_records:
-                data.append({field: record[i].strip() if i < len(record) else "" for i, field in enumerate(unique_fields)})
-            if best is None or score > best[0]:
-                best = (score, unique_fields, data)
-
-        # Headerless numeric exports are common in detector-only files. Preserve
-        # the samples and synthesize column names if the first record is numeric.
-        if records and all(_parse_numeric_cell(cell) is not None for cell in records[0]):
-            width = len(records[0])
-            fields = [f"Column_{i + 1}" for i in range(width)]
-            data = [{field: record[i].strip() if i < len(record) else "" for i, field in enumerate(fields)} for record in records]
-            usable = sum(sum(_parse_numeric_cell(row[field]) is not None for field in fields) >= min(2, width) for row in data)
-            if usable >= 3:
-                score = (usable, usable * width, 0, -1)
-                if best is None or score > best[0]:
-                    best = (score, fields, data)
+        parsed = _best_numeric_table(records)
+        if parsed is not None and (best is None or parsed[0] > best[0]):
+            best = parsed
 
     if best is None:
         raise ValueError(
@@ -359,6 +309,75 @@ def _read_numeric_rows_text(text: str) -> tuple[list[str], list[dict[str, str]]]
     if len(rows) < 3:
         raise ValueError("Chromatogram CSV must contain at least three data rows.")
     return fields, rows
+
+
+def _best_numeric_table(raw_records: list[list[Any]]) -> tuple[
+    tuple[int, int, int, int], list[str], list[dict[str, str]]
+] | None:
+    """Choose the same numeric table without reparsing every cell for each header.
+
+    Instrument exports can put dozens of metadata rows above the header. The
+    old search parsed every data cell again for each of those 40 candidates,
+    which made a large Excel attachment appear to hang inside JMP.
+    """
+    records = [[str(cell).strip().lstrip("\ufeff") for cell in record] for record in raw_records]
+    records = [record for record in records if any(cell for cell in record)]
+    if not records:
+        return None
+    numeric_prefixes: list[list[int]] = []
+    for record in records:
+        prefix = [0]
+        for cell in record:
+            prefix.append(prefix[-1] + int(_parse_numeric_cell(cell) is not None))
+        numeric_prefixes.append(prefix)
+    best: tuple[tuple[int, int, int, int], list[str], list[dict[str, str]]] | None = None
+    for header_index, raw_header in enumerate(records[:40]):
+        fields = [cell or f"Column_{i + 1}" for i, cell in enumerate(raw_header)]
+        seen: dict[str, int] = {}
+        unique_fields: list[str] = []
+        for field in fields:
+            count = seen.get(field, 0) + 1
+            seen[field] = count
+            unique_fields.append(field if count == 1 else f"{field}_{count}")
+        width = len(fields)
+        pair_rows = numeric_cells = single_numeric_rows = 0
+        for prefix in numeric_prefixes[header_index + 1:]:
+            count = prefix[min(width, len(prefix) - 1)]
+            numeric_cells += count
+            pair_rows += count >= 2
+            single_numeric_rows += count == 1
+        usable_rows = pair_rows if width > 1 else single_numeric_rows
+        if usable_rows < 3:
+            continue
+        normalized_header = " ".join(_norm_header(field) for field in unique_fields)
+        header_quality = sum(
+            token in normalized_header for token in
+            ("time", "volume", "cv", "retention", "sample", "index", "uv", "signal",
+             "absorbance", "detector", "response", "concentration")
+        )
+        score = (usable_rows, numeric_cells, header_quality, header_index)
+        if best is None or score > best[0]:
+            data = [
+                {field: record[i] if i < len(record) else "" for i, field in enumerate(unique_fields)}
+                for record in records[header_index + 1:]
+            ]
+            best = (score, unique_fields, data)
+
+    # Headerless numeric exports keep all samples, including the first row.
+    if all(_parse_numeric_cell(cell) is not None for cell in records[0]):
+        width = len(records[0])
+        usable = sum(prefix[min(width, len(prefix) - 1)] >= min(2, width)
+                     for prefix in numeric_prefixes)
+        if usable >= 3:
+            score = (usable, usable * width, 0, -1)
+            if best is None or score > best[0]:
+                fields = [f"Column_{i + 1}" for i in range(width)]
+                data = [
+                    {field: record[i] if i < len(record) else "" for i, field in enumerate(fields)}
+                    for record in records
+                ]
+                best = (score, fields, data)
+    return best
 
 
 def _column_numeric_count(rows: list[dict[str, str]], field: str) -> int:

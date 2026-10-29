@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+import openpyxl
 from openpyxl import Workbook
 
 from tdm_jmp import _validate_jsl, build_jsl
@@ -31,6 +32,49 @@ def _write_uv(path: Path, x, uv, x_header: str):
 
 
 class AlignmentPreviewTests(unittest.TestCase):
+    def test_excel_attach_reads_selected_sheet_once_and_saves_run_path(self):
+        shared = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        shared["numerics"].update(time_steps=50, axial_positions=6)
+        lsq_rows = [default_batch_row(i) for i in range(1, 11)]
+        batch_rows = [default_batch_row(i) for i in range(1, 31)]
+        lsq_rows[0].update(
+            Run_Name="Excel reference", Load_CV=0.4, PLW_Count=0,
+            Elution_Count=1, Elution1_CV=0.6, Time_Steps=50,
+            Axial_Positions=6, LSQ_Model_Source=LSQ_MODEL_SOURCE_INDEPENDENT,
+            LSQ_Sheet="Measured", LSQ_X_Column="CV",
+            LSQ_Signal_Column="UV 280 [mAU]",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "Notes"
+            workbook.active.append(["This sheet has no chromatogram"])
+            measured = workbook.create_sheet("Measured")
+            measured.append(["Instrument metadata"])
+            measured.append(["CV", "UV 280 [mAU]"])
+            for index in range(301):
+                measured.append([index / 300, float(index)])
+            workbook.save(source)
+            status: list[str] = []
+            ui = {"tdm_ui_action": "ATTACH_LSQ_CSV", "tdm_ui_lsq_target_run": 1,
+                  "tdm_ui_lsq_csv_path": str(source)}
+            with patch.dict(tdm_bridge.__dict__, ui), \
+                 patch.object(tdm_bridge, "build_shared_config_from_jmp", return_value=shared), \
+                 patch.object(tdm_bridge, "_effective_run", return_value=shared), \
+                 patch.object(tdm_bridge, "load_lsq_rows", return_value=lsq_rows), \
+                 patch.object(tdm_bridge, "load_batch_rows", return_value=batch_rows), \
+                 patch.object(tdm_bridge, "BATCH_COUNT_FILE", root / "batch_count.txt"), \
+                 patch.object(tdm_bridge, "save_config"), \
+                 patch.object(tdm_bridge, "_save_lsq_profile_csv_path"), \
+                 patch.object(tdm_bridge, "_write_status", side_effect=status.append), \
+                 patch.object(openpyxl, "load_workbook", wraps=openpyxl.load_workbook) as loads:
+                self.assertEqual(tdm_bridge.main(), 0)
+            self.assertEqual(loads.call_count, 1)
+            self.assertEqual(lsq_rows[0]["LSQ_Chromatogram_CSV"], str(source.resolve()))
+            self.assertIn("points: 301", status[-1])
+            self.assertIn("Measured CV aligned directly", status[-1])
+
     def test_lsq_chromatogram_heading_names_the_selected_model_run(self):
         self.assertEqual(lsq._lsq_display_label({
             "run_number": 5, "run_name": "LSQ Run 5",

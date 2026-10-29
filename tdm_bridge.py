@@ -862,7 +862,7 @@ def main() -> int:
         save_config(shared, CONFIG_PATH)
 
         if action == "ATTACH_LSQ_CSV":
-            from tdm_least_squares import attach_chromatogram_csv, load_chromatogram_reference
+            from tdm_least_squares import load_chromatogram_reference
             from tdm_minimal_model import _build_program
             import numpy as np
             source = _lsq_profile_csv_path(run_number, _text("tdm_ui_lsq_csv_path"))
@@ -870,13 +870,26 @@ def main() -> int:
                 raise ValueError(f"Enter or choose a chromatogram CSV for LSQ profile Run {run_number}.")
             rows = load_lsq_rows()
             options = _lsq_reference_column_options(rows[run_number - 1])
-            info = attach_chromatogram_csv(source, require_uv=True, **options)
             profile_config, model_run = _lsq_model_run_config(
                 shared_raw, run_number, rows[run_number - 1], load_batch_rows())
             errors = validate_config(profile_config, strict=True)
             if errors:
                 raise ValueError(f"{model_run['model_run_label']} must be complete before attaching to LSQ Run {run_number}:\n- " + "\n- ".join(errors))
-            reference = load_chromatogram_reference(info["source_path"], profile_config, require_uv=True, **options)
+            _write_status(f"Reading chromatogram for LSQ Run {run_number}: {source}")
+            reference = load_chromatogram_reference(source, profile_config, require_uv=True, **options)
+            # The loaded reference already validates the UV channel, worksheet,
+            # weights, conductivity, axis and units. Do not reopen a potentially
+            # large Excel workbook just to inspect the same points a second time.
+            info = {
+                "source_path": reference.source_path,
+                "x_column": reference.x_column,
+                "signal_column": reference.signal_column,
+                "x_unit": reference.x_unit,
+                "x_origin": str(options["x_origin"]).strip().upper(),
+                "rows": len(reference.cv),
+                "conductivity_column": reference.conductivity_column,
+                "x_axis_assumption": reference.x_axis_assumption,
+            }
             program = _build_program(profile_config, np.zeros(max(1, len(active_components(profile_config)))))
             cv_min, cv_max = float(np.min(reference.cv)), float(np.max(reference.cv))
             if cv_min < -1e-9 or cv_max > program.total_CV + 1e-9:

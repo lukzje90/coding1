@@ -1,4 +1,12 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25t)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25u)
+
+FASTER EXCEL ATTACHMENT (R25u)
+Attaching a chromatogram now reads its Excel workbook once. Column detection
+parses each cell once, even when instrument metadata appears above the table.
+The interface shows a reading message while JMP validates the file. A workbook
+with many worksheets or a large number of populated cells can still take time
+to read; selecting the intended worksheet in the LSQ run avoids scanning the
+other sheets.
 
 SAVED PREDICTIONS AND LSQ FITS (R25t)
 The extracted package contains Predictions and LSQ folders. Each normal
