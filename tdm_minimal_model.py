@@ -2194,6 +2194,64 @@ def _impurity_profile_svg(config: dict[str, Any], result: dict[str, Any]) -> str
     )
 
 
+def _predicted_fraction_analysis(result: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Integrate detector species mass over successive one-CV collections.
+
+    CV is collected volume divided by column volume, so the common volume
+    factor cancels in percentages. Interpolated interval endpoints are needed
+    when the simulation time grid does not land on integer CV boundaries.
+    """
+    names = [str(name) for name in result["simulation"]["component_names"]]
+    trace = result["trace"]
+    cv = np.asarray(trace["CV"], dtype=float)
+    concentrations = np.maximum(np.asarray(trace["component_g_L"], dtype=float), 0.0)
+    if cv.ndim != 1 or concentrations.shape != (len(cv), len(names)):
+        raise ValueError("Fraction analysis does not match detector species traces.")
+    if len(cv) < 2 or not np.all(np.isfinite(cv)) or not np.all(np.diff(cv) > 0):
+        raise ValueError("Fraction analysis requires an increasing detector CV axis.")
+    end_cv = float(result["simulation"]["program"].total_CV)
+    if not np.isclose(cv[0], 0.0, atol=1e-8) or not np.isclose(cv[-1], end_cv, rtol=1e-8, atol=1e-8):
+        raise ValueError("Fraction analysis CV axis does not span the programmed run.")
+    rows: list[dict[str, Any]] = []
+    start = 0.0
+    while start < end_cv - 1e-10:
+        end = min(float(len(rows) + 1), end_cv)
+        points = np.r_[start, cv[(cv > start) & (cv < end)], end]
+        samples = np.column_stack([np.interp(points, cv, concentrations[:, i])
+                                   for i in range(len(names))])
+        integrated = np.sum(0.5 * (samples[:-1] + samples[1:])
+                            * np.diff(points)[:, None], axis=0)
+        total = float(np.sum(integrated))
+        quantifiable = total / (end - start) > 1e-12
+        percentages = (100.0 * integrated / total).tolist() if quantifiable else [None] * len(names)
+        rows.append({"start_cv": start, "end_cv": end, "percentages": percentages,
+                     "quantifiable": quantifiable})
+        start = end
+    return names, rows
+
+
+def _predicted_fraction_analysis_html(
+    result: dict[str, Any],
+    analysis: tuple[list[str], list[dict[str, Any]]] | None = None,
+) -> str:
+    names, rows = analysis if analysis is not None else _predicted_fraction_analysis(result)
+    if len(names) < 2:
+        return ""
+    headings = "".join(f"<th>{html.escape(name)} %</th>" for name in names)
+    body = "".join(
+        "<tr><td>" + f'{row["start_cv"]:g}–{row["end_cv"]:g}' + "</td>"
+        + "".join(f"<td>{value:.4f}</td>" if value is not None else "<td>—</td>"
+                   for value in row["percentages"]) + "</tr>"
+        for row in rows
+    )
+    return ("<h3>Predicted fraction analysis by CV</h3>"
+            "<p>Each row is a one-CV collection (the last may be shorter). Percentages use "
+            "integrated detector species mass over that interval and sum to 100% where "
+            "protein is detected. A dash means no quantifiable protein.</p>"
+            f'<div class="scroll"><table><thead><tr><th>CV interval</th>{headings}'
+            f"</tr></thead><tbody>{body}</tbody></table></div>")
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:
@@ -2282,8 +2340,9 @@ def check_result_freshness(
         for key, filename in (("html", "latest_results.html"),
                               ("csv", "latest_results.csv"),
                               ("svg", "latest_results.svg"),
-                              ("impurity_svg", "latest_impurity_profile.svg")):
-            if key == "impurity_svg" and key not in manifest.get("output_sha256", {}):
+                              ("impurity_svg", "latest_impurity_profile.svg"),
+                              ("fraction_csv", "latest_fraction_analysis.csv")):
+            if key in {"impurity_svg", "fraction_csv"} and key not in manifest.get("output_sha256", {}):
                 continue  # A saved run with no impurities has no species chart.
             output_path = root / filename
             if not output_path.is_file() or _sha256_file(output_path) != manifest.get("output_sha256", {}).get(key):
@@ -2376,10 +2435,23 @@ def write_outputs(
     svg_path.write_text(svg, encoding="utf-8")
     impurity_svg = _impurity_profile_svg(config, result)
     impurity_svg_path = output_dir / "latest_impurity_profile.svg"
+    fraction_csv_path = output_dir / "latest_fraction_analysis.csv"
+    fraction_analysis = _predicted_fraction_analysis(result) if impurity_svg else None
+    fraction_table = _predicted_fraction_analysis_html(result, fraction_analysis) if impurity_svg else ""
     if impurity_svg:
         impurity_svg_path.write_text(impurity_svg, encoding="utf-8")
+        fraction_names, fraction_rows = fraction_analysis
+        with fraction_csv_path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["Run_Number", "Run_Name", "Start_CV", "End_CV", "Protein_Detected"]
+                            + [f"{name}_mass_percent" for name in fraction_names])
+            for row in fraction_rows:
+                writer.writerow([run_number, run_name, row["start_cv"], row["end_cv"],
+                                 int(row["quantifiable"])]
+                                + [value if value is not None else "" for value in row["percentages"]])
     else:
         impurity_svg_path.unlink(missing_ok=True)
+        fraction_csv_path.unlink(missing_ok=True)
     derived = html.escape(json.dumps(derived_input_summary(config), indent=2))
     diagnostics = html.escape(json.dumps(result["simulation"]["diagnostics"], indent=2))
     parameter_receipt = html.escape(json.dumps(result.get("parameter_receipt", {}), indent=2, ensure_ascii=False))
@@ -2484,7 +2556,7 @@ def write_outputs(
 &nbsp; <label><input type="checkbox" {'checked' if config['system']['show_conductivity'] else ''} onchange="document.querySelectorAll('[data-overlay=conductivity]').forEach(el=>el.style.display=this.checked?'':'none')"> Show conductivity</label>
 &nbsp; <label><input type="checkbox" {'checked' if config['system'].get('show_flow_rate', True) else ''} onchange="document.querySelectorAll('[data-overlay=flow-rate]').forEach(el=>el.style.display=this.checked?'':'none')"> Show flow rate</label></p>
 {svg}
-{('<h2>Predicted main protein and impurity chromatogram</h2><p>Detector concentrations across the full programmed run. Impurities use the left g/L axis; the main protein uses the right g/L axis so smaller impurity peaks remain visible. These lines are model predictions.</p>' + impurity_svg) if impurity_svg else ''}
+{('<h2>Predicted main protein and impurity chromatogram</h2><p>Detector concentrations across the full programmed run. Impurities use the left g/L axis; the main protein uses the right g/L axis so smaller impurity peaks remain visible. These lines are model predictions.</p>' + impurity_svg + fraction_table + '<p>Fraction table CSV: <code>latest_fraction_analysis.csv</code></p>') if impurity_svg else ''}
 <p>{html.escape(' '.join(result['simulation']['diagnostics'].get('warnings', [])))}</p>
 <h2>Resolved buffer chemistry</h2>
 <p>Buffer references and %B stages use these current definitions. Direct endpoint stages use the recipe table below. HIC binding uses salt molarity; native CPA ion exchange uses ionic strength. The conversion factor is {config['conversion']['conductivity_to_salt_M_per_mS_cm']:g} M/(mS/cm). SALT_FACTOR_ESTIMATE marks an estimated conductivity overlay.</p>
@@ -2529,11 +2601,13 @@ def write_outputs(
         "output_sha256": {
             "html": _sha256_file(html_path), "csv": _sha256_file(csv_path), "svg": _sha256_file(svg_path),
             **({"impurity_svg": _sha256_file(impurity_svg_path)} if impurity_svg else {}),
+            **({"fraction_csv": _sha256_file(fraction_csv_path)} if impurity_svg else {}),
         },
     }
     _write_manifest(manifest_path, manifest)
     return {"csv": str(csv_path), "html": str(html_path), "svg": str(svg_path),
             **({"impurity_svg": str(impurity_svg_path)} if impurity_svg else {}),
+            **({"fraction_csv": str(fraction_csv_path)} if impurity_svg else {}),
             "manifest": str(manifest_path)}
 
 

@@ -1,4 +1,13 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25w)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25x)
+
+PREDICTED FRACTION ANALYSIS BY CV (R25x)
+The predicted main-protein and impurity profile now includes a fraction table
+for every successive 1-CV interval, including a shorter final interval.
+Percentages come from the integrated detector concentrations for each species
+and sum to 100% where protein is present. Empty intervals show dashes rather
+than artificial zero-percent compositions. The normal prediction also saves
+latest_fraction_analysis.csv beside the chromatogram, with each run's own
+names and values. The same table appears in the LSQ preview and fit report.
 
 CPA BUFFER IONS AND ALIGNMENT DISPLAY (R25w)
 For EDM/TDM–CPA ion exchange, each run now requires Buffer A and Buffer B ion

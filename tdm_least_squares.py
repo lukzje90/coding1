@@ -54,7 +54,7 @@ from tdm_minimal_io import (
     validate_config,
     is_hic,
 )
-from tdm_minimal_model import simulate, _build_program, _svg_plot, _stage_receipt, _impurity_profile_svg
+from tdm_minimal_model import simulate, _build_program, _svg_plot, _stage_receipt, _impurity_profile_svg, _predicted_fraction_analysis_html
 
 PROJECT_DIR = Path(__file__).resolve().parent
 ATTACHED_CHROMATOGRAM_CSV = PROJECT_DIR / "least_squares_reference_chromatogram.csv"
@@ -1381,6 +1381,7 @@ def preview_lsq_alignment(
             + _chromatogram_fit_svg(config, info)
             + ("<h3>Predicted main protein and impurity chromatogram before refinement</h3>"
                + _impurity_profile_svg(config, info["result"])
+               + _predicted_fraction_analysis_html(info["result"])
                if len(info["result"]["simulation"]["component_names"]) > 1 else "")
             + (_conductivity_fit_svg(info) if info["conductivity"] else "")
             + (f'<h3 id="mass-preview-run-{html.escape(str(run_number), quote=True)}">Fraction mass% at midpoints</h3>'
@@ -1412,6 +1413,8 @@ def preview_lsq_alignment(
         '<!doctype html><meta charset="utf-8"><title>Pre-refinement alignment</title>'
         '<style>body{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}'
         'svg{display:block;width:100%;height:auto}h2{margin-top:2rem}'
+        'table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}'
+        'td:first-child,th:first-child{text-align:left}.scroll{overflow-x:auto}'
         '[hidden]{display:none!important}select{font-size:1rem;padding:.4rem;margin:.4rem}</style>'
         '<h1>Measured versus model alignment before refinement</h1>'
         '<p>These are the current model parameters and selected saved model-run recipes. '
@@ -2427,7 +2430,7 @@ def run_least_squares_refinement(
     )
     fit_report_path.write_text(f"""<!doctype html>
 <meta charset="utf-8"><title>Least-squares refinement</title>
-<style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}</style>
+<style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}.scroll{{overflow-x:auto}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}</style>
 <h1>Least-squares refinement</h1>
 <p><b>Mode:</b> {html.escape(mode)}</p>
 <p><b>Reference chromatogram:</b> {html.escape(str(Path(chromatogram_csv).resolve()))}<br>
@@ -2444,7 +2447,7 @@ Converged flag: {bool(opt.success)}; decision: {acceptance['status']}; applied t
 <h2>Measured and predicted chromatogram</h2>
 <p>The predicted UV and process overlays span the full programmed run. The measured line uses a per-pixel median and a short display-only median filter to prevent dark overdraw; every imported sample still contributes unchanged to the chromatogram objective.</p>
 {chromatogram_plot}
-{('<h2>Predicted main protein and impurity chromatogram after refinement</h2><p>Final detector concentrations in g/L over the complete programmed run. Impurities use the left axis; the main protein uses the right axis. These are model predictions.</p>' + impurity_plot) if impurity_plot else ''}
+{('<h2>Predicted main protein and impurity chromatogram after refinement</h2><p>Final detector concentrations in g/L over the complete programmed run. Impurities use the left axis; the main protein uses the right axis. These are model predictions.</p>' + impurity_plot + _predicted_fraction_analysis_html(final_info["result"])) if impurity_plot else ''}
 {fraction_uv_plot}
 {composition_plot}
 {_cpa_binding_html(binding_metrics)}
@@ -3174,7 +3177,7 @@ def run_global_least_squares_refinement(
             plot += ("<h4>Predicted main protein and impurity chromatogram after refinement</h4>"
                      "<p>Final detector concentrations in g/L. Impurities use the left axis; "
                      "the main protein uses the right axis. These are model predictions.</p>"
-                     + impurity_plot)
+                     + impurity_plot + _predicted_fraction_analysis_html(info["result"]))
         if info["conductivity"]:
             plot += _conductivity_fit_svg(info)
         refs = profile["composition_references"]
@@ -3247,7 +3250,7 @@ def run_global_least_squares_refinement(
     FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
     FIT_REPORT_HTML.write_text(f"""<!doctype html>
 <meta charset="utf-8"><title>Global least-squares refinement</title>
-<style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
+<style>body{{font-family:Arial,sans-serif;margin:2rem;max-width:1100px}}svg{{display:block;width:100%;height:auto}}table{{border-collapse:collapse}}td,th{{border:1px solid #bbb;padding:.35rem .55rem;text-align:right}}td:first-child,th:first-child{{text-align:left}}.scroll{{overflow-x:auto}}code,pre{{background:#f4f4f4;padding:.2rem .35rem}}details{{margin:.6rem 0}}</style>
 <h1>Global least-squares refinement</h1>
 <p><b>Elapsed fit time:</b> {fit_elapsed_hms} ({fit_elapsed_seconds:.1f} seconds). Measured from loading the selected reference profiles through fitted output preparation.</p>
 <p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}</p>

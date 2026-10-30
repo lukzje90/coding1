@@ -135,7 +135,7 @@ def _archive_prediction(paths: dict[str, str], context: dict[str, Any]) -> Path:
         int(receipt["run_number"]), str(receipt["run_name"]), generated)
     folder.mkdir(parents=True, exist_ok=False)
     try:
-        for key in ("html", "csv", "svg", "impurity_svg", "manifest"):
+        for key in ("html", "csv", "svg", "impurity_svg", "fraction_csv", "manifest"):
             if key in paths:
                 source = Path(paths[key])
                 shutil.copy2(source, folder / source.name)

@@ -35,7 +35,7 @@ class ResultArchiveTests(unittest.TestCase):
                 self.assertTrue(folder.name.endswith("_GMT") or "_GMT_" in folder.name or "_BST_" in folder.name)
                 valid, message = check_result_freshness(cfg, context, folder)
                 self.assertTrue(valid, message)
-                for key in ("html", "csv", "svg", "manifest", "impurity_svg"):
+                for key in ("html", "csv", "svg", "manifest", "impurity_svg", "fraction_csv"):
                     if key in paths:
                         self.assertEqual((folder / Path(paths[key]).name).read_bytes(),
                                          Path(paths[key]).read_bytes())
