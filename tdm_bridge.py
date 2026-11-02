@@ -81,6 +81,7 @@ from tdm_minimal_io import (
     LSQ_RUNS_CSV,
     BATCH_SUMMARY_CSV,
     CONFIG_PATH,
+    CPA_AREA_M_INV_PER_M2_ML_SOLID,
     _get_path,
     _set_path,
     LABEL_TO_MODEL,
@@ -440,6 +441,13 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
         name = _text(p + "name")
         if name:
             row["name"] = name
+        # A new JMP field is m²/mL stationary solid. An older open JMP window
+        # can still submit its historical m⁻¹ field without double conversion.
+        if p + "As_m2_mL_solid" in globals():
+            area_ui = _num(p + "As_m2_mL_solid")
+            area_m_inv = None if area_ui is None else area_ui * CPA_AREA_M_INV_PER_M2_ML_SOLID
+        else:
+            area_m_inv = _num(p + "As_m_inv")
         row.update(
             mass_percent=_num(p + "mass_percent"),
             uv_response_factor_mAU_L_g=_num(p + "uv_response_factor_mAU_L_g") if i > 1 else row.get("uv_response_factor_mAU_L_g"),
@@ -451,7 +459,7 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
             b_L_g=_num(p + "b_L_g"),
             salt_sensitivity_per_M=_num(p + "salt_sensitivity_per_M"),
             diameter_nm=_num(p + "diameter_nm"),
-            As_m_inv=_num(p + "As_m_inv"),
+            As_m_inv=area_m_inv,
             Z_ref=_num(p + "Z_ref"),
             delta_ref=_num(p + "delta_ref"),
             kkin_star_s=_num(p + "kkin_star_s"),

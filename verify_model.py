@@ -695,7 +695,7 @@ def main() -> None:
                      f'tdm_ui_c{i}_D_app_mm2_s': .06+i/1000,
                      f'tdm_ui_c{i}_qmax_g_L': qmax_g_L,
                      f'tdm_ui_c{i}_b_L_g': b_l_g, f'tdm_ui_c{i}_diameter_nm': 10+i,
-                     f'tdm_ui_c{i}_As_m_inv': 2e8+i, f'tdm_ui_c{i}_Z_ref': 20+i,
+                     f'tdm_ui_c{i}_As_m2_mL_solid': 200+i, f'tdm_ui_c{i}_Z_ref': 20+i,
                      f'tdm_ui_c{i}_delta_ref': .01+i/1000, f'tdm_ui_c{i}_kkin_star_s': 1e5+i,
                      f'tdm_ui_c{i}_pH_ref': 6, f'tdm_ui_c{i}_Z1_per_pH': .1,
                      f'tdm_ui_c{i}_Z2_per_pH2': .01, f'tdm_ui_c{i}_Z3_per_pH3': .001,
@@ -714,6 +714,7 @@ def main() -> None:
     assert_close(mapped['components'][0]['qmax_g_L'], 2.1/.0041)
     assert_close(mapped['components'][0]['H'],2.1); assert_close(mapped['components'][1]['b_L_g'],.0042)
     assert_close(mapped['components'][0]['salt_sensitivity_per_M'],2.75)
+    assert_close(mapped['components'][0]['As_m_inv'],201e6)
     clean=sanitize_config_for_selected_model(mapped)
     assert clean['components'][0]['D_app_mm2_s'] is None and clean['components'][0]['diameter_nm'] is None
 

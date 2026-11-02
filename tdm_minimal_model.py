@@ -2572,6 +2572,7 @@ def write_outputs(
 <h2>Mass balance</h2>
 <table><thead><tr><th>Component</th><th>Input g</th><th>Outlet g</th><th>Column inventory g</th><th>Closure error</th></tr></thead><tbody>{mb_rows}</tbody></table>
 <h2>Inputs actually used by this run</h2><pre>{parameter_receipt}</pre>
+{('<p>CPA accessible area A_s,i is displayed in JMP as m²/mL stationary solid. The JSON receipt stores the same value in m⁻¹ (multiply the JMP number by 10⁶).</p>' if uses_cpa(config['model']) else '')}
 <h2>Derived values</h2><pre>{derived}</pre>
 <h2>Solver diagnostics</h2><pre>{diagnostics}</pre>
 <p>Point data: <code>{html.escape(csv_path.name)}</code></p>

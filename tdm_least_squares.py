@@ -38,6 +38,7 @@ from scipy.interpolate import PchipInterpolator
 from scipy.optimize import least_squares
 
 from tdm_minimal_io import (
+    CPA_AREA_M_INV_PER_M2_ML_SOLID,
     CONFIG_PATH,
     MODEL_EDM_CPA,
     MODEL_EDM_LANGMUIR,
@@ -824,7 +825,7 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
         "b_L_g": "Competitive Langmuir b_i [L/g]",
         "salt_sensitivity_per_M": "HIC salt sensitivity k_s,i [M⁻¹]",
         "diameter_nm": "Protein diameter [nm]",
-        "As_m_inv": "Accessible adsorber surface A_s,i [m⁻¹]",
+        "As_m_inv": "Accessible area A_s,i [m²/mL stationary solid]",
         "Z_ref": "Protein charge Z_i [-]",
         "delta_ref": "CPA interaction parameter Δ_i [-]",
         "kkin_star_s": "CPA kinetic parameter k*kin,i [s⁻¹]",
@@ -912,7 +913,15 @@ def _report_parameter_label(config: dict[str, Any], path: str, field_label: str 
         return field_label or path
     role = "Target protein" if index == 0 else f"Impurity {index}"
     name = str(species[index].get("name") or role)
+    if field_label is None and match.group(2) == "As_m_inv":
+        field_label = "Accessible area A_s,i [m²/mL stationary solid]"
     return f"{role} ({name}) — {field_label or match.group(2)}"
+
+
+def _display_fit_value(path: str, stored_value: float) -> float:
+    """Use the JMP area unit in human-facing reports, retaining m⁻¹ in JSON."""
+    return (stored_value / CPA_AREA_M_INV_PER_M2_ML_SOLID
+            if path.endswith(".As_m_inv") else stored_value)
 
 
 def _limit_fit_specs(config: dict[str, Any], specs: list[FitParameter]) -> list[FitParameter]:
@@ -1984,6 +1993,7 @@ def _write_apply_jsl(config: dict[str, Any], specs: list[FitParameter]) -> None:
         else:
             variable = global_mapping[spec.path]
         value = float(_get_path(config, spec.path))
+        value = _display_fit_value(spec.path, value)
         lines.append(f"{variable} << Set({value:.17g});")
     lines.append("UpdateUI();")
     FIT_APPLY_JSL.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -2328,9 +2338,10 @@ def run_least_squares_refinement(
                   "Fit_Range_Percent", "Allowed_Min", "Allowed_Max", "At_Lower_Bound", "At_Upper_Bound"]
         writer = csv.DictWriter(fh, fieldnames=fields); writer.writeheader()
         for spec, xfit in zip(specs, opt.x):
-            initial_value = float(_get_path(config, spec.path))
-            fitted_value = float(_get_path(fitted, spec.path))
-            allowed_min, allowed_max = _physical_fit_bounds(spec)
+            initial_value = _display_fit_value(spec.path, float(_get_path(config, spec.path)))
+            fitted_value = _display_fit_value(spec.path, float(_get_path(fitted, spec.path)))
+            allowed_min, allowed_max = (_display_fit_value(spec.path, bound)
+                                        for bound in _physical_fit_bounds(spec))
             writer.writerow({
                 "Parameter_Path": spec.path,
                 "Parameter": spec.label,
@@ -2389,9 +2400,9 @@ def run_least_squares_refinement(
     fit_settings_path.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
 
     parameter_rows = "".join(
-        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(config, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td>"
+        f"<tr><td>{html.escape(spec.label)}</td><td>{_display_fit_value(spec.path, float(_get_path(config, spec.path))):.7g}</td><td>{_display_fit_value(spec.path, float(_get_path(fitted, spec.path))):.7g}</td>"
         f"<td>{html.escape(str(config['least_squares'].get('fit_range_percent', {}).get(spec.path, 'Default')))}</td>"
-        f"<td>{_physical_fit_bounds(spec)[0]:.7g}</td><td>{_physical_fit_bounds(spec)[1]:.7g}</td></tr>"
+        f"<td>{_display_fit_value(spec.path, _physical_fit_bounds(spec)[0]):.7g}</td><td>{_display_fit_value(spec.path, _physical_fit_bounds(spec)[1]):.7g}</td></tr>"
         for spec in specs
     )
     comp_note = (
@@ -2923,16 +2934,18 @@ def run_global_least_squares_refinement(
             allowed_min, allowed_max = _physical_fit_bounds(spec) if spec else ("", "")
             writer.writerow({
                 "Parameter_Path": path, "Parameter": spec.label if spec else _report_parameter_label(seed, path),
-                "Initial_Value": initial_value, "Fitted_Value": fitted_value,
+                "Initial_Value": _display_fit_value(path, initial_value),
+                "Fitted_Value": _display_fit_value(path, fitted_value),
                 "Transform": spec.transform if spec else "", "Fit_State": fit_state,
                 "Fit_Range_Percent": first["least_squares"].get("fit_range_percent", {}).get(path, "") if spec else "",
-                "Allowed_Min": allowed_min, "Allowed_Max": allowed_max,
+                "Allowed_Min": _display_fit_value(path, allowed_min) if spec else "",
+                "Allowed_Max": _display_fit_value(path, allowed_max) if spec else "",
                 "At_Lower_Bound": bool(spec and xfit is not None and abs(float(opt.x[specs.index(spec)]) - spec.lower) <= 1e-6 * max(1.0, abs(spec.lower))),
                 "At_Upper_Bound": bool(spec and xfit is not None and abs(float(opt.x[specs.index(spec)]) - spec.upper) <= 1e-6 * max(1.0, abs(spec.upper))),
             })
 
-    # Only unlocked parameters are listed as improvements; report the exact
-    # values in original physical units, even when the fit variable was log10.
+    # Only unlocked parameters are listed as improvements. Reports display
+    # CPA area in the JMP unit; the fitted JSON retains its internal m⁻¹ value.
     with FIT_IMPROVED_CSV.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=["Parameter_Path", "Parameter", "Initial_Value", "Improved_Value", "Change_percent",
                                                 "Fit_Range_Percent", "Allowed_Min", "Allowed_Max", "At_Lower_Bound", "At_Upper_Bound"])
@@ -2944,14 +2957,16 @@ def run_global_least_squares_refinement(
             diff_percent = 100.0 * (fitted_val - initial_val) / abs(initial_val) if initial_val != 0 else math.nan
             xfit_val = math.log10(fitted_val) if spec.transform == "LOG10" else fitted_val
             row = {"Parameter_Path": spec.path, "Parameter": spec.label,
-                   "Initial_Value": initial_val, "Improved_Value": fitted_val,
+                   "Initial_Value": _display_fit_value(spec.path, initial_val),
+                   "Improved_Value": _display_fit_value(spec.path, fitted_val),
                    "Change_percent": diff_percent,
                    "Fit_Range_Percent": first["least_squares"].get("fit_range_percent", {}).get(spec.path, ""),
-                   "Allowed_Min": _physical_fit_bounds(spec)[0], "Allowed_Max": _physical_fit_bounds(spec)[1],
+                   "Allowed_Min": _display_fit_value(spec.path, _physical_fit_bounds(spec)[0]),
+                   "Allowed_Max": _display_fit_value(spec.path, _physical_fit_bounds(spec)[1]),
                    "At_Lower_Bound": abs(xfit_val - spec.lower) <= 1e-6 * max(1.0, abs(spec.lower)),
                    "At_Upper_Bound": abs(xfit_val - spec.upper) <= 1e-6 * max(1.0, abs(spec.upper))}
             writer.writerow(row)
-            text_rows.append(f"{spec.path} ({spec.label}): {initial_val:.8g} -> {fitted_val:.8g} ({diff_percent:+.5g}%)")
+            text_rows.append(f"{spec.path} ({spec.label}): {_display_fit_value(spec.path, initial_val):.8g} -> {_display_fit_value(spec.path, fitted_val):.8g} ({diff_percent:+.5g}%)")
         if not specs:
             text_rows.append("No parameters unlocked for refinement.")
         FIT_IMPROVED_TXT.write_text("\n".join(text_rows) + "\n", encoding="utf-8")
@@ -3124,9 +3139,9 @@ def run_global_least_squares_refinement(
         "objective_history_write_error": history_write_error,
     }
     parameter_rows = "".join(
-        f"<tr><td>{html.escape(spec.label)}</td><td>{float(_get_path(seed, spec.path)):.7g}</td><td>{float(_get_path(fitted, spec.path)):.7g}</td>"
+        f"<tr><td>{html.escape(spec.label)}</td><td>{_display_fit_value(spec.path, float(_get_path(seed, spec.path))):.7g}</td><td>{_display_fit_value(spec.path, float(_get_path(fitted, spec.path))):.7g}</td>"
         f"<td>{html.escape(str(first['least_squares'].get('fit_range_percent', {}).get(spec.path, 'Default')))}</td>"
-        f"<td>{_physical_fit_bounds(spec)[0]:.7g}</td><td>{_physical_fit_bounds(spec)[1]:.7g}</td></tr>"
+        f"<td>{_display_fit_value(spec.path, _physical_fit_bounds(spec)[0]):.7g}</td><td>{_display_fit_value(spec.path, _physical_fit_bounds(spec)[1]):.7g}</td></tr>"
         for spec in specs
     ) or '<tr><td colspan="4">No parameters were unlocked; model values were evaluated without optimization.</td></tr>'
     profile_rows = "".join(

@@ -40,6 +40,7 @@ from tdm_minimal_io import (
     MODEL_TDM_LANGMUIR,
     MODEL_TDM_WANG,
     RESULT_GUARD_BUILD,
+    CPA_AREA_M_INV_PER_M2_ML_SOLID,
     normalize_config,
     is_hic,
     STATUS_PATH,
@@ -76,6 +77,14 @@ def _num(value: Any) -> str:
         return format(float(value), ".17g")
     except Exception:
         return "."
+
+
+def _cpa_area_ui_value(stored_m_inv: Any) -> float | None:
+    """Display legacy and current stored CPA areas as m²/mL stationary solid."""
+    try:
+        return None if stored_m_inv is None else float(stored_m_inv) / CPA_AREA_M_INV_PER_M2_ML_SOLID
+    except (TypeError, ValueError):
+        return None
 
 
 class _FitControlRegistry(list[tuple[str, str]]):
@@ -172,7 +181,7 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
             ),
             {p}CPA = V List Box(
                 {_nrow("Protein diameter [nm] (a_i = diameter/2)", f"{p}Diameter", row.get("diameter_nm"), fit_path=f"components[{i-1}].diameter_nm", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
-                {_nrow("Accessible adsorber surface A_s,i [m⁻¹]", f"{p}As", row.get("As_m_inv"), fit_path=f"components[{i-1}].As_m_inv", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {_nrow("Accessible area A_s,i [m²/mL solid]", f"{p}As", _cpa_area_ui_value(row.get("As_m_inv")), fit_path=f"components[{i-1}].As_m_inv", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {p}ZrefRow = {_nrow("Protein charge Z_i [-]", f"{p}Zref", row.get("Z_ref"), fit_path=f"components[{i-1}].Z_ref", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {_nrow("CPA interaction parameter Δ_i [-]", f"{p}Delta", row.get("delta_ref"), fit_path=f"components[{i-1}].delta_ref", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {p}KkinRow = {_nrow("CPA kinetic parameter k*kin,i [s⁻¹]", f"{p}Kkin", row.get("kkin_star_s"), fit_path=f"components[{i-1}].kkin_star_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
@@ -199,7 +208,7 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
         (f"{p}B << Get", f"tdm_ui_c{i}_b_L_g"),
         (f"{p}SaltSensitivity << Get", f"tdm_ui_c{i}_salt_sensitivity_per_M"),
         (f"{p}Diameter << Get", f"tdm_ui_c{i}_diameter_nm"),
-        (f"{p}As << Get", f"tdm_ui_c{i}_As_m_inv"),
+        (f"{p}As << Get", f"tdm_ui_c{i}_As_m2_mL_solid"),
         (f"{p}Zref << Get", f"tdm_ui_c{i}_Z_ref"),
         (f"{p}Delta << Get", f"tdm_ui_c{i}_delta_ref"),
         (f"{p}Kkin << Get", f"tdm_ui_c{i}_kkin_star_s"),

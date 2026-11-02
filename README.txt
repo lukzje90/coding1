@@ -1,4 +1,13 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25x)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25y)
+
+CPA ACCESSIBLE AREA IN m²/mL STATIONARY SOLID (R25y)
+The CPA Accessible area A_s,i boxes now show and accept m²/mL of stationary
+solid. For example, enter 200 to represent 200,000,000 m⁻¹. Existing saved
+tdm_inputs.json values keep their m⁻¹ storage and open in JMP converted; the
+solver equations and LSQ bounds still use m⁻¹ internally. LSQ fit tables,
+parameter lists, and the apply-to-JMP script display m²/mL stationary solid.
+The internal JSON field remains As_m_inv for compatibility. Do not enter a
+value reported per mL of whole packed bed without converting its volume basis.
 
 PREDICTED FRACTION ANALYSIS BY CV (R25x)
 The predicted main-protein and impurity profile now includes a fraction table

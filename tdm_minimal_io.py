@@ -16,7 +16,8 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-10-30-R25X-FRACTION-ANALYSIS"
+RESULT_GUARD_BUILD = "2026-11-02-R25Y-CPA-AREA-UNITS"
+CPA_AREA_M_INV_PER_M2_ML_SOLID = 1_000_000.0
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
 LSQ_MASS_CSV = PROJECT_DIR / "tdm_lsq_fraction_mass.csv"
@@ -1016,7 +1017,8 @@ def requirement_text(model: str, pH_span: float = 0.0, selected_impurities: int 
                   "• HIC salt sensitivity k_s,i [M⁻¹]",
                   "H_i = qmax,i × b_i is calculated automatically; b_i is multiplied by exp(k_s,i × salt concentration) in the HIC isotherm."]
     else:
-        lines += ["• Diameter [nm] (a_i = diameter/2)", "• A_s,i [m⁻¹]", "• Z_i [-]", "• Δ_i [-]"]
+        lines += ["• Diameter [nm] (a_i = diameter/2)",
+                  "• Accessible area A_s,i [m²/mL stationary solid] in JMP", "• Z_i [-]", "• Δ_i [-]"]
         if model == MODEL_TDM_CPA:
             lines += ["• k*kin,i [s⁻¹]"]
         if uses_cpa(model) and pH_span > 1e-9:
@@ -1136,7 +1138,7 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
             _number(row.get("salt_sensitivity_per_M"), f"{name} HIC salt sensitivity k_s,i [M⁻¹]", errors, lower=(0.0 if is_hic(config) else -25.0), upper=25.0)
         else:
             _number(row.get("diameter_nm"), f"{name} diameter [nm]", errors, positive=True)
-            _number(row.get("As_m_inv"), f"{name} A_s,i [m⁻¹]", errors, positive=True)
+            _number(row.get("As_m_inv"), f"{name} A_s,i [m⁻¹ internal = 10⁶ × m²/mL stationary solid]", errors, positive=True)
             if is_hic(config):
                 _number(row.get("salt_sensitivity_per_M"), f"{name} HIC salt sensitivity k_s,i", errors, lower=0.0, upper=25.0)
             else:

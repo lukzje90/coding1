@@ -15,6 +15,7 @@ import numpy as np
 
 from tdm_jmp import _validate_jsl, build_jsl
 from tdm_minimal_io import (
+    CPA_AREA_M_INV_PER_M2_ML_SOLID,
     MODELS,
     MODEL_LABELS,
     MODEL_TDM_WANG,
@@ -70,7 +71,12 @@ def _set_jmp_globals(bridge, config: dict) -> None:
         values[f"tdm_ui_system_{field}"] = ("ON" if value else "OFF") if isinstance(value, bool) else value
     for index, component in enumerate(config["components"], start=1):
         for field in COMPONENT_FIELDS:
-            values[f"tdm_ui_c{index}_{field}"] = component.get(field)
+            if field == "As_m_inv":
+                raw = component.get(field)
+                values[f"tdm_ui_c{index}_As_m2_mL_solid"] = (
+                    None if raw is None else float(raw) / CPA_AREA_M_INV_PER_M2_ML_SOLID)
+            else:
+                values[f"tdm_ui_c{index}_{field}"] = component.get(field)
     for name, value in values.items():
         setattr(bridge, name, value)
 
@@ -86,6 +92,7 @@ def _check_generated_contract(config: dict) -> dict:
         "tdm_ui_system_salt_dispersion_mm2_s", "tdm_ui_system_buffer_dispersion_mL",
         "tdm_ui_c1_b_L_g", "tdm_ui_c2_b_L_g",
         "tdm_ui_c1_salt_sensitivity_per_M", "tdm_ui_c2_salt_sensitivity_per_M",
+        "tdm_ui_c1_As_m2_mL_solid", "tdm_ui_c2_As_m2_mL_solid",
     }
     missing = sorted(required - sent_names)
     if missing:
