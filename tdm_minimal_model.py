@@ -356,6 +356,10 @@ class CPAModel:
     def u_adsorber(self, comp: CPAComponent, pH: float, ionic_strength_mol_m3: float) -> float:
         kappa = self.debye_kappa(ionic_strength_mol_m3)
         psi_a = self.surface_potential_linear(self.sigma_adsorber(pH), kappa)
+        return self._u_adsorber_at_environment(comp, pH, kappa, psi_a)
+
+    def _u_adsorber_at_environment(self, comp: CPAComponent, pH: float,
+                                  kappa: float, psi_a: float) -> float:
         psi_p = self.surface_potential_linear(comp.sigma(pH), kappa)
         separation = max(0.15e-9, 0.02 * comp.radius_m)
         return self.system_scale * 4.0 * math.pi * self.eps * comp.radius_m * psi_a * psi_p * math.exp(-kappa * separation)
@@ -367,11 +371,18 @@ class CPAModel:
         return max(float(theta), 0.0), q_surface
 
     def available_surface(self, i: int, qv: np.ndarray) -> float:
+        return self._available_surface_at_state(i, self._surface_state(qv))
+
+    def _surface_state(self, qv: np.ndarray) -> tuple[float, float, float]:
         theta, q_surface = self.surface_coverages(qv)
         theta = min(max(theta, 0.0), 0.999999)
-        r = self.components[i].radius_m
         surface_density = N_A * float(np.sum(q_surface))
         radius_density = N_A * float(sum(self.components[j].radius_m * q_surface[j] for j in range(self.n)))
+        return theta, surface_density, radius_density
+
+    def _available_surface_at_state(self, i: int, state: tuple[float, float, float]) -> float:
+        theta, surface_density, radius_density = state
+        r = self.components[i].radius_m
         one_minus = max(1.0 - theta, SMALL)
         work = (
             (math.pi * r*r * surface_density + 2.0 * math.pi * r * radius_density) / one_minus
@@ -412,23 +423,26 @@ class CPAModel:
 
     def equilibrium_factors(self, qv: np.ndarray, pH: float, ionic_strength_M: float,
                             _energy_out: np.ndarray | None = None) -> np.ndarray:
+        surface_state = self._surface_state(qv)
         if self.hic:
             # Phenomenological HIC extension of the CPA available-surface model.
             # The attached CPA paper is IEX: its electrostatic salt screening
             # must not be used to describe hydrophobic binding.
             return np.asarray([
-                comp.delta_ref * self.available_surface(i, qv)
+                comp.delta_ref * self._available_surface_at_state(i, surface_state)
                 * math.exp(float(np.clip(comp.salt_sensitivity_per_M * max(ionic_strength_M, 0.0), 0.0, MAX_HIC_LOG_AFFINITY)))
                 for i, comp in enumerate(self.components)
             ])
         ionic_mol_m3 = max(float(ionic_strength_M), 0.0) * 1000.0
         lateral = self.lateral_interactions(qv, ionic_mol_m3)
+        kappa = self.debye_kappa(ionic_mol_m3)
+        psi_a = self.surface_potential_linear(self.sigma_adsorber(pH), kappa)
         K = np.zeros(self.n)
         for i, comp in enumerate(self.components):
-            y = _clip_scalar(self.u_adsorber(comp, pH, ionic_mol_m3) / self.kBT, -80.0, 80.0)
+            y = _clip_scalar(self._u_adsorber_at_environment(comp, pH, kappa, psi_a) / self.kBT, -80.0, 80.0)
             if _energy_out is not None:
                 _energy_out[i] = y
-            available = self.available_surface(i, qv)
+            available = self._available_surface_at_state(i, surface_state)
             integral = 1.0 if abs(y) < 1e-7 else (1.0 - math.exp(_clip_scalar(-y, -80.0, 80.0))) / y
             K[i] = max(
                 comp.delta(pH)

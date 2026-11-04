@@ -1,4 +1,13 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25y)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25z)
+
+FASTER TDM–CPA SOLVES (R25z)
+CPA now evaluates shared surface-coverage and ionic-environment terms once per
+axial cell and solver call, then reuses them for each protein. The adsorption
+equations, BDF method, tolerances, and numerical grid are unchanged. A
+four-species, 13-CV, 40-cell check ran in 30.7 seconds instead of 49.1 seconds;
+its UV, species and conductivity traces, mass balance, coverage and internal
+step count matched exactly. Speed gain depends on the number of species and
+the stiffness of the chosen parameters.
 
 CPA ACCESSIBLE AREA IN m²/mL STATIONARY SOLID (R25y)
 The CPA Accessible area A_s,i boxes now show and accept m²/mL of stationary
