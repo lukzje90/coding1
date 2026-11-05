@@ -1,4 +1,26 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25z)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25aa)
+
+MEASURED LOAD MATERIAL pH AND CONDUCTIVITY (R25aa)
+Process Setup now exposes Load material chemistry for every model choice and
+every saved normal or independent LSQ recipe. BUFFER_RECIPE retains the
+existing load %B blend. Choose EXPLICIT and DIRECT to enter measured load
+sample pH and conductivity; selecting EXPLICIT first copies the current %B
+blend into those boxes when no prior direct recipe is present. Editing either
+box selects the direct load stream, and editing conductivity also selects
+CONDUCTIVITY as the active salt input. Editing load %B returns to the buffer
+blend. Existing direct-salt recipes remain readable and keep SALT_M as their
+binding input until conductivity is deliberately edited.
+
+The measured values enter the load stage and saved LSQ model-run recipes.
+With CONDUCTIVITY selected, the model's conductivity-to-salt factor estimates
+salt molarity and ionic strength for the direct sample; this is an
+approximation, not an ion-speciation calculation. Buffer A/B ion composition
+still determines their own CPA ionic strengths. CPA binding uses load pH and
+ionic strength; Modified Wang uses pH when its pH coefficient is nonzero;
+Competitive Langmuir uses salt but has no pH binding term. All model choices
+still transport and report the entered load pH and conductivity. If the
+column was initially equilibrated in a different liquid, select its actual
+Initial column equilibration source instead of MATCH_LOAD.
 
 FASTER TDM–CPA SOLVES (R25z)
 CPA now evaluates shared surface-coverage and ionic-environment terms once per
@@ -109,8 +131,8 @@ species curves are predictions, not independently measured impurity data.
 
 LOAD BLEND, FIT LIMITS AND LSQ DISPLAY (R25p)
 The load %B entries now select the Buffer A/B blend for both pH and
-conductivity. The calculated load values are shown in Process Setup, while
-the old direct conductivity entry is hidden. Saved explicit-load recipes
+conductivity. The calculated load values are shown in Process Setup; R25aa
+also exposes the optional measured-load inputs. Saved explicit-load recipes
 retain their original chemistry until their load %B is edited; editing %B
 switches that run to the buffer blend. The mechanistic load stage consumes
 the resolved pH, conductivity and salt. Least-squares Fit ±% controls now

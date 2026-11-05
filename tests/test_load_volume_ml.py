@@ -140,7 +140,9 @@ class LoadVolumeMLTests(unittest.TestCase):
         self.assertAlmostEqual(_build_program(legacy, np.zeros(1)).stages[0].start_salt_M, 0.2)
         jsl = build_jsl(shared)
         self.assertIn('If(loadMaterialMode == "EXPLICIT",', jsl)
-        self.assertIn('If(Uppercase(Char(this << Get Selected)) == "BUFFER_RECIPE", loadChemControl << Set(1), loadChemControl << Set(2))', jsl)
+        self.assertIn('If(Uppercase(Char(this << Get Selected)) == "EXPLICIT",', jsl)
+        self.assertIn('loadSource << Set(1); loadChemControl << Set(2);', jsl)
+        self.assertIn('loadChemControl << Set(1)', jsl)
 
     def test_salt_molarity_without_conductivity_still_reaches_load_stage(self):
         shared = make_config(MODEL_TDM_CPA, 0, multistep=False)
@@ -332,7 +334,7 @@ class LoadVolumeMLTests(unittest.TestCase):
         self.assertIn('loadBasis == "LOAD_VOLUME"', jsl)
         self.assertIn('loadBasis == "VOLUME_ML"', jsl)
         self.assertIn('cv = If(Is Missing(capacity) | Is Missing(concentration)', jsl)
-        self.assertIn('loadChemPanel << Visibility("Collapse")', jsl)
+        self.assertIn('loadChemPanel << Visibility(If(Uppercase(Char(loadMaterialMode << Get Selected)) == "EXPLICIT", "Visible", "Collapse"))', jsl)
         self.assertIn('loadMaterialStatus << Set Text("Load chemistry from Buffer A/B:', jsl)
         self.assertIn('loadMaterialMode << Set(1); loadChemControl << Set(1); SaveCurrentRun()', jsl)
         self.assertIn('Column(dtRuns, "Load_Volume_mL")[currentRun] = loadVolumeML << Get;', jsl)
