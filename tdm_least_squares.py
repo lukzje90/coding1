@@ -1248,6 +1248,71 @@ def _chromatogram_fit_svg(config: dict[str, Any], info: dict[str, Any]) -> str:
     )
 
 
+def _alignment_overlay_svg(config: dict[str, Any], info: dict[str, Any],
+                           references: list[dict[str, Any]]) -> str:
+    """Share one CV axis for UV traces and fraction-integrated mass% points."""
+    trace = info["result"]["trace"]
+    chrom = info["chromatogram"]
+    x_model = np.asarray(trace["CV"], dtype=float)
+    x_end = max(float(x_model[-1]), float(np.max(chrom["CV"])), 1e-6)
+    x_meas, y_meas = _reference_display_series(chrom["CV"], chrom["measured"], x_end)
+    y_model = np.asarray(trace["uv_mAU"], dtype=float) + float(chrom["baseline"])
+    low = float(min(np.min(y_meas), np.min(y_model)))
+    high = float(max(np.max(y_meas), np.max(y_model)))
+    pad = max((high-low)*.06, .01)
+    low -= pad; high += pad
+    left, top, width, height = 78., 40., 750., 330.
+    px = lambda x: left + width * float(x) / x_end
+    py_uv = lambda y: top + height * (high-float(y))/(high-low)
+    py_mass = lambda y: top + height * (1-float(np.clip(y, 0, 100))/100)
+    def poly(x: np.ndarray, y: np.ndarray, ymap) -> str:
+        return " ".join(f"{px(a):.2f},{ymap(b):.2f}" for a,b in zip(x,y)
+                        if np.isfinite(a) and np.isfinite(b))
+    svg = ['<h3>Overlapping UV chromatogram and mass fraction%</h3>',
+           '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 455" '
+           'role="img" aria-label="Measured and predicted UV with predicted and measured species mass percent on shared CV axis">',
+           '<rect width="1020" height="455" fill="white"/>',
+           f'<path d="M{left:g},{top:g}V{top+height:g}H{left+width:g}V{top:g}" fill="none" stroke="#555"/>']
+    for tick in range(5):
+        y = top + height*tick/4
+        svg.append(f'<line x1="{left:g}" x2="{left+width:g}" y1="{y:.2f}" y2="{y:.2f}" stroke="#e6e9ed"/>')
+        svg.append(f'<text x="{left-7:g}" y="{y+4:.2f}" text-anchor="end" font-size="12">{high+(low-high)*tick/4:.3g}</text>')
+        svg.append(f'<text x="{left+width+7:g}" y="{y+4:.2f}" font-size="12">{100-25*tick:g}</text>')
+    for tick in range(6):
+        x = left + width*tick/5
+        svg.append(f'<text x="{x:.2f}" y="{top+height+21:g}" text-anchor="middle" font-size="12">{x_end*tick/5:.3g}</text>')
+    svg.extend((f'<polyline points="{poly(x_meas,y_meas,py_uv)}" fill="none" stroke="#222" stroke-width="1.6"/>',
+                f'<polyline points="{poly(x_model,y_model,py_uv)}" fill="none" stroke="#0878c6" stroke-width="1.7"/>'))
+    concentrations = np.maximum(np.asarray(trace["component_g_L"], dtype=float), 0)
+    total = concentrations.sum(axis=1)
+    names = [str(row["name"]) for row in active_components(config)]
+    colors = ("#dc3545", "#149447", "#e87722", "#8a63b7", "#9b6a42", "#008b8b")
+    labels = ['Measured UV (black)', 'Predicted UV (blue)']
+    for i, name in enumerate(names):
+        pct = np.divide(100*concentrations[:,i], total, out=np.full_like(total, np.nan), where=total>1e-10)
+        valid = np.isfinite(pct)
+        for group in np.split(np.flatnonzero(valid), np.where(np.diff(np.flatnonzero(valid)) > 1)[0]+1):
+            if len(group) > 1:
+                svg.append(f'<polyline points="{poly(x_model[group],pct[group],py_mass)}" fill="none" '
+                           f'stroke="{colors[i]}" stroke-width="1.4" opacity=".75"/>')
+        for ref in references:
+            if name not in ref["mass_percent"]:
+                continue
+            x = float(ref["CV"])
+            observed = float(ref["mass_percent"][name])
+            predicted = float(_predicted_fraction_mass_percent(config, trace, ref)[0][i])
+            svg.append(f'<circle cx="{px(x):.2f}" cy="{py_mass(observed):.2f}" r="4" '
+                       f'fill="white" stroke="{colors[i]}" stroke-width="2"/>')
+            svg.append(f'<path d="M{px(x)-4:.2f},{py_mass(predicted):.2f}h8" '
+                       f'stroke="{colors[i]}" stroke-width="2.5"/>')
+        labels.append(f'{html.escape(name)} mass% ({colors[i]})')
+    svg.append(f'<text x="{left+width/2:.2f}" y="{top+height+42:g}" text-anchor="middle" font-size="13">CV from run start</text>')
+    svg.append('<text x="17" y="210" transform="rotate(-90 17 210)" text-anchor="middle" font-size="13">UV [mAU]</text>')
+    svg.append('<text x="1005" y="210" transform="rotate(90 1005 210)" text-anchor="middle" font-size="13">Species mass%</text>')
+    svg.append('</svg><p>' + '; '.join(labels) + '. Open circles are measured fraction mass%; short ticks are model-integrated fraction mass%. Continuous mass% lines are instantaneous predicted composition, shown only when protein is detectable.</p>')
+    return ''.join(svg)
+
+
 def _conductivity_fit_svg(info: dict[str, Any]) -> str:
     cond = info["conductivity"]
     if not cond:
@@ -1387,7 +1452,7 @@ def preview_lsq_alignment(
                if comp_refs else
                '<p><b>Fraction mass% alignment:</b> no observations enabled for this run. '
                'Select mass% refinement mode, turn on this run\'s fraction mass%, and enter fraction values to include them.</p>')
-            + _chromatogram_fit_svg(config, info)
+            + _alignment_overlay_svg(config, info, comp_refs)
             + ("<h3>Predicted main protein and impurity chromatogram before refinement</h3>"
                + _impurity_profile_svg(config, info["result"])
                + _predicted_fraction_analysis_html(info["result"])

@@ -284,8 +284,8 @@ def _step_panel(prefix: str, i: int, title: str) -> str:
         H List Box(Text Box("Mode", << Set Width(220)), {v}Mode = Combo Box({{"SET_POINT", "LINEAR", "STEP"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         H List Box(Text Box("Volume [CV]", << Set Width(220)), {v}CV = Number Edit Box(1, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         H List Box(Text Box("Flow [mL/min]", << Set Width(220)), {v}Flow = Number Edit Box(1, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-        {v}StartBRow = H List Box(Text Box("Start / set-point Buffer B [%]", << Set Width(220)), {v}StartB = Number Edit Box(0, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-        {v}EndBRow = H List Box(Text Box("End Buffer B [%]", << Set Width(220)), {v}EndB = Number Edit Box(100, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+        {v}StartBRow = H List Box({v}StartBLabel = Text Box("Buffer B set point [%]", << Set Width(220)), {v}StartB = Number Edit Box(0, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+        {v}EndBRow = H List Box({v}EndBLabel = Text Box("End Buffer B [%]", << Set Width(220)), {v}EndB = Number Edit Box(100, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         {v}BlendDerived = Text Box("", << Set Wrap(680)),
         {v}ChemPanel = V List Box(
             H List Box(Text Box("Chemistry control", << Set Width(220)), {v}ChemControl = Combo Box({{"BUFFER_B_PERCENT", "ENDPOINT_CHEMISTRY"}}, << Set Width(170), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
@@ -749,10 +749,12 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
             stepControl = {v}ChemControl << Get Selected;
             {v}PercentPanel << Visibility(If(stepControl == "BUFFER_B_PERCENT", "Visible", "Collapse"));
             {v}EndpointPanel << Visibility(If(stepControl == "ENDPOINT_CHEMISTRY", "Visible", "Collapse"));
-            {v}StartBRow << Visibility("Visible");
-            {v}EndBRow << Visibility("Visible");
-            {v}StartChem << Visibility("Visible");
-            {v}EndChem << Visibility("Visible");
+            {v}StartBLabel << Set Text(If(stepMode == "LINEAR", "Start Buffer B [%]", "Buffer B set point [%]"));
+            {v}EndBLabel << Set Text(If(stepMode == "LINEAR", "End Buffer B [%]", "Buffer B set point [%]"));
+            {v}StartBRow << Visibility(If(stepMode == "STEP", "Collapse", "Visible"));
+            {v}EndBRow << Visibility(If(stepMode == "SET_POINT", "Collapse", "Visible"));
+            {v}StartChem << Visibility(If(stepMode == "STEP", "Collapse", "Visible"));
+            {v}EndChem << Visibility(If(stepMode == "SET_POINT", "Collapse", "Visible"));
             {v}StartSaltRow << Visibility(If(Char({v}StartSaltMode << Get Selected) == "SALT_M", "Visible", "Collapse"));
             {v}EndSaltRow << Visibility(If(Char({v}EndSaltMode << Get Selected) == "SALT_M", "Visible", "Collapse"));
             startPct = {v}StartB << Get; endPct = {v}EndB << Get;
@@ -802,6 +804,51 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
             );'''
         )
 
+    method_variables = (
+        ("loading_g_L", "Load [g/L resin]", 1, 100),
+        ("flow_mL_min", "Flow [mL/min]", 0.1, 5),
+        ("wash_CV", "First PLW duration [CV]", 0.1, 5),
+        ("gradient_start_B", "Linear gradient start [%B]", 0, 50),
+        ("gradient_end_B", "Linear gradient end [%B]", 50, 100),
+        ("gradient_CV", "Linear gradient length [CV]", 1, 20),
+        ("pool_start_CV", "Pool start after gradient start [CV]", 0, 2),
+        ("pool_end_CV", "Pool end after gradient start [CV]", 2, 10),
+    )
+    method_rows = ",\n".join(
+        f'H List Box(Text Box({_q(label)}, << Set Width(290)), '
+        f'method_{name}_min = Number Edit Box({low}, 9, << Set Width(90)), '
+        f'Text Box("to"), method_{name}_max = Number Edit Box({high}, 9, << Set Width(90)))'
+        for name, label, low, high in method_variables
+    )
+    method_sends = "\n    ".join(
+        f'Python Send(method_{name}_{side} << Get, Python Name("tdm_ui_method_{name}_{side}"));'
+        for name, *_ in method_variables for side in ("min", "max")
+    )
+    method_sends += "\n    " + "\n    ".join(
+        f'Python Send(method_{name} << Get, Python Name("tdm_ui_method_{name}"));'
+        for name in ("min_purity_percent", "max_pool_volume_mL", "max_evaluations", "max_trial_minutes",
+                     "max_pressure_bar", "reference_pressure_bar", "reference_flow_mL_min")
+    )
+    method_sends += "\n    " + "\n    ".join(
+        f'Python Send(method_impurity_{i}_cap << Get, Python Name("tdm_ui_method_impurity_{i}_cap"));'
+        for i in range(1, MAX_IMPURITIES + 1)
+    )
+    method_gradient_seed = "\n    ".join(
+        f'''If(!methodGradientFound & Num(elutionCountBox << Get Selected) >= {i} &
+            Char(el{i}Mode << Get Selected) == "LINEAR" &
+            Char(el{i}ChemControl << Get Selected) == "BUFFER_B_PERCENT",
+            methodGradientFound = 1;
+            v = el{i}StartB << Get; If(!Is Missing(v),
+                method_gradient_start_B_min << Set(Max(0, v - 20)); method_gradient_start_B_max << Set(Min(100, v + 20)));
+            v = el{i}EndB << Get; If(!Is Missing(v),
+                method_gradient_end_B_min << Set(Max(0, v - 20)); method_gradient_end_B_max << Set(Min(100, v + 20)));
+            g = el{i}CV << Get; If(!Is Missing(g) & g > 0,
+                method_gradient_CV_min << Set(Max(0.01, g * .7)); method_gradient_CV_max << Set(g * 1.3);
+                method_pool_start_CV_min << Set(0); method_pool_start_CV_max << Set(Max(0.01, g * .4));
+                method_pool_end_CV_min << Set(Max(.02, g * .4)); method_pool_end_CV_max << Set(g));
+        );''' for i in range(1, MAX_ELUTION_STEPS + 1)
+    )
+
     shared_sends = "\n    ".join(sends)
     jsl = f'''Names Default To Here(1);
 projectDir = {_path(PROJECT_DIR)};
@@ -817,6 +864,7 @@ batchSummary = {_path(BATCH_SUMMARY_CSV)};
 lsqApplyFile = {_path(LSQ_APPLY_JSL)};
 lsqReport = {_path(LSQ_REPORT_HTML)};
 lsqPreviewReport = {_path(LSQ_ALIGNMENT_HTML)};
+methodReportFile = {_path(PROJECT_DIR / 'latest_method_optimisation_report.html')};
 currentRun = 1; copiedRun = 0; isLoading = 1; isLSQSetup = 0; lsqMassEditorRun = 1; lsqPreviewRun = 0;
 dtBatchRuns = Open(batchRunsFile, Invisible);
 dtLSQRuns = Open(lsqRunsFile, Invisible);
@@ -1330,6 +1378,8 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot], RunNumberFromLabel(lsqTargetRunSelector << Get Selected)), Python Name("tdm_ui_lsq_target_run"));
     Python Send(projectDir, Python Name("tdm_project_dir"));
     Python Send(projectDir, Python Name("tdm_project_dir_posix"));
+    If(actionText == "IMPORT_FIT_PARAMETERS", Python Send(importParameterPath, Python Name("tdm_ui_import_parameter_path")));
+    If(actionText == "OPTIMISE_METHOD", {method_sends});
     If(actionText == "FIT_LSQ",
         lsqStatusText << Set Text("Refinement running. Progress: least_squares_objective_history.csv. JMP will respond when the fit finishes.");
         Wait(0.01)
@@ -1351,11 +1401,33 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     If(File Exists(statusFile), statusValue = Load Text File(statusFile), statusValue = "No status file was produced. Check View > Log.");
     statusText << Set Text(statusValue); lsqStatusText << Set Text(statusValue);
     If(((actionText == "FIT_LSQ" & Contains(statusValue, "Accepted/applied to shared batch parameters: True") > 0) |
+        (actionText == "IMPORT_FIT_PARAMETERS" & Contains(statusValue, "LSQ_PARAMETERS_IMPORTED:") > 0) |
         Contains(statusValue, "FITTED_PARAMETERS_RESTORED:") > 0) & File Exists(lsqApplyFile),
         Eval(Parse(Load Text File(lsqApplyFile)))
     );
     If(actionText == "PREVIEW_LSQ_ALIGNMENT" & Contains(statusValue, "LSQ_ALIGNMENT_READY:") > 0 & File Exists(lsqPreviewReport), Web(lsqPreviewReport));
+    If(actionText == "OPTIMISE_METHOD" & Contains(statusValue, "METHOD_OPTIMISATION_READY:") > 0,
+        If(File Exists(methodReportFile), Web(methodReportFile))
+    );
     UpdateUI();
+);
+
+ImportLSQParameters = Function({{}}, {{chosen}},
+    chosen = Pick File("Select LSQ fitted-inputs JSON", "", {{"LSQ parameter JSON|json"}}, 1, 0, "");
+    If(Is Empty(chosen), Return());
+    importParameterPath = chosen;
+    SendAndRun("IMPORT_FIT_PARAMETERS");
+);
+
+SeedMethodBounds = Function({{}}, {{v, g, methodGradientFound}},
+    v = loadDensity << Get; If(!Is Missing(v) & v > 0,
+        method_loading_g_L_min << Set(Max(0.001, v * .8)); method_loading_g_L_max << Set(v * 1.2));
+    v = loadFlow << Get; If(!Is Missing(v) & v > 0,
+        method_flow_mL_min << Set(Max(0.001, v * .8)); method_flow_mL_max << Set(v * 1.2));
+    v = plw1CV << Get; If(!Is Missing(v) & v > 0,
+        method_wash_CV_min << Set(Max(0.001, v * .5)); method_wash_CV_max << Set(v * 1.5));
+    methodGradientFound = 0;
+    {method_gradient_seed}
 );
 
 PreviewLSQSlot = Function({{slot}}, {{}},
@@ -1530,6 +1602,8 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
             )),
             "Model Parameters",
             V Scroll Box(Size(850, 690), V List Box(
+                H List Box(Button Box("Import parameters from LSQ JSON", ImportLSQParameters())),
+                Text Box("Imports only fitted model parameters for the same model and species. Select least_squares_fitted_inputs.json; run recipes stay as saved.", << Set Wrap(740)),
                 Outline Box("Model selection", V List Box(
                     H List Box(Text Box("Model combination", << Set Width(275)), modelBox = Combo Box({model_items}, << Set Width(235), << Set Function(Function({{this}}, UpdateUI())))),
                     H List Box(Text Box("Number of impurities [0-5]", << Set Width(275)), impurityCountBox = Combo Box({imp_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI())))),
@@ -1610,13 +1684,30 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                 lsqCompositionPanel = Outline Box("Species mass% reference points", V List Box(
                     lsqTargetRunRow = H List Box(Text Box("Edit mass% for LSQ run", << Set Width(200)), lsqTargetRunSelector = Combo Box({run_choices}, << Set Width(140), << Set Function(Function({{this}}, ChangeLSQMassEditorRun(RunNumberFromLabel(this << Get Selected))))), Text Box("Turn on mass% for this run above to fit it.", << Set Wrap(390))),
                     lsqMassEditorStatus = Text Box("", << Set Wrap(740)),
-                    Text Box("Enter fraction start and end from run start. Fit uses each midpoint; blank species cells are skipped, while 0 is measured.", << Set Wrap(740)),
+                    Text Box("Enter fraction start and end from run start. Fit integrates each entire collected interval; midpoint curves are display-only. Blank species cells are skipped, while 0 is measured.", << Set Wrap(740)),
                     H List Box(Text Box("Fraction rows [1-30]", << Set Width(240)), lsqReferenceCountBox = Combo Box({ref_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI()))), Text Box("Fraction axis"), lsqFractionUnit = Combo Box({{"CV", "mL"}}, << Set(1), << Set Width(90))),
                     {ref_table}
                 ))
             )),
             "Run / Results",
             V Scroll Box(Size(850, 690), V List Box(
+                Outline Box("Method optimisation (fixed calibrated model)", << Close(1), V List Box(
+                    Text Box("Searches the selected run without changing its saved recipe or LSQ parameters. Requires first PLW and a linear %B elution. Pool CV is relative to the start of that gradient. Global exploration is followed by local SLSQP refinement; the evaluation cap applies to the search.", << Set Wrap(740)),
+                    Button Box("Seed bounds from selected run", SeedMethodBounds()),
+                    {method_rows},
+                    {_nrow("Minimum product purity [%]", "method_min_purity_percent", 90, 290)},
+                    {_nrow("Maximum pool volume [mL]", "method_max_pool_volume_mL", 20, 290)},
+                    {_nrow("Search evaluation cap [2–1000]", "method_max_evaluations", 30, 290)},
+                    {_nrow("Per-trial timeout [minutes; 0 = off]", "method_max_trial_minutes", 30, 290)},
+                    Text Box("Maximum species mass% in pool (blank disables a cap). Match impurity order in Model Parameters.", << Set Wrap(740)),
+                    {', '.join(_nrow(f'Impurity {i} maximum mass% in pool', f'method_impurity_{i}_cap', 5, 290) for i in range(1, MAX_IMPURITIES + 1))},
+                    Text Box("Pressure is optional. Enter all three values to constrain it using a flow-scaled estimate from a measured pressure at the same column and liquid.", << Set Wrap(740)),
+                    {_nrow("Maximum pressure [bar]", "method_max_pressure_bar", None, 290)},
+                    {_nrow("Measured reference pressure [bar]", "method_reference_pressure_bar", None, 290)},
+                    {_nrow("Measured reference flow [mL/min]", "method_reference_flow_mL_min", None, 290)},
+                    Button Box("Optimise selected run method", SendAndRun("OPTIMISE_METHOD"))
+                )),
+                Button Box("Open latest method report", If(File Exists(methodReportFile), Web(methodReportFile), statusText << Set Text("No method optimisation report yet."))),
                 Text Box("If a result is stale, rerun the selected model.", << Set Wrap(760)),
                 H List Box(
                     Button Box("Open latest chromatogram", OpenCurrentResult(0)),
@@ -1644,6 +1735,7 @@ For(lsqInitSlot = 1, lsqInitSlot <= {MAX_LSQ_PROFILES}, lsqInitSlot++,
 );
 isLoading = 0;
 LoadRun(1);
+SeedMethodBounds();
 lsqTargetRunSelector << Set(1);
 LoadLSQMassReference(1);
 UpdateUI();
@@ -1694,7 +1786,7 @@ def _validate_jsl(jsl: str) -> None:
         "UV chromatogram", "UV + fraction mass%",
         "Feed composition mass% of total protein", "UV → protein response factor",
         "Conductivity → salt factor", "Number of time steps", "Number of axial positions", "Number Edit Box", "tdm_batch_runs.csv",
-        "Chemistry control", "Start / set-point Buffer B [%]", "End Buffer B [%]",
+        "Chemistry control", "Buffer B set point [%]", "End Buffer B [%]",
         "Buffer A (0% B)", "Buffer B (100% B)",
         "Saturation capacity qmax,i [g/L stationary phase]", "SyncLangmuirDerived",
         "AttachLSQCSV = Function", "Pick File(\"Select raw chromatogram CSV/Excel\"",

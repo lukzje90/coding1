@@ -107,6 +107,7 @@ def _check_generated_contract(config: dict) -> dict:
             or re.fullmatch(r"tdm_ui_lsq_parameter_lock_states_(?:[1-9]|10)", name)
             or re.fullmatch(r"tdm_ui_lsq_parameter_fit_ranges_(?:[1-9]|10)", name)
             or re.fullmatch(r"tdm_ui_lsq_r(?:[1-9]|[12][0-9]|30)_(?:start|end|c[1-6]_mass_percent)", name)
+            or re.fullmatch(r"tdm_ui_method_[A-Za-z0-9_]+", name)
         )
         if not dynamic_reader:
             raise AssertionError(f"Generated JMP value has no bridge reader: {name}")

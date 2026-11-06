@@ -342,6 +342,8 @@ class AlignmentPreviewTests(unittest.TestCase):
             self.assertIn('data-run="1" hidden', markup)
             self.assertIn('data-run="2"><h2>', markup)
             self.assertIn('<h3 id="mass-preview-run-2">Fraction mass% at midpoints</h3>', markup)
+            self.assertIn('Overlapping UV chromatogram and mass fraction%', markup)
+            self.assertIn('Open circles are measured fraction mass%', markup)
             self.assertIn('href="#mass-preview-run-2"', markup)
             self.assertIn('no observations enabled for this run', markup)
             self.assertIn('stroke-width="2.3" stroke-dasharray="2 4"', markup)

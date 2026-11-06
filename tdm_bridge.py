@@ -68,6 +68,7 @@ def _prepare_project_imports(project: Path) -> None:
         "tdm_minimal_io",
         "tdm_minimal_model",
         "tdm_mobile_phase",
+        "tdm_method_optimisation",
     ):
         sys.modules.pop(module_name, None)
 
@@ -358,6 +359,38 @@ def _save_fit_handoff(initial: dict[str, Any], fitted: dict[str, Any], paths: li
     receipt = {"model": fitted["model"], "impurity_count": int(fitted["impurity_count"]),
                "changed_parameters": changed}
     FIT_HANDOFF_JSON.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+
+
+def import_lsq_parameters(current: dict[str, Any], source_path: str) -> tuple[dict[str, Any], list[str]]:
+    """Apply only active model-backed parameter values from an LSQ JSON export."""
+    from tdm_least_squares import fit_parameter_lock_catalog, _write_apply_jsl
+    path = Path(source_path).expanduser().resolve()
+    if not path.is_file() or path.suffix.lower() != ".json":
+        raise ValueError("Select the LSQ fitted-inputs JSON file (least_squares_fitted_inputs.json), not the CSV summary.")
+    source = load_config(path)
+    if (source["model"] != current["model"] or
+            source["chromatography_mode"] != current["chromatography_mode"] or
+            int(source["impurity_count"]) != int(current["impurity_count"])):
+        raise ValueError("The LSQ parameter file has a different model, chromatography mode, or impurity count.")
+    current_names = [str(c["name"]).strip() for c in active_components(current)]
+    source_names = [str(c["name"]).strip() for c in active_components(source)]
+    if current_names != source_names:
+        raise ValueError("The LSQ parameter file has different product/impurity names or order.")
+    specs = fit_parameter_lock_catalog(current)
+    imported = copy.deepcopy(current)
+    changed = []
+    for spec in specs:
+        value = float(_get_path(source, spec.path))
+        if not math.isfinite(value):
+            raise ValueError(f"Nonfinite LSQ parameter: {spec.path}")
+        _set_path(imported, spec.path, value)
+        if not _same_fit_value(_get_path(current, spec.path), value):
+            changed.append(spec.path)
+    errors = validate_mechanistic_config(imported)
+    if errors:
+        raise ValueError("Imported parameters failed model validation:\n- " + "\n- ".join(errors))
+    _write_apply_jsl(imported, specs)
+    return imported, changed
 
 
 def _write_status(text: str) -> None:
@@ -867,7 +900,54 @@ def main() -> int:
         shared = sanitize_config_for_selected_model(current_effective)
         # Preserve only the shared mechanistic part in the active file; the batch
         # CSV remains authoritative for the per-run operating conditions.
-        save_config(shared, CONFIG_PATH)
+        if action != "IMPORT_FIT_PARAMETERS":
+            save_config(shared, CONFIG_PATH)
+
+        if action == "IMPORT_FIT_PARAMETERS":
+            path = _text("tdm_ui_import_parameter_path")
+            if not path:
+                raise ValueError("Choose an LSQ fitted-inputs JSON file.")
+            imported, changed = import_lsq_parameters(shared, path)
+            save_config(imported, CONFIG_PATH)
+            _save_fit_handoff(shared, imported, changed)
+            _write_status("LSQ_PARAMETERS_IMPORTED: " + str(len(changed)) +
+                          " model parameter(s) changed. Run recipes and column geometry were retained.\n"
+                          "Source: " + str(Path(path).resolve()))
+            return 0
+
+        if action == "OPTIMISE_METHOD":
+            errors = validate_config(current_effective, strict=True)
+            if errors:
+                raise ValueError("Selected run is incomplete:\n- " + "\n- ".join(errors))
+            from tdm_method_optimisation import VARIABLES, optimise_method
+            options = {"bounds": {name: [_num("tdm_ui_method_" + name + "_min"),
+                                           _num("tdm_ui_method_" + name + "_max")] for name in VARIABLES},
+                       "min_purity_percent": _num("tdm_ui_method_min_purity_percent"),
+                       "max_pool_volume_mL": _num("tdm_ui_method_max_pool_volume_mL"),
+                       "max_evaluations": _num("tdm_ui_method_max_evaluations"),
+                       "max_trial_minutes": _num("tdm_ui_method_max_trial_minutes")}
+            caps = {}
+            for i, comp in enumerate(active_components(current_effective)[1:], start=1):
+                value = _num(f"tdm_ui_method_impurity_{i}_cap")
+                if value is not None:
+                    caps[str(comp["name"])] = value
+            options["max_impurity_percent"] = caps
+            for key in ("max_pressure_bar", "reference_pressure_bar", "reference_flow_mL_min"):
+                options[key] = _num("tdm_ui_method_" + key)
+            context = _selected_run_context(run_number)
+            _write_status("Method optimisation running for " + context["run_name"] +
+                          ". History will be saved under Method_Optimisation.")
+            info = optimise_method(current_effective, options, run_name=context["run_name"],
+                                   output_root=PROJECT_DIR / "Method_Optimisation")
+            shutil.copyfile(info["report_html"], PROJECT_DIR / "latest_method_optimisation_report.html")
+            predicted_svg = Path(info["folder"]) / "predicted_chromatogram.svg"
+            if predicted_svg.is_file():
+                shutil.copyfile(predicted_svg, PROJECT_DIR / "predicted_chromatogram.svg")
+            _write_status("METHOD_OPTIMISATION_READY: " +
+                          ("Best feasible candidate found" if info["best_feasible"] else "No feasible candidate found") +
+                          f" after {info['evaluations']} evaluations.\nReport: {info['report_html']}\n"
+                          f"History: {info['history_csv']}\n{info['guarantee']}")
+            return 0
 
         if action == "ATTACH_LSQ_CSV":
             from tdm_least_squares import load_chromatogram_reference

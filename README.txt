@@ -1,4 +1,33 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25aa)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ab)
+
+METHOD OPTIMISATION AND LSQ PARAMETER IMPORT (R25ab)
+On Model Parameters, select Import parameters from LSQ JSON and choose the
+least_squares_fitted_inputs.json made by LSQ. The selected model, species names
+and impurity count must match. Only model-backed parameter values are copied;
+column geometry and saved run recipes remain as entered. An LSQ JSON is written
+even if a fit fails acceptance, so check the fit report before importing it.
+
+Post-load washes and other SET_POINT/STEP stages now show one Buffer B set
+point. LINEAR stages still show start and end %B. This changes the displayed
+controls only; the saved process recipe and model stage equations are unchanged.
+The pre-alignment report overlays measured/predicted UV and product/impurity
+mass% on the same CV axis. Open circles are measured fraction mass%; short
+ticks show fraction-integrated model mass%.
+
+The Run / Results tab has a Method optimisation panel for the selected run.
+Supply bounds for load, flow, first PLW duration, the first linear %B gradient
+start/end/length, and pool start/end relative to gradient start. Enter minimum
+purity, maximum pool volume, and a maximum mass% for each active impurity.
+The pressure cap is optional and needs a measured reference pressure and flow;
+it uses a linear flow-scaled estimate for the same bed and liquid. If omitted,
+pressure is explicitly reported as unconstrained. A bounded Latin-hypercube
+exploration is followed by SLSQP local searches, subject to a hard evaluation
+cap and a per-trial timeout. Failed simulations receive penalties and remain in evaluation_history.csv.
+Pool masses integrate column outlet species concentration over collected
+volume, before UV detector delay. The best observed feasible candidate, full recipe JSON, chromatogram, pool
+composition, constraint margins and local robustness are written under
+Method_Optimisation/RunName_date_time. The original recipe and LSQ model
+parameters are not changed. The search does not establish a global optimum.
 
 MEASURED LOAD MATERIAL pH AND CONDUCTIVITY (R25aa)
 Process Setup now exposes Load material chemistry for every model choice and
