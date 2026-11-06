@@ -207,6 +207,23 @@ class MethodOptimisationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "different product/impurity names"):
                 import_lsq_parameters(current, str(file))
 
+    def test_import_accepts_parameter_summary_only_with_companion_json(self):
+        current = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
+        fitted = copy.deepcopy(current)
+        fitted["components"][0]["b_L_g"] *= 1.1
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            summary = folder / "least_squares_improved_parameters.csv"
+            summary.write_text("Parameter,Initial,Fitted\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "companion least_squares_fitted_inputs.json"):
+                import_lsq_parameters(current, str(summary))
+            save_config(fitted, folder / "least_squares_fitted_inputs.json")
+            with patch("tdm_least_squares.FIT_APPLY_JSL", folder / "apply.jsl"):
+                result, changed = import_lsq_parameters(current, str(summary))
+            self.assertIn("components[0].b_L_g", changed)
+            self.assertAlmostEqual(result["components"][0]["b_L_g"], fitted["components"][0]["b_L_g"])
+            self.assertEqual(result["process"], current["process"])
+
 
 if __name__ == "__main__":
     unittest.main()

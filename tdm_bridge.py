@@ -69,6 +69,7 @@ def _prepare_project_imports(project: Path) -> None:
         "tdm_minimal_model",
         "tdm_mobile_phase",
         "tdm_method_optimisation",
+        "tdm_method_optimisation_extended",
     ):
         sys.modules.pop(module_name, None)
 
@@ -361,12 +362,32 @@ def _save_fit_handoff(initial: dict[str, Any], fitted: dict[str, Any], paths: li
     FIT_HANDOFF_JSON.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
 
 
-def import_lsq_parameters(current: dict[str, Any], source_path: str) -> tuple[dict[str, Any], list[str]]:
-    """Apply only active model-backed parameter values from an LSQ JSON export."""
-    from tdm_least_squares import fit_parameter_lock_catalog, _write_apply_jsl
+def _lsq_parameter_json_path(source_path: str) -> Path:
+    """Resolve a displayed LSQ parameter summary to its companion full export."""
     path = Path(source_path).expanduser().resolve()
-    if not path.is_file() or path.suffix.lower() != ".json":
-        raise ValueError("Select the LSQ fitted-inputs JSON file (least_squares_fitted_inputs.json), not the CSV summary.")
+    if not path.is_file():
+        raise ValueError(f"The selected LSQ parameter file does not exist: {path}")
+    if path.suffix.lower() in (".csv", ".txt"):
+        prefixes = ("least_squares_improved_parameters", "least_squares_fit_results")
+        matched = next((name for name in prefixes if path.stem == name or
+                        path.stem.startswith(name + "_run_")), None)
+        if matched is None:
+            raise ValueError("Select the LSQ parameter list or fitted-inputs JSON, not a chromatogram or other CSV.")
+        suffix = path.stem[len(matched):]
+        companion = path.with_name("least_squares_fitted_inputs" + suffix + ".json")
+        if not companion.is_file():
+            raise ValueError(f"The selected LSQ parameter list needs its companion {companion.name} in the same folder. "
+                             "Open the completed LSQ Fit folder or select that JSON file directly.")
+        return companion
+    if path.suffix.lower() != ".json":
+        raise ValueError("Select an LSQ fitted-inputs JSON or its parameter-list CSV/TXT.")
+    return path
+
+
+def import_lsq_parameters(current: dict[str, Any], source_path: str) -> tuple[dict[str, Any], list[str]]:
+    """Apply only active model-backed parameter values from an LSQ export."""
+    from tdm_least_squares import fit_parameter_lock_catalog, _write_apply_jsl
+    path = _lsq_parameter_json_path(source_path)
     source = load_config(path)
     if (source["model"] != current["model"] or
             source["chromatography_mode"] != current["chromatography_mode"] or
@@ -906,13 +927,14 @@ def main() -> int:
         if action == "IMPORT_FIT_PARAMETERS":
             path = _text("tdm_ui_import_parameter_path")
             if not path:
-                raise ValueError("Choose an LSQ fitted-inputs JSON file.")
+                raise ValueError("Choose an LSQ fitted-inputs JSON or parameter-list CSV/TXT.")
+            resolved_path = _lsq_parameter_json_path(path)
             imported, changed = import_lsq_parameters(shared, path)
             save_config(imported, CONFIG_PATH)
             _save_fit_handoff(shared, imported, changed)
             _write_status("LSQ_PARAMETERS_IMPORTED: " + str(len(changed)) +
                           " model parameter(s) changed. Run recipes and column geometry were retained.\n"
-                          "Source: " + str(Path(path).resolve()))
+                          "Source: " + str(resolved_path))
             return 0
 
         if action == "OPTIMISE_METHOD":
@@ -921,11 +943,22 @@ def main() -> int:
             errors = validate_config(current_effective, strict=True)
             if errors:
                 raise ValueError("Selected run is incomplete:\n- " + "\n- ".join(errors))
-            from tdm_method_optimisation import VARIABLES, optimise_method
-            options = {"bounds": {name: [_num("tdm_ui_method_" + name + "_min"),
-                                           _num("tdm_ui_method_" + name + "_max")] for name in VARIABLES},
+            from tdm_method_optimisation_extended import variable_names, optimise_method
+            washes = int(_num("tdm_ui_method_plw_count") or 0)
+            elutions = int(_num("tdm_ui_method_elution_count") or 1)
+            style = _text("tdm_ui_method_elution_style") or "GRADIENT"
+            objective = _text("tdm_ui_method_objective") or "RECOVERY"
+            options = {"plw_count": washes, "elution_count": elutions,
+                       "elution_style": style, "objective": objective,
+                       "bounds": {name: [_num("tdm_ui_method_" + name + "_min"),
+                                           _num("tdm_ui_method_" + name + "_max")]
+                                  for name in variable_names(washes, elutions, style)},
                        "min_purity_percent": _num("tdm_ui_method_min_purity_percent"),
+                       "min_recovery_percent": _num("tdm_ui_method_min_recovery_percent"),
+                       "min_product_mass_g": _num("tdm_ui_method_min_product_mass_g"),
                        "max_pool_volume_mL": _num("tdm_ui_method_max_pool_volume_mL"),
+                       "max_run_time_min": _num("tdm_ui_method_max_run_time_min"),
+                       "max_buffer_volume_L": _num("tdm_ui_method_max_buffer_volume_L"),
                        "max_evaluations": _num("tdm_ui_method_max_evaluations"),
                        "max_trial_minutes": _num("tdm_ui_method_max_trial_minutes")}
             caps = {}
@@ -936,6 +969,13 @@ def main() -> int:
             options["max_impurity_percent"] = caps
             for key in ("max_pressure_bar", "reference_pressure_bar", "reference_flow_mL_min"):
                 options[key] = _num("tdm_ui_method_" + key)
+            if _num("tdm_ui_method_plw_count") is None:
+                # Retain compatibility with previously generated JMP windows.
+                from tdm_method_optimisation import VARIABLES, optimise_method as optimise_legacy
+                options["bounds"] = {name: [_num("tdm_ui_method_" + name + "_min"),
+                                           _num("tdm_ui_method_" + name + "_max")]
+                                     for name in VARIABLES}
+                optimise_method = optimise_legacy
             context = _selected_run_context(run_number)
             _write_status("Method optimisation running for " + context["run_name"] +
                           ". History will be saved under Method_Optimisation.")
@@ -1167,7 +1207,8 @@ def main() -> int:
                 f"details: {'; '.join(fit['acceptance']['reasons']) or 'all enabled checks passed'}\n"
                 f"Improved parameters:\n{improved_list}\n"
                 f"{archive_line}"
-                f"Report: {fit['fit_report_html']}\nParameter list CSV: {fit['improved_parameters_csv']}\nObjective history CSV: {fit['latest_fit_history_csv'] or 'unavailable; history is plotted in the fit report'}"
+                f"Report: {fit['fit_report_html']}\nReusable fitted-inputs JSON: {fit['fit_config_json']}\n"
+                f"Parameter list CSV: {fit['improved_parameters_csv']}\nObjective history CSV: {fit['latest_fit_history_csv'] or 'unavailable; history is plotted in the fit report'}"
             )
             return 0
 

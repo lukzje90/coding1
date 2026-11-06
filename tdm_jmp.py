@@ -804,18 +804,22 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
             );'''
         )
 
-    method_variables = (
+    method_variables = [
         ("loading_g_L", "Load [g/L resin]", 1, 100),
         ("flow_mL_min", "All-stage flow [mL/min]", 0.1, 5),
-        ("wash_CV", "First PLW duration [CV]", 0.1, 5),
-        ("gradient_start_B", "Linear gradient start [%B]", 0, 50),
-        ("gradient_end_B", "Linear gradient end [%B]", 50, 100),
-        ("gradient_CV", "Linear gradient length [CV]", 1, 20),
-        ("pool_start_CV", "Pool start after gradient start [CV]", 0, 2),
-        ("pool_end_CV", "Pool end after gradient start [CV]", 2, 10),
-    )
+    ]
+    for i in range(1, MAX_PLW_STEPS + 1):
+        method_variables += [(f"plw{i}_CV", f"PLW {i} duration [CV]", 0.1, 5),
+                             (f"plw{i}_B", f"PLW {i} setpoint [%B]", 0, 100)]
+    for i in range(1, MAX_ELUTION_STEPS + 1):
+        method_variables += [(f"el{i}_CV", f"Elution {i} duration [CV]", 0.1, 20),
+                             (f"el{i}_B", f"Elution {i} isocratic [%B]", 0, 100),
+                             (f"el{i}_start_B", f"Elution {i} gradient start [%B]", 0, 50),
+                             (f"el{i}_end_B", f"Elution {i} gradient end [%B]", 50, 100)]
+    method_variables += [("pool_start_CV", "Pool start after first elution [CV]", 0, 2),
+                         ("pool_end_CV", "Pool end after first elution [CV]", 2, 10)]
     method_rows = ",\n".join(
-        f'H List Box(Text Box({_q(label)}, << Set Width(290)), '
+        f'method_{name}_row = H List Box(Text Box({_q(label)}, << Set Width(290)), '
         f'method_{name}_min = Number Edit Box({low}, 9, << Set Width(90)), '
         f'Text Box("to"), method_{name}_max = Number Edit Box({high}, 9, << Set Width(90)))'
         for name, label, low, high in method_variables
@@ -827,26 +831,38 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     method_sends += "\n    " + "\n    ".join(
         f'Python Send(method_{name} << Get, Python Name("tdm_ui_method_{name}"));'
         for name in ("min_purity_percent", "max_pool_volume_mL", "max_evaluations", "max_trial_minutes",
+                     "min_recovery_percent", "min_product_mass_g", "max_run_time_min", "max_buffer_volume_L",
                      "max_pressure_bar", "reference_pressure_bar", "reference_flow_mL_min")
     )
+    method_sends += '\n    Python Send(methodObjective << Get Selected, Python Name("tdm_ui_method_objective"));'
+    method_sends += '\n    Python Send(methodPLWCount << Get Selected, Python Name("tdm_ui_method_plw_count"));'
+    method_sends += '\n    Python Send(methodElutionCount << Get Selected, Python Name("tdm_ui_method_elution_count"));'
+    method_sends += '\n    Python Send(methodElutionStyle << Get Selected, Python Name("tdm_ui_method_elution_style"));'
     method_sends += "\n    " + "\n    ".join(
         f'Python Send(method_impurity_{i}_cap << Get, Python Name("tdm_ui_method_impurity_{i}_cap"));'
         for i in range(1, MAX_IMPURITIES + 1)
     )
-    method_gradient_seed = "\n    ".join(
-        f'''If(!methodGradientFound & Num(elutionCountBox << Get Selected) >= {i} &
-            Char(el{i}Mode << Get Selected) == "LINEAR" &
-            Char(el{i}ChemControl << Get Selected) == "BUFFER_B_PERCENT",
-            methodGradientFound = 1;
-            v = el{i}StartB << Get; If(!Is Missing(v),
-                method_gradient_start_B_min << Set(Max(0, v - 20)); method_gradient_start_B_max << Set(Min(100, v + 20)));
-            v = el{i}EndB << Get; If(!Is Missing(v),
-                method_gradient_end_B_min << Set(Max(0, v - 20)); method_gradient_end_B_max << Set(Min(100, v + 20)));
-            g = el{i}CV << Get; If(!Is Missing(g) & g > 0,
-                method_gradient_CV_min << Set(Max(0.01, g * .7)); method_gradient_CV_max << Set(g * 1.3);
-                method_pool_start_CV_min << Set(0); method_pool_start_CV_max << Set(Max(0.01, g * .4));
-                method_pool_end_CV_min << Set(Max(.02, g * .4)); method_pool_end_CV_max << Set(g));
-        );''' for i in range(1, MAX_ELUTION_STEPS + 1)
+    method_step_seed = "\n    ".join(
+        f'''v = {prefix}{i}CV << Get; If(!Is Missing(v) & v > 0,
+                method_{name}{i}_CV_min << Set(Max(.01, v * .7)); method_{name}{i}_CV_max << Set(v * 1.3));
+            v = {prefix}{i}StartB << Get; If(!Is Missing(v),
+                method_{name}{i}_B_min << Set(Max(0, v - 20)); method_{name}{i}_B_max << Set(Min(100, v + 20));
+                {f'method_{name}{i}_start_B_min << Set(Max(0, v - 20)); method_{name}{i}_start_B_max << Set(Min(100, v + 20));' if name == 'el' else ''});
+            {f'''v = {prefix}{i}EndB << Get; If(!Is Missing(v),
+                method_el{i}_end_B_min << Set(Max(0, v - 20)); method_el{i}_end_B_max << Set(Min(100, v + 20));
+                If(Char(el{i}Mode << Get Selected) == "LINEAR",
+                    method_el{i}_B_min << Set(Max(0, v - 20)); method_el{i}_B_max << Set(Min(100, v + 20))));''' if name == 'el' else ''}'''
+        for prefix, name, count in (("plw", "plw", MAX_PLW_STEPS), ("el", "el", MAX_ELUTION_STEPS))
+        for i in range(1, count+1)
+    )
+    method_step_visibility = "\n    ".join(
+        [f'method_plw{i}_{field}_row << Visibility(If(w >= {i}, "Visible", "Collapse"));'
+         for i in range(1, MAX_PLW_STEPS+1) for field in ("CV", "B")] +
+        [f'method_el{i}_{field}_row << Visibility(If(e >= {i} & ({condition.format(i=i)}), "Visible", "Collapse"));'
+         for i in range(1, MAX_ELUTION_STEPS+1)
+         for field, condition in (("CV", "1"), ("B", 'style == "ISOCRATIC" | (style == "BOTH" & {i} > 1)'),
+                                  ("start_B", 'style == "GRADIENT" | (style == "BOTH" & {i} == 1)'),
+                                  ("end_B", 'style == "GRADIENT" | (style == "BOTH" & {i} == 1)'))]
     )
 
     shared_sends = "\n    ".join(sends)
@@ -1418,21 +1434,31 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
 );
 
 ImportLSQParameters = Function({{}}, {{chosen}},
-    chosen = Pick File("Select LSQ fitted-inputs JSON", "", {{"LSQ parameter JSON|json"}}, 1, 0, "");
+    chosen = Pick File("Select LSQ fitted-inputs JSON or parameter list", "", {{"LSQ parameter files|json;csv;txt"}}, 1, 0, "");
     If(Is Empty(chosen), Return());
     importParameterPath = chosen;
     SendAndRun("IMPORT_FIT_PARAMETERS");
 );
 
-SeedMethodBounds = Function({{}}, {{v, g, methodGradientFound}},
+SeedMethodBounds = Function({{}}, {{v}},
     v = loadDensity << Get; If(!Is Missing(v) & v > 0,
         method_loading_g_L_min << Set(Max(0.001, v * .8)); method_loading_g_L_max << Set(v * 1.2));
     v = loadFlow << Get; If(!Is Missing(v) & v > 0,
         method_flow_mL_min << Set(Max(0.001, v * .8)); method_flow_mL_max << Set(v * 1.2));
-    v = plw1CV << Get; If(!Is Missing(v) & v > 0,
-        method_wash_CV_min << Set(Max(0.001, v * .5)); method_wash_CV_max << Set(v * 1.5));
-    methodGradientFound = 0;
-    {method_gradient_seed}
+    methodPLWCount << Set(Num(plwCountBox << Get Selected) + 1);
+    methodElutionCount << Set(Max(1, Num(elutionCountBox << Get Selected)));
+    {method_step_seed}
+    v = el1CV << Get; If(!Is Missing(v) & v > 0,
+        method_pool_start_CV_min << Set(0); method_pool_start_CV_max << Set(Max(.01, v * .4));
+        method_pool_end_CV_min << Set(Max(.02, v * .4)); method_pool_end_CV_max << Set(v));
+    UpdateMethodStepVisibility();
+);
+
+UpdateMethodStepVisibility = Function({{}}, {{w, e, style}},
+    w = Num(methodPLWCount << Get Selected);
+    e = Num(methodElutionCount << Get Selected);
+    style = Char(methodElutionStyle << Get Selected);
+    {method_step_visibility}
 );
 
 PreviewLSQSlot = Function({{slot}}, {{}},
@@ -1608,7 +1634,7 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
             "Model Parameters",
             V Scroll Box(Size(850, 690), V List Box(
                 H List Box(Button Box("Import parameters from LSQ JSON", ImportLSQParameters())),
-                Text Box("Imports only fitted model parameters for the same model and species. Select least_squares_fitted_inputs.json; run recipes stay as saved.", << Set Wrap(740)),
+                Text Box("Imports only fitted model parameters for the same model and species. Select least_squares_fitted_inputs.json or its companion least_squares_improved_parameters.csv; run recipes stay as saved.", << Set Wrap(740)),
                 Outline Box("Model selection", V List Box(
                     H List Box(Text Box("Model combination", << Set Width(275)), modelBox = Combo Box({model_items}, << Set Width(235), << Set Function(Function({{this}}, UpdateUI())))),
                     H List Box(Text Box("Number of impurities [0-5]", << Set Width(275)), impurityCountBox = Combo Box({imp_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI())))),
@@ -1697,11 +1723,19 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
             "Run / Results",
             V Scroll Box(Size(850, 690), V List Box(
                 Outline Box("Method optimisation (fixed calibrated model)", << Close(1), V List Box(
-                    Text Box("Searches the selected normal run without changing its saved recipe or LSQ parameters. Requires a first PLW and a linear %B elution. Pool CV is relative to the start of the first such gradient. Each simulated profile is screened for a feasible pool without another model solve. Global exploration is followed by local SLSQP refinement; the evaluation cap counts search simulations. With eight variables, a cap of 30 may permit only one local step.", << Set Wrap(740)),
+                    Text Box("Choose a goal, the number of washes and elutions, and elution style. Gradient uses linear %B for every elution; isocratic uses setpoints; both uses a first gradient followed by isocratic steps. Only bounds for selected steps are used. Pool CV is relative to the first elution. A small evaluation cap is exploratory for many steps; convergence and limits appear in the report. The selected run and fixed calibrated model are preserved.", << Set Wrap(740)),
+                    H List Box(Text Box("Goal", << Set Width(180)), methodObjective = Combo Box({{"RECOVERY", "PURITY", "PRODUCTIVITY", "PRODUCT_MASS", "POOL_CONCENTRATION", "BUFFER_EFFICIENCY", "SHORT_CYCLE", "PEAK_SEPARATION"}}, << Set(1), << Set Width(190))),
+                    H List Box(Text Box("PLWs [0–5]", << Set Width(180)), methodPLWCount = Combo Box({{"0", "1", "2", "3", "4", "5"}}, << Set(2), << Set Width(70), << Set Function(Function({{this}}, UpdateMethodStepVisibility())))),
+                    H List Box(Text Box("Elutions [1–5]", << Set Width(180)), methodElutionCount = Combo Box({{"1", "2", "3", "4", "5"}}, << Set(1), << Set Width(70), << Set Function(Function({{this}}, UpdateMethodStepVisibility())))),
+                    H List Box(Text Box("Elution style", << Set Width(180)), methodElutionStyle = Combo Box({{"GRADIENT", "ISOCRATIC", "BOTH"}}, << Set(1), << Set Width(140), << Set Function(Function({{this}}, UpdateMethodStepVisibility())))),
                     Button Box("Seed bounds from selected run", SeedMethodBounds()),
                     {method_rows},
                     {_nrow("Minimum product purity [%]", "method_min_purity_percent", 90, 290)},
+                    {_nrow("Minimum product recovery [%]", "method_min_recovery_percent", 0, 290)},
+                    {_nrow("Minimum product mass [g]", "method_min_product_mass_g", 0, 290)},
                     {_nrow("Maximum pool volume [mL]", "method_max_pool_volume_mL", 20, 290)},
+                    {_nrow("Maximum modelled cycle time [min; blank = off]", "method_max_run_time_min", None, 290)},
+                    {_nrow("Maximum wash + elution buffer [L; blank = off]", "method_max_buffer_volume_L", None, 290)},
                     {_nrow("Search evaluation cap [2–1000]", "method_max_evaluations", 30, 290)},
                     {_nrow("TDM–CPA trial timeout [minutes; 0 = off]", "method_max_trial_minutes", 30, 290)},
                     Text Box("Maximum species mass% in pool (blank disables a cap). Match impurity order in Model Parameters.", << Set Wrap(740)),

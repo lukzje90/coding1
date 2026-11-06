@@ -1,4 +1,35 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ac)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ad)
+
+MULTI-STAGE METHOD OPTIMISATION (R25ad)
+In Run / Results, select the goal: recovery, purity, modelled-cycle
+productivity, product mass, pool concentration, product per litre of wash and
+elution buffer, shorter modelled cycle, or worst product-to-impurity peak
+separation. The latter uses the minimum product-to-impurity resolution across
+impurities, measured from column-outlet peak width at half height. A missing
+or unresolved peak scores zero. Set minimum purity, recovery and product mass;
+maximum impurity mass%, pool volume, optional buffer use and cycle time; and
+an optional pressure limit based on measured reference pressure and flow.
+Choose 0–5 post-load washes and 1–5 elutions. Gradient means every elution
+is a linear %B ramp, isocratic means every elution is a fixed %B setpoint,
+and both means a first ramp followed by one or more setpoint steps. Bounds
+for each selected wash and elution are shown; inactive step bounds are hidden.
+Set the goal and constraints together: purity, separation, recovery and
+productivity can conflict. For a purity or separation goal, enter a positive
+minimum recovery or product mass to exclude tiny pools. The output reports
+all metrics, composition, peak resolutions, constraints, simulation failures,
+search status and local robustness. The method search evaluates copied recipes;
+it does not edit the selected run, mechanistic parameters, LSQ or solver.
+It reports the best observed feasible result, without claiming global
+optimality. Modelled-cycle productivity excludes setup, cleaning and
+regeneration; check pressure and process-scale constraints against plant data.
+
+LSQ PARAMETER IMPORT (R25ad)
+After fitting, the status now identifies least_squares_fitted_inputs.json as
+the reusable parameter file. The Import button also accepts its companion
+least_squares_improved_parameters.csv or .txt, and the fit-results CSV; the
+importer finds the fitted-inputs JSON in the same folder and imports only
+model parameters. A parameter list without its companion JSON cannot be
+reconstructed safely and gives a specific missing-file message.
 
 METHOD OPTIMISATION AUDIT (R25ac)
 The pool window is anchored to the first linear %B elution step even if an
