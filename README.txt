@@ -1,4 +1,30 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ab)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ac)
+
+METHOD OPTIMISATION AUDIT (R25ac)
+The pool window is anchored to the first linear %B elution step even if an
+earlier linear explicit-chemistry step is present. Global pool seeds are
+projected into valid collection windows; impossible windows are logged without
+a column solve. Pool order, recipe extent, pool
+volume and the optional pressure estimate as explicit local constraints.
+Impossible pool or pressure bounds are rejected before a simulation. Pool-only
+changes reuse the exact same column solution. A bounded cache keeps up to ten
+recent solutions plus the best feasible result, so longer searches do not
+accumulate every column solution in memory. Every newly simulated profile is
+screened for a better feasible pool on a bounded 17×17 window grid. This
+pool screening does not call the column solver and is logged separately.
+
+The report records the fixed mechanistic-model fingerprint, initial candidate,
+all search bounds and constraints, local convergence status, active constraints,
+run time, pool time and calculated productivity. The evaluation-history CSV
+now includes robustness perturbations and distinguishes search simulations
+from the additional robustness simulations. A search cap of 30 evaluations is
+exploratory for eight variables; increase it if local refinement stops early.
+The UI optimises the first PLW duration and first linear %B gradient and uses
+one flow rate for every active stage. JMP waits for the search to finish. The
+pressure limit remains a measured-reference flow proxy rather than a
+hydraulic-pressure model. This is a constrained method-search workflow built
+around the five supplied mechanistic models; it is not a validated copy of
+Siemens gPROMS or a guarantee of a global optimum.
 
 METHOD OPTIMISATION AND LSQ PARAMETER IMPORT (R25ab)
 On Model Parameters, select Import parameters from LSQ JSON and choose the
@@ -22,7 +48,7 @@ The pressure cap is optional and needs a measured reference pressure and flow;
 it uses a linear flow-scaled estimate for the same bed and liquid. If omitted,
 pressure is explicitly reported as unconstrained. A bounded Latin-hypercube
 exploration is followed by SLSQP local searches, subject to a hard evaluation
-cap and a per-trial timeout. Failed simulations receive penalties and remain in evaluation_history.csv.
+cap and a TDM–CPA trial timeout. Failed simulations receive penalties and remain in evaluation_history.csv.
 Pool masses integrate column outlet species concentration over collected
 volume, before UV detector delay. The best observed feasible candidate, full recipe JSON, chromatogram, pool
 composition, constraint margins and local robustness are written under

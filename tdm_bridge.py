@@ -916,6 +916,8 @@ def main() -> int:
             return 0
 
         if action == "OPTIMISE_METHOD":
+            if _num("tdm_ui_is_lsq_setup") == 1:
+                raise ValueError("Switch to Normal batch setup before optimising a saved normal run.")
             errors = validate_config(current_effective, strict=True)
             if errors:
                 raise ValueError("Selected run is incomplete:\n- " + "\n- ".join(errors))

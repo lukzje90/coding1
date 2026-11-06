@@ -10,7 +10,8 @@ import numpy as np
 
 import tdm_bridge
 from tdm_bridge import import_lsq_parameters
-from tdm_method_optimisation import _metrics, _pool_masses, _recipe, optimise_method
+from tdm_method_optimisation import (_elution_start, _metrics, _pool_masses,
+                                     _recipe, optimise_method)
 from tdm_minimal_io import (MODEL_EDM_CPA, MODEL_EDM_LANGMUIR, MODEL_TDM_CPA,
                             MODEL_TDM_LANGMUIR, MODEL_TDM_WANG, save_config,
                             validate_config)
@@ -34,6 +35,7 @@ class MethodOptimisationTests(unittest.TestCase):
         self.assertIn('Python Name("tdm_ui_method_max_trial_minutes")', jsl)
         self.assertIn('Button Box("Import parameters from LSQ JSON", ImportLSQParameters())', jsl)
         self.assertIn('plw1EndBRow << Visibility(If(stepMode == "SET_POINT", "Collapse", "Visible"))', jsl)
+        self.assertIn('actionText == "OPTIMISE_METHOD"),', jsl)
 
     def test_bridge_method_action_writes_report_and_preserves_selected_run(self):
         config = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
@@ -89,6 +91,27 @@ class MethodOptimisationTests(unittest.TestCase):
                                    {"min_purity_percent": 1, "max_pool_volume_mL": 1})
                 self.assertGreaterEqual(metrics["pool_volume_mL"], 0)
                 self.assertEqual(len(metrics["masses_g"]), 1)
+                self.assertGreater(metrics["run_time_min"], 0)
+                self.assertGreater(metrics["pool_end_min"], metrics["pool_start_min"])
+
+    def test_pool_uses_selected_percent_b_gradient_after_explicit_elution(self):
+        config = make_config(MODEL_EDM_LANGMUIR, 0, multistep=True)
+        config["numerics"].update(time_steps=50, axial_positions=6)
+        process = config["process"]
+        process["elution_count"] = 2
+        process["elution_steps"][0]["chemistry_control"] = "ENDPOINT_CHEMISTRY"
+        process["elution_steps"][1].update(mode="LINEAR", chemistry_control="BUFFER_B_PERCENT",
+                                           start_percent_B=20, end_percent_B=80)
+        values = dict(zip(bounds(), [.4, 1, .06, 25, 75, .12, 0, .1]))
+        candidate = _recipe(config, values)
+        self.assertEqual(candidate["process"]["elution_steps"][0], config["process"]["elution_steps"][0] | {"flow_mL_min": 1})
+        self.assertEqual(candidate["process"]["elution_steps"][1]["start_percent_B"], 25)
+        result = simulate(candidate)
+        expected_start = result["simulation"]["program"].stage_start_CV[4]
+        self.assertAlmostEqual(_elution_start(result, candidate), expected_start)
+        metrics = _metrics(result, candidate, values,
+                           {"min_purity_percent": 1, "max_pool_volume_mL": 1})
+        self.assertAlmostEqual(metrics["pool_start_CV"], expected_start)
 
     def test_search_has_hard_cap_history_and_does_not_change_input(self):
         config = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
@@ -101,10 +124,67 @@ class MethodOptimisationTests(unittest.TestCase):
                                             "max_evaluations": 3}, output_root=d)
             self.assertLessEqual(info["evaluations"], 3)
             self.assertEqual(len(Path(info["history_csv"]).read_text().splitlines()),
-                             info["candidates"] + 1)
+                             info["history_rows"] + 1)
+            self.assertEqual(info["total_model_evaluations"],
+                             info["evaluations"] + info["robustness_model_evaluations"])
             self.assertIn("global optimality is not established", info["guarantee"])
             self.assertTrue(Path(info["report_html"]).is_file())
+            self.assertLessEqual(info["retained_full_simulations"], info["simulation_cache_limit"] + 1)
+            self.assertGreater(info["pool_screening_candidates_added"], 0)
+            self.assertGreaterEqual(info["pool"]["yield_percent"],
+                                    info["starting_candidate"]["metrics"]["yield_percent"])
+            self.assertIn(info["search_status"], {"LOCAL_SEED_CONVERGED_SEARCH_CAPPED",
+                                                   "LOCAL_SEED_CONVERGED", "EVALUATION_CAP_REACHED",
+                                                   "LOCAL_NOT_CONVERGED", "GLOBAL_EXPLORATION_ONLY"})
         self.assertEqual(config, original)
+
+    def test_impossible_pool_geometry_is_rejected_before_simulation(self):
+        config = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        invalid = bounds()
+        invalid["pool_end_CV"] = [2, 3]
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(ValueError, "no collection window"):
+                optimise_method(config, {"bounds": invalid, "min_purity_percent": 90,
+                                         "max_pool_volume_mL": 1, "max_evaluations": 3},
+                                output_root=d)
+            self.assertFalse(list(Path(d).iterdir()))
+
+    def test_no_feasible_candidate_is_reported_honestly(self):
+        config = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
+        config["numerics"].update(time_steps=50, axial_positions=6)
+        with tempfile.TemporaryDirectory() as d:
+            info = optimise_method(config, {
+                "bounds": bounds(), "min_purity_percent": 100,
+                "max_pool_volume_mL": 1,
+                "max_impurity_percent": {"Impurity 1": 0},
+                "max_evaluations": 2,
+            }, output_root=d)
+            self.assertFalse(info["best_feasible"])
+            self.assertIn("No feasible candidate found", info["guarantee"])
+            self.assertFalse((Path(info["folder"]) / "best_recipe.json").exists())
+
+    def test_pressure_limit_without_any_allowed_flow_fails_before_simulation(self):
+        config = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(ValueError, "Every allowed flow violates"):
+                optimise_method(config, {
+                    "bounds": bounds(), "min_purity_percent": 1,
+                    "max_pool_volume_mL": 1,
+                    "max_pressure_bar": .01,
+                    "reference_pressure_bar": 1,
+                    "reference_flow_mL_min": 1,
+                    "max_evaluations": 2,
+                }, output_root=d)
+            self.assertFalse(list(Path(d).iterdir()))
+
+    def test_duplicate_species_names_cannot_merge_impurity_constraints(self):
+        config = make_config(MODEL_EDM_LANGMUIR, 2, multistep=False)
+        config["components"][2]["name"] = config["components"][1]["name"]
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(ValueError, "distinct nonblank name"):
+                optimise_method(config, {"bounds": bounds(), "min_purity_percent": 90,
+                                         "max_pool_volume_mL": 1, "max_evaluations": 3},
+                                output_root=d)
 
     def test_import_uses_only_model_parameters_and_checks_species(self):
         current = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)

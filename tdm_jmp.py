@@ -806,7 +806,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
 
     method_variables = (
         ("loading_g_L", "Load [g/L resin]", 1, 100),
-        ("flow_mL_min", "Flow [mL/min]", 0.1, 5),
+        ("flow_mL_min", "All-stage flow [mL/min]", 0.1, 5),
         ("wash_CV", "First PLW duration [CV]", 0.1, 5),
         ("gradient_start_B", "Linear gradient start [%B]", 0, 50),
         ("gradient_end_B", "Linear gradient end [%B]", 50, 100),
@@ -1361,14 +1361,15 @@ SendSharedModel = Function({{}}, {{}},
 );
 
 SendAndRun = Function({{actionText}}, {{rc, statusValue}},
-    If(isLSQSetup & (actionText == "RUN_SELECTED" | actionText == "RUN_BATCH" | actionText == "CHECK_RESULT_CURRENT"),
-        statusText << Set Text("Switch to Normal batch setup before running a production chromatogram."); Return()
+    If(isLSQSetup & (actionText == "RUN_SELECTED" | actionText == "RUN_BATCH" | actionText == "CHECK_RESULT_CURRENT" | actionText == "OPTIMISE_METHOD"),
+        statusText << Set Text("Switch to Normal batch setup before running or optimising a production chromatogram."); Return()
     );
     If(actionText == "FIT_LSQ" | actionText == "PREVIEW_LSQ_ALIGNMENT" | actionText == "ATTACH_LSQ_CSV", If(!SaveAllLSQReferences(), Return()));
     SaveCurrentRun();
     UpdateLSQRunSummary(); SendSharedModel();
     Python Send(actionText, Python Name("tdm_ui_action"));
     Python Send(If(isLSQSetup, 1, currentRun), Python Name("tdm_ui_run_number"));
+    Python Send(isLSQSetup, Python Name("tdm_ui_is_lsq_setup"));
     Python Send(Floor(batchCountBox << Get), Python Name("tdm_ui_batch_count"));
     Python Send(lsqModeBox << Get Selected, Python Name("tdm_ui_lsq_mode"));
     Python Send(lsqRunCount << Get Selected, Python Name("tdm_ui_lsq_run_count"));
@@ -1394,6 +1395,10 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     );
     If(actionText == "RUN_SELECTED",
         statusText << Set Text("Running prediction for the selected run. JMP will respond when it finishes.");
+        Wait(0.01)
+    );
+    If(actionText == "OPTIMISE_METHOD",
+        statusText << Set Text("Method optimisation is running. JMP will respond when the search and robustness checks finish; evaluation_history.csv is saved inside the new Method_Optimisation run folder.");
         Wait(0.01)
     );
     If(actionText == "CHECK_RESULT_CURRENT", Save Text File(statusFile, "CHECK_RESULT_CURRENT pending"));
@@ -1692,13 +1697,13 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
             "Run / Results",
             V Scroll Box(Size(850, 690), V List Box(
                 Outline Box("Method optimisation (fixed calibrated model)", << Close(1), V List Box(
-                    Text Box("Searches the selected run without changing its saved recipe or LSQ parameters. Requires first PLW and a linear %B elution. Pool CV is relative to the start of that gradient. Global exploration is followed by local SLSQP refinement; the evaluation cap applies to the search.", << Set Wrap(740)),
+                    Text Box("Searches the selected normal run without changing its saved recipe or LSQ parameters. Requires a first PLW and a linear %B elution. Pool CV is relative to the start of the first such gradient. Each simulated profile is screened for a feasible pool without another model solve. Global exploration is followed by local SLSQP refinement; the evaluation cap counts search simulations. With eight variables, a cap of 30 may permit only one local step.", << Set Wrap(740)),
                     Button Box("Seed bounds from selected run", SeedMethodBounds()),
                     {method_rows},
                     {_nrow("Minimum product purity [%]", "method_min_purity_percent", 90, 290)},
                     {_nrow("Maximum pool volume [mL]", "method_max_pool_volume_mL", 20, 290)},
                     {_nrow("Search evaluation cap [2–1000]", "method_max_evaluations", 30, 290)},
-                    {_nrow("Per-trial timeout [minutes; 0 = off]", "method_max_trial_minutes", 30, 290)},
+                    {_nrow("TDM–CPA trial timeout [minutes; 0 = off]", "method_max_trial_minutes", 30, 290)},
                     Text Box("Maximum species mass% in pool (blank disables a cap). Match impurity order in Model Parameters.", << Set Wrap(740)),
                     {', '.join(_nrow(f'Impurity {i} maximum mass% in pool', f'method_impurity_{i}_cap', 5, 290) for i in range(1, MAX_IMPURITIES + 1))},
                     Text Box("Pressure is optional. Enter all three values to constrain it using a flow-scaled estimate from a measured pressure at the same column and liquid.", << Set Wrap(740)),
