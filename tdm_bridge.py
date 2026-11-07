@@ -1141,7 +1141,7 @@ def main() -> int:
                 )
                 return 0
             unlocked_paths = _lsq_unlocked_paths_from_jmp()
-            from tdm_least_squares import FIT_HISTORY_CSV, fit_parameter_specs
+            from tdm_least_squares import FIT_HISTORY_CSV, FIT_LIVE_CAP_TXT, fit_parameter_specs
             spec_config = max(profiles, key=lambda p: len(required_parameter_paths(p["config"])))
             fitted_paths = fit_parameter_specs(spec_config["config"], unlocked_paths=unlocked_paths,
                                                fit_conductivity=any(p["fit_conductivity"] for p in profiles))
@@ -1155,6 +1155,9 @@ def main() -> int:
                 f"Each numerical Jacobian needs about {len(profiles) * (len(fitted_paths) + 1)} column solves. "
                 f"Progress: {FIT_HISTORY_CSV}; current probe: "
                 f"{FIT_HISTORY_CSV.with_name('least_squares_active_evaluation.txt')}. "
+                f"To change the cap while JMP is busy, run SET_LSQ_CAP_WHILE_RUNNING.cmd "
+                f"from the model folder or edit {FIT_LIVE_CAP_TXT} with a whole number from 2 to 10000. "
+                "The next model evaluation reads the new cap. "
                 "If the history file is locked, the fit continues "
                 "and reports a recovered history path when complete."
             )
@@ -1164,6 +1167,7 @@ def main() -> int:
                 unlocked_paths=unlocked_paths,
                 max_nfev=int(shared_raw["least_squares"]["max_nfev"]),
                 max_model_evaluations=int(shared_raw["least_squares"]["max_nfev"]),
+                live_evaluation_cap_path=FIT_LIVE_CAP_TXT,
             )
             if fit["accepted"]:
                 fitted_shared = sanitize_config_for_selected_model(fit["fitted_config"])
@@ -1199,7 +1203,8 @@ def main() -> int:
                 f"{weighted_line}"
                 f"Objective improvement: {fit['improvement_percent']:.4g}%\n"
                 f"Optimizer candidate evaluations: {fit['nfev']}; total fitted residual evaluations: {fit['residual_evaluations']} "
-                f"of {shared_raw['least_squares']['max_nfev']} allowed; cap reached: {fit['evaluation_cap_reached']}\n"
+                f"of {fit['max_model_evaluations']} allowed; cap reached: {fit['evaluation_cap_reached']}\n"
+                f"Live cap changes: {fit['evaluation_cap_changes']}; warnings: {fit['evaluation_cap_warnings']}\n"
                 f"Optimizer converged: {fit['success']}; {fit['message']}\n"
                 f"{fit_warning_line}"
                 f"Accepted/applied to shared batch parameters: {fit['accepted']}\n"

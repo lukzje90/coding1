@@ -69,6 +69,7 @@ FIT_CONFIG_JSON = PROJECT_DIR / "least_squares_fitted_inputs.json"
 FIT_APPLY_JSL = PROJECT_DIR / "least_squares_apply_to_ui.jsl"
 FIT_SETTINGS_JSON = PROJECT_DIR / "least_squares_settings.json"
 FIT_HISTORY_CSV = PROJECT_DIR / "least_squares_objective_history.csv"
+FIT_LIVE_CAP_TXT = PROJECT_DIR / "least_squares_evaluation_cap.txt"
 FIT_IMPROVED_CSV = PROJECT_DIR / "least_squares_improved_parameters.csv"
 FIT_IMPROVED_TXT = PROJECT_DIR / "least_squares_improved_parameters.txt"
 
@@ -2593,6 +2594,7 @@ def run_global_least_squares_refinement(
     unlocked_paths: Iterable[str] | None = None,
     max_nfev: int = 60,
     max_model_evaluations: int | None = None,
+    live_evaluation_cap_path: Path | str | None = None,
 ) -> dict[str, Any]:
     """Fit one shared mechanistic parameter vector against selected run profiles.
 
@@ -2736,6 +2738,14 @@ def run_global_least_squares_refinement(
                 f"{len(specs)} unlocked parameters. Select at least {required} to allow "
                 "one complete Jacobian and final verification."
             )
+    live_cap_path = Path(live_evaluation_cap_path) if live_evaluation_cap_path is not None else None
+    if live_cap_path is not None:
+        if max_model_evaluations is None or not 2 <= int(max_model_evaluations) <= 10000:
+            raise ValueError("A live evaluation cap needs an initial model-evaluation cap of 2–10000.")
+        # Starting a new fit replaces the previous run's control value. This
+        # happens before the potentially long initial column evaluation.
+        live_cap_path.parent.mkdir(parents=True, exist_ok=True)
+        live_cap_path.write_text(str(int(max_model_evaluations)) + "\n", encoding="utf-8")
     x0, lo, hi = _encode_initial(specs)
     n_profiles = len(normalized_profiles)
     normalized_objective = first["least_squares"]["objective"] == "NORMALIZED_MSE"
@@ -2783,8 +2793,13 @@ def run_global_least_squares_refinement(
     budget_reached = False
     invalid_trial_vectors: set[bytes] = set()
     timed_out_trial_vectors: set[bytes] = set()
-    optimizer_budget = None if max_model_evaluations is None else int(max_model_evaluations) - 1
-    history_fields = ["evaluation", "elapsed_seconds", "objective", "best_objective", "improvement_percent", "phase", "status"]
+    current_cap = int(max_model_evaluations) if max_model_evaluations is not None else None
+    cap_changes: list[dict[str, Any]] = []
+    cap_warnings: list[str] = []
+    last_cap_text = str(current_cap) if current_cap is not None else ""
+    optimizer_candidate_limit = 10000 if live_cap_path is not None else max(2, int(max_nfev))
+    history[0]["evaluation_cap"] = current_cap if current_cap is not None else ""
+    history_fields = ["evaluation", "elapsed_seconds", "objective", "best_objective", "improvement_percent", "phase", "status", "evaluation_cap"]
     history_path: Path | None = FIT_HISTORY_CSV
     current_probe_label = ""
     history_backup = FIT_HISTORY_CSV.with_name(
@@ -2793,6 +2808,39 @@ def run_global_least_squares_refinement(
     history_logging_disabled = False
     history_write_error: str | None = None
 
+    def refresh_live_cap() -> None:
+        nonlocal current_cap, last_cap_text
+        if live_cap_path is None:
+            return
+        try:
+            raw = live_cap_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError) as exc:
+            message = f"Cap control file could not be read; continuing at {current_cap}: {type(exc).__name__}."
+            if message not in cap_warnings:
+                cap_warnings.append(message)
+            return
+        if raw == last_cap_text:
+            return
+        last_cap_text = raw
+        if not raw.isascii() or not raw.isdecimal() or len(raw) > 5 or not 2 <= int(raw) <= 10000:
+            message = f"Ignored invalid live cap {raw!r}; enter a whole number from 2 to 10000."
+            if message not in cap_warnings:
+                cap_warnings.append(message)
+            return
+        requested = int(raw)
+        # Evaluations already spent cannot be undone. Keep one slot for the
+        # final verification even if the requested value is now lower.
+        applied = max(requested, eval_count + 1)
+        if applied != requested:
+            cap_warnings.append(
+                f"Requested cap {requested} after {eval_count} evaluations; effective cap is {applied} "
+                "to retain final verification.")
+        if applied != current_cap:
+            cap_changes.append({"after_evaluation": eval_count,
+                                "requested_cap": requested, "effective_cap": applied,
+                                "elapsed_seconds": time.perf_counter() - fit_started})
+            current_cap = applied
+
     def write_active(phase: str) -> None:
         label = current_probe_label if phase == "jacobian" else ""
         try:
@@ -2800,6 +2848,9 @@ def run_global_least_squares_refinement(
                 f"Evaluation {eval_count} started {time.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
                 f"Phase: {phase}\n"
                 + (f"Parameter: {label}\n" if label else "")
+                + (f"Current evaluation cap: {current_cap}\n" if current_cap is not None else "")
+                + (f"Cap control file: {live_cap_path}\n" if live_cap_path is not None else "")
+                + (f"Cap warning: {cap_warnings[-1]}\n" if cap_warnings else "")
                 + f"TDM+CPA trial timeout: {first['least_squares']['max_trial_minutes']:g} minutes (0 = off)\n",
                 encoding="utf-8")
         except OSError:
@@ -2850,6 +2901,7 @@ def run_global_least_squares_refinement(
             "improvement_percent": _objective_improvement_percent(initial_obj, best_objective),
             "phase": phase,
             "status": status,
+            "evaluation_cap": current_cap if current_cap is not None else "",
         }
         history.append(row)
         # Normal progress writes append one row; only a locked file triggers
@@ -2860,7 +2912,8 @@ def run_global_least_squares_refinement(
 
     def residual(vector: np.ndarray, phase: str = "optimizer") -> np.ndarray:
         nonlocal eval_count, best_vector, candidate_evaluations
-        if optimizer_budget is not None and eval_count >= optimizer_budget:
+        refresh_live_cap()
+        if current_cap is not None and eval_count >= current_cap - 1:
             raise EvaluationBudgetReached("Selected model-evaluation safety cap reached.")
         eval_count += 1
         if phase == "optimizer":
@@ -2922,7 +2975,7 @@ def run_global_least_squares_refinement(
                 ftol=1e-4,
                 xtol=1e-4,
                 gtol=1e-7,
-                max_nfev=max(2, int(max_nfev)),
+                max_nfev=optimizer_candidate_limit,
             )
         except EvaluationBudgetReached as exc:
             budget_reached = True
@@ -3193,7 +3246,12 @@ def run_global_least_squares_refinement(
         "fit_range_percent": first["least_squares"].get("fit_range_percent", {}),
         "locked_parameter_paths": [p for p in candidate_paths if p not in {s.path for s in specs}],
         "max_nfev": int(max_nfev),
-        "max_model_evaluations": int(max_model_evaluations) if max_model_evaluations is not None else None,
+        "max_model_evaluations": current_cap,
+        "initial_model_evaluation_cap": int(max_model_evaluations) if max_model_evaluations is not None else None,
+        "live_evaluation_cap_file": str(live_cap_path) if live_cap_path is not None else None,
+        "evaluation_cap_changes": cap_changes,
+        "evaluation_cap_warnings": cap_warnings,
+        "optimizer_candidate_limit": optimizer_candidate_limit,
         "max_trial_minutes": float(first["least_squares"]["max_trial_minutes"]),
         "evaluation_cap_reached": budget_reached,
         "composition_profile_metrics": composition_profile_metrics,
@@ -3324,7 +3382,10 @@ def run_global_least_squares_refinement(
     try:
         active_path.write_text(
             f"Least-squares fit completed {time.strftime('%Y-%m-%d %H:%M:%S %Z')}.\n"
-            f"Model residual evaluations: {eval_count}.\n", encoding="utf-8")
+            f"Model residual evaluations: {eval_count}.\n"
+            + (f"Current evaluation cap: {current_cap}.\n" if current_cap is not None else "")
+            + (f"Cap changes: {len(cap_changes)}.\n" if live_cap_path is not None else ""),
+            encoding="utf-8")
     except OSError:
         pass
     FIT_SETTINGS_JSON.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -3335,7 +3396,8 @@ def run_global_least_squares_refinement(
 <p><b>Elapsed fit time:</b> {fit_elapsed_hms} ({fit_elapsed_seconds:.1f} seconds). Measured from loading the selected reference profiles through fitted output preparation.</p>
 <p><b>Mode:</b> {html.escape(mode)}; <b>Profiles:</b> {n_profiles}; <b>Model:</b> {html.escape(first["model"])}</p>
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
-<b>Decision:</b> {acceptance['status']}; <b>Applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Evaluation safety cap:</b> {int(max_model_evaluations) if max_model_evaluations is not None else int(max_nfev)}; <b>Unlocked parameters:</b> {len(specs)}. The model-evaluation cap includes optimizer candidates, finite-difference Jacobian probes, and final verification; the initial reference calculation is logged at evaluation 0.</p>
+<b>Decision:</b> {acceptance['status']}; <b>Applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Evaluation safety cap:</b> {current_cap if current_cap is not None else int(max_nfev)}; <b>Unlocked parameters:</b> {len(specs)}. The model-evaluation cap includes optimizer candidates, finite-difference Jacobian probes, and final verification; the initial reference calculation is logged at evaluation 0.</p>
+<p><b>Live cap control:</b> {html.escape(str(live_cap_path)) if live_cap_path is not None else 'not enabled'}; <b>Changes:</b> {html.escape(json.dumps(cap_changes))}; <b>Warnings:</b> {html.escape('; '.join(cap_warnings) or 'none')}. Edits take effect before the next model evaluation; an evaluation already running cannot be interrupted.</p>
 <p><b>Acceptance checks:</b> {html.escape('; '.join(acceptance['reasons']) or 'All enabled checks passed.')} Bound-after-load minimum {first['least_squares']['minimum_bound_percent_after_load']:.3g}%; elution recovery minimum {first['least_squares']['minimum_elution_recovery_percent']:.3g}% of end-load column inventory. CPA policy: {html.escape(first['least_squares']['physical_acceptance_mode'])}. Candidate parameters are saved for diagnosis and applied to the active model only after all enabled checks pass.</p>
 <p><b>Local Jacobian diagnostics:</b> {html.escape(json.dumps(jac_diagnostics, ensure_ascii=False))}</p>
 {f'<p><b>Fit quality warning:</b> {html.escape(fit_quality_warning)}</p>' if fit_quality_warning else ''}
@@ -3362,6 +3424,11 @@ def run_global_least_squares_refinement(
         "nfev": opt_nfev,
         "residual_evaluations": eval_count,
         "evaluation_cap_reached": budget_reached,
+        "max_model_evaluations": current_cap,
+        "initial_model_evaluation_cap": int(max_model_evaluations) if max_model_evaluations is not None else None,
+        "live_evaluation_cap_file": str(live_cap_path) if live_cap_path is not None else None,
+        "evaluation_cap_changes": cap_changes,
+        "evaluation_cap_warnings": cap_warnings,
         "fit_quality_warning": fit_quality_warning,
         "fit_elapsed_seconds": fit_elapsed_seconds,
         "fit_elapsed_hms": fit_elapsed_hms,

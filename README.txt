@@ -1,4 +1,22 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ad)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ae)
+
+LIVE LSQ EVALUATION CAP (R25ae)
+The LSQ evaluation cap can be changed after a fit starts. JMP waits for the
+fit, so use Windows Explorer to open the extracted model folder and double
+click SET_LSQ_CAP_WHILE_RUNNING.cmd. Enter a whole-number total model-
+evaluation cap from 2 to 10000. The helper edits
+least_squares_evaluation_cap.txt; you can edit that plain-text file directly
+from another program instead. The fit reads it before each next model
+evaluation. Changing the LSQ cap box in the busy JMP window does not change
+the current fit. A running evaluation cannot be interrupted; lowering the
+cap below evaluations already completed cannot undo them, and one final
+verification evaluation is reserved. Increasing the cap after the fit has
+already finished cannot restart it. The active-evaluation text file shows
+the applied cap, and the final fit report/settings record changes and any
+invalid edits. The file is reset to the selected JMP cap at the start of
+each new fit. The mechanistic solver, LSQ objective and parameter locks are
+unchanged. One global residual evaluation simulates all selected run profiles;
+the cap does not count each run-profile simulation separately.
 
 MULTI-STAGE METHOD OPTIMISATION (R25ad)
 In Run / Results, select the goal: recovery, purity, modelled-cycle

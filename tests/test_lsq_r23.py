@@ -376,9 +376,9 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Current Window() << Get Path', launcher)
         self.assertIn('Current Window() << Get File Name', launcher)
         self.assertIn('Get Default Directory()', launcher)
-        self.assertIn('packageMarker = "tdm_r25ad_package.marker"', launcher)
+        self.assertIn('packageMarker = "tdm_r25ae_package.marker"', launcher)
         self.assertIn('File Exists( candidateDir || packageMarker )', launcher)
-        self.assertTrue((ROOT / "tdm_r25ad_package.marker").is_file())
+        self.assertTrue((ROOT / "tdm_r25ae_package.marker").is_file())
         self.assertLess(launcher.index('Get Script Name()'),
                         launcher.index('Current Window() << Get Path'))
         self.assertLess(launcher.index('Current Window() << Get File Name'),
@@ -408,7 +408,8 @@ class RefinementTests(unittest.TestCase):
         self.assertIn('Column(dtLSQRuns, "LSQ_X_Origin")[r] = LSQOriginSelected(slot)', jsl)
         self.assertIn('Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot]', jsl)
         self.assertIn('Safety cap: model evaluations', jsl)
-        self.assertIn('Refinement running. Progress:', jsl)
+        self.assertIn('Refinement running. JMP will respond when it finishes.', jsl)
+        self.assertIn('SET_LSQ_CAP_WHILE_RUNNING.cmd', jsl)
         self.assertNotIn('Set Font Style("Italic")', jsl)
         self.assertIn('condDeadVolumeFitLock', jsl)
         self.assertNotIn('LoadLSQReference(1);', jsl)

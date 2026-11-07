@@ -1398,7 +1398,7 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     If(actionText == "IMPORT_FIT_PARAMETERS", Python Send(importParameterPath, Python Name("tdm_ui_import_parameter_path")));
     If(actionText == "OPTIMISE_METHOD", {method_sends});
     If(actionText == "FIT_LSQ",
-        lsqStatusText << Set Text("Refinement running. Progress: least_squares_objective_history.csv. JMP will respond when the fit finishes.");
+        lsqStatusText << Set Text("Refinement running. JMP will respond when it finishes. To change the cap now, run SET_LSQ_CAP_WHILE_RUNNING.cmd from the extracted model folder; the change applies before the next model evaluation. Progress: least_squares_objective_history.csv.");
         Wait(0.01)
     );
     If(actionText == "PREVIEW_LSQ_ALIGNMENT",
@@ -1691,7 +1691,7 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                 Outline Box("Fit settings", V List Box(
                     H List Box(Text Box("Fit data", << Set Width(200)), lsqModeBox = Combo Box({{"UV chromatogram", "UV + fraction mass%"}}, << Set Width(220), << Set Function(Function({{this}}, UpdateUI())))),
                     H List Box(Button Box("Lock all parameters", SetAllFitLocks("Locked")), Button Box("Unlock all parameters", SetAllFitLocks("Unlocked"))),
-                    Text Box("Set parameter locks on Model Parameters. The safety cap counts model evaluations; progress is saved to least_squares_objective_history.csv.", << Set Wrap(740)),
+                    Text Box("Set parameter locks on Model Parameters. The safety cap counts model evaluations. While JMP is busy, use SET_LSQ_CAP_WHILE_RUNNING.cmd in the extracted model folder to change the cap for the next evaluation. Current progress and cap are saved beside least_squares_objective_history.csv.", << Set Wrap(740)),
                     {_nrow("Safety cap: model evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 320)},
                     {_nrow("TDM–CPA trial timeout [minutes; 0 = off]", "lsqMaxTrialMinutes", cfg['least_squares'].get('max_trial_minutes', 30), 320)},
                     Outline Box("TDM–CPA fit acceptance", << Close(1), V List Box(
