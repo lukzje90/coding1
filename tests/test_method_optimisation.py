@@ -34,6 +34,13 @@ class MethodOptimisationTests(unittest.TestCase):
         self.assertIn('Button Box("Optimise selected run method", SendAndRun("OPTIMISE_METHOD"))', jsl)
         self.assertIn('Python Name("tdm_ui_method_max_trial_minutes")', jsl)
         self.assertIn('Button Box("Import parameters from LSQ JSON", ImportLSQParameters())', jsl)
+        self.assertIn('plw1Mode = Combo Box({"Set point", "Gradient", "Isocratic"}', jsl)
+        self.assertIn('el1Mode = Combo Box({"Set point", "Gradient", "Isocratic"}', jsl)
+        self.assertIn('If(label == "GRADIENT", Return("LINEAR"));', jsl)
+        self.assertIn('If(label == "ISOCRATIC", Return("STEP"));', jsl)
+        self.assertIn('Uppercase(txt) == "STEP", box << Set(3)', jsl)
+        self.assertIn('Column(dtRuns, "PLW1_Mode")[currentRun] = StageModeToken(plw1Mode);', jsl)
+        self.assertIn('Column(dtRuns, "Elution1_Mode")[currentRun] = StageModeToken(el1Mode);', jsl)
         self.assertIn('Save Text File(importStagingFile, Load Text File(importFile));', jsl)
         self.assertIn('Python Send(importStagingFile, Python Name("tdm_ui_import_parameter_path"));', jsl)
         self.assertLess(jsl.index('Save Text File(importStagingFile, Load Text File(importFile));'),

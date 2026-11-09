@@ -281,7 +281,7 @@ def _buffer_panel(prefix: str, title: str) -> str:
 def _step_panel(prefix: str, i: int, title: str) -> str:
     v = f"{prefix}{i}"
     return f'''{v}Panel = Outline Box({_q(title + ' ' + str(i))}, V List Box(
-        H List Box(Text Box("Mode", << Set Width(220)), {v}Mode = Combo Box({{"SET_POINT", "LINEAR", "STEP"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+        H List Box(Text Box("Mode", << Set Width(220)), {v}Mode = Combo Box({{"Set point", "Gradient", "Isocratic"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         H List Box(Text Box("Volume [CV]", << Set Width(220)), {v}CV = Number Edit Box(1, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         H List Box(Text Box("Flow [mL/min]", << Set Width(220)), {v}Flow = Number Edit Box(1, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         {v}StartBRow = H List Box({v}StartBLabel = Text Box("Buffer B set point [%]", << Set Width(220)), {v}StartB = Number Edit Box(0, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
@@ -706,7 +706,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         for i in range(1, max_steps + 1):
             v = f"{varprefix}{i}"
             cols = {
-                "Mode": f"{v}Mode << Get Selected", "CV": f"{v}CV << Get", "Flow_mL_min": f"{v}Flow << Get",
+                "Mode": f"StageModeToken({v}Mode)", "CV": f"{v}CV << Get", "Flow_mL_min": f"{v}Flow << Get",
                 "Chemistry_Control": f"{v}ChemControl << Get Selected", "Start_Percent_B": f"{v}StartB << Get", "End_Percent_B": f"{v}EndB << Get",
                 "Start_Source": f"{v}StartSource << Get Selected", "Start_pH": f"{v}StartPH << Get",
                 "Start_Conductivity_mS_cm": f"{v}StartCond << Get",
@@ -746,7 +746,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
             v = f"{varprefix}{i}"
             process_vis.append(f'''{v}Panel << Visibility(If({countvar} >= {i}, "Visible", "Collapse"));
             {v}ChemPanel << Visibility("Visible");
-            stepMode = {v}Mode << Get Selected;
+            stepMode = StageModeToken({v}Mode);
             stepControl = {v}ChemControl << Get Selected;
             {v}PercentPanel << Visibility(If(stepControl == "BUFFER_B_PERCENT", "Visible", "Collapse"));
             {v}EndpointPanel << Visibility(If(stepControl == "ENDPOINT_CHEMISTRY", "Visible", "Collapse"));
@@ -765,7 +765,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
                 ResolvedStepSalt({v}EndSource, {v}EndCond, {v}EndSalt, {v}EndSaltMode));
             activeStart = If(stepMode == "STEP", endSalt, startSalt);
             activeEnd = If(stepMode == "LINEAR", endSalt, activeStart);
-            {v}BlendDerived << Set Text("Pump salt used (" || Char(stepMode) || "): " || Char(activeStart) ||
+            {v}BlendDerived << Set Text("Pump salt used (" || Char({v}Mode << Get Selected) || "): " || Char(activeStart) ||
                 If(stepMode == "LINEAR", " → " || Char(activeEnd), "") || " M" ||
                 If(isLangmuir, "   |   target b_eff: " || Char(TargetLangmuirBEff(activeStart)) ||
                     If(stepMode == "LINEAR", " → " || Char(TargetLangmuirBEff(activeEnd)), "") || " L/g", "") ||
@@ -851,7 +851,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
                 {f'method_{name}{i}_start_B_min << Set(Max(0, v - 20)); method_{name}{i}_start_B_max << Set(Min(100, v + 20));' if name == 'el' else ''});
             {f'''v = {prefix}{i}EndB << Get; If(!Is Missing(v),
                 method_el{i}_end_B_min << Set(Max(0, v - 20)); method_el{i}_end_B_max << Set(Min(100, v + 20));
-                If(Char(el{i}Mode << Get Selected) == "LINEAR",
+                If(StageModeToken(el{i}Mode) == "LINEAR",
                     method_el{i}_B_min << Set(Max(0, v - 20)); method_el{i}_B_max << Set(Min(100, v + 20))));''' if name == 'el' else ''}'''
         for prefix, name, count in (("plw", "plw", MAX_PLW_STEPS), ("el", "el", MAX_ELUTION_STEPS))
         for i in range(1, count+1)
@@ -897,6 +897,12 @@ Column(dtLSQMass, "Unit") << Data Type(Character);
 {mass_numeric_columns}
 SetModeCombo = Function({{box, txt}}, {{}},
     If(Uppercase(txt) == "LINEAR", box << Set(2), Uppercase(txt) == "STEP", box << Set(3), box << Set(1));
+);
+StageModeToken = Function({{box}}, {{label}},
+    label = Uppercase(Char(box << Get Selected));
+    If(label == "GRADIENT", Return("LINEAR"));
+    If(label == "ISOCRATIC", Return("STEP"));
+    Return("SET_POINT");
 );
 SetSourceCombo = Function({{box, txt}}, {{}},
     If(Uppercase(txt) == "BUFFER_A", box << Set(2), Uppercase(txt) == "BUFFER_B", box << Set(3), box << Set(1));
@@ -1645,7 +1651,7 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                     V List Box(
                         H List Box(Text Box("Post-load washes [0-5]", << Set Width(220)), plwCountBox = Combo Box({count_items}, << Set Width(75), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
                         H List Box(Text Box("Elution steps [0-5]", << Set Width(220)), elutionCountBox = Combo Box({count_items}, << Set Width(75), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
-                        Text Box("SET_POINT holds Start %B; LINEAR ramps to End; STEP switches to End.", << Set Wrap(740))
+                        Text Box("Set point holds Start %B; Gradient ramps from Start to End; Isocratic switches to End %B immediately and holds it.", << Set Wrap(740))
                     )
                 ),
                 Spacer Box(Size(1,8)),
@@ -1932,7 +1938,8 @@ def _validate_jsl(jsl: str) -> None:
                 "End_Percent_B": (f"{variable}{i}EndB", "Get"),
             }
             for field, (control, getter) in expected_controls.items():
-                expected = f'Column(dtRuns, "{prefix}{i}_{field}")[currentRun] = {control} << {getter};'
+                value = f'StageModeToken({control})' if field == "Mode" else f'{control} << {getter}'
+                expected = f'Column(dtRuns, "{prefix}{i}_{field}")[currentRun] = {value};'
                 if expected not in jsl:
                     raise ValueError(f"{prefix} {i} {field} is not saved from its current UI control.")
             for control in (f"{variable}{i}CV", f"{variable}{i}Flow"):

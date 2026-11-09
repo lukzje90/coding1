@@ -157,6 +157,8 @@ class AlignmentPreviewTests(unittest.TestCase):
                              Elution_Count=1, Elution1_CV=0.2)
         batch_rows[1].update(Run_Name="Chosen batch run", Load_CV=0.4, PLW_Count=0,
                              Elution_Count=1, Elution1_CV=0.3,
+                             Elution1_Mode="STEP", Elution1_Start_Percent_B="",
+                             Elution1_End_Percent_B=80.0,
                              Time_Steps=50, Axial_Positions=6)
         lsq_row = default_batch_row(1)
         lsq_row.update(Run_Name="Measured profile", Load_CV=2.0, PLW_Count=0,

@@ -2485,10 +2485,16 @@ def write_outputs(
         )) + "</tr>"
         for label, env in result.get("parameter_receipt", {}).get("buffer_chemistry_used", {}).items()
     )
+    def stage_mode_label(row: dict[str, Any]) -> str:
+        if row["kind"] in {"PLW", "ELUTION"}:
+            return {"SET_POINT": "Set point", "LINEAR": "Gradient",
+                    "STEP": "Isocratic"}.get(row["mode"], row["mode"])
+        return row["mode"]
+
     stage_rows = "".join(
         "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in (
             row["marker"], row["name"], f'{row["start_CV"]:g}', f'{row["end_CV"]:g}',
-            f'{row["duration_CV"]:g}', row["mode"], f'{row["flow_mL_min"]:g}',
+            f'{row["duration_CV"]:g}', stage_mode_label(row), f'{row["flow_mL_min"]:g}',
             row["chemistry_control"],
             "—" if row["start_percent_B"] is None else f'{float(row["start_percent_B"]):g}% ',
             "—" if row["end_percent_B"] is None else f'{float(row["end_percent_B"]):g}% ',

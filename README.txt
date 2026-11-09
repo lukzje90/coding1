@@ -1,4 +1,16 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ag)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ah)
+
+STEP ELUTION IN LSQ PREVIEW AND FIT (R25ah)
+STEP elution uses the End Buffer B setpoint immediately. Its hidden Start
+Buffer B field can be blank in a saved Normal batch run or independent LSQ
+recipe; LSQ attachment, alignment preview and fitting now validate only the
+active end setpoint. SET_POINT likewise needs only Start, while LINEAR still
+needs both endpoints. The same rule applies to explicit endpoint chemistry.
+The solver and process program are unchanged.
+In the JMP PLW and elution mode menus and the chromatogram result table,
+LINEAR is shown as Gradient and STEP as Isocratic. Set point remains the
+first choice. Saved recipe files retain the existing mode tokens, so older
+runs load with the same behavior and no conversion is needed.
 
 LSQ PARAMETER IMPORT FROM JMP PICKER (R25ag)
 On Model Parameters, select Import parameters from LSQ JSON and pick the

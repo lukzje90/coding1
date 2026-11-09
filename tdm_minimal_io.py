@@ -16,7 +16,7 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-11-09-R25AG-LSQ-IMPORT-LOCAL-COPY"
+RESULT_GUARD_BUILD = "2026-11-09-R25AH-STEP-ELUTION-VALIDATION"
 CPA_AREA_M_INV_PER_M2_ML_SOLID = 1_000_000.0
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
@@ -1337,13 +1337,16 @@ def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
             _number(step.get("CV"), f"{label} {i} volume [CV]", errors, positive=True)
             _number(step.get("flow_mL_min"), f"{label} {i} flow [mL/min]", errors, positive=True)
             if needs_process_salt:
+                # The UI exposes only the setpoint a stage actually uses:
+                # SET_POINT holds start, STEP switches to end, LINEAR uses both.
+                sides = ("start", "end") if mode == "LINEAR" else (("end",) if mode == "STEP" else ("start",))
                 control = _chemistry_control(step.get("chemistry_control"))
                 if control == "BUFFER_B_PERCENT":
                     used_buffers.update({"BUFFER_A", "BUFFER_B"})
-                    for side in ("start", "end"):
+                    for side in sides:
                         _number(step.get(f"{side}_percent_B"), f"{label} {i} {side} Buffer B [%]", errors, lower=0, upper=100)
                 else:
-                    for side in ("start", "end"):
+                    for side in sides:
                         src = _chemistry_source(step.get(f"{side}_source"))
                         if src == "DIRECT":
                             if uses_cpa(model) or uses_wang(model):
