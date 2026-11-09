@@ -463,11 +463,9 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
         if selected not in {"Stop on convergence", "Use full cap"}:
             raise ValueError("Choose whether LSQ stops on convergence or uses the full cap.")
         config["least_squares"]["force_full_evaluation_budget"] = selected == "Use full cap"
-    if "tdm_ui_lsq_max_trial_minutes" in globals():
-        minutes = _num("tdm_ui_lsq_max_trial_minutes")
-        if minutes is None or not 0 <= minutes <= 240:
-            raise ValueError("Trial timeout must be 0–240 minutes; 0 disables the timeout.")
-        config["least_squares"]["max_trial_minutes"] = minutes
+    # The JMP fit has no per-trial deadline; its model-evaluation cap remains
+    # the user-facing stopping limit. Ignore stale Python globals from an older UI.
+    config["least_squares"]["max_trial_minutes"] = 0.0
     locks = _lsq_unlocked_paths_from_jmp()
     if locks is not None:
         config["least_squares"]["unlocked_paths"] = sorted(locks)
@@ -966,7 +964,7 @@ def main() -> int:
                        "max_run_time_min": _num("tdm_ui_method_max_run_time_min"),
                        "max_buffer_volume_L": _num("tdm_ui_method_max_buffer_volume_L"),
                        "max_evaluations": _num("tdm_ui_method_max_evaluations"),
-                       "max_trial_minutes": _num("tdm_ui_method_max_trial_minutes")}
+                       "max_trial_minutes": 0.0}
             caps = {}
             for i, comp in enumerate(active_components(current_effective)[1:], start=1):
                 value = _num(f"tdm_ui_method_impurity_{i}_cap")
@@ -1157,8 +1155,6 @@ def main() -> int:
                 f"{shared_raw['least_squares']['max_nfev']} model-evaluation safety cap (including Jacobian probes and final verification); "
                 f"full-budget restarts: {bool(shared_raw['least_squares']['force_full_evaluation_budget'])}; "
                 "serial model evaluations.\n"
-                f"TDM+CPA trial timeout: {shared_raw['least_squares']['max_trial_minutes']:g} minutes "
-                "(0 means off).\n"
                 f"Each numerical Jacobian needs about {len(profiles) * (len(fitted_paths) + 1)} column solves. "
                 f"Progress: {FIT_HISTORY_CSV}; current probe: "
                 f"{FIT_HISTORY_CSV.with_name('least_squares_active_evaluation.txt')}. "

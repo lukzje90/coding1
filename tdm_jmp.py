@@ -280,8 +280,13 @@ def _buffer_panel(prefix: str, title: str) -> str:
 
 def _step_panel(prefix: str, i: int, title: str) -> str:
     v = f"{prefix}{i}"
+    mode_control = (f'H List Box(Text Box("Mode", << Set Width(220)), {v}Mode = '
+                    'Combo Box({"Set point", "Gradient", "Isocratic"}, << Set Width(125), '
+                    '<< Set Function(Function({this}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),'
+                    if prefix == "el" else
+                    'H List Box(Text Box("Mode", << Set Width(220)), Text Box("Set point")),')
     return f'''{v}Panel = Outline Box({_q(title + ' ' + str(i))}, V List Box(
-        H List Box(Text Box("Mode", << Set Width(220)), {v}Mode = Combo Box({{"Set point", "Gradient", "Isocratic"}}, << Set Width(125), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
+        {mode_control}
         H List Box(Text Box("Volume [CV]", << Set Width(220)), {v}CV = Number Edit Box(1, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         H List Box(Text Box("Flow [mL/min]", << Set Width(220)), {v}Flow = Number Edit Box(1, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
         {v}StartBRow = H List Box({v}StartBLabel = Text Box("Buffer B set point [%]", << Set Width(220)), {v}StartB = Number Edit Box(0, 8, << Set Width(92), << Set Function(Function({{this}}, If(!isLoading, SaveCurrentRun(); UpdateUI()))))),
@@ -502,7 +507,6 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         'Python Send(lsqBaseline << Get, Python Name("tdm_ui_lsq_detector_baseline"));',
         'Python Send(lsqMaxEvaluations << Get, Python Name("tdm_ui_lsq_max_nfev"));',
         'Python Send(lsqFullBudget << Get Selected, Python Name("tdm_ui_lsq_full_budget"));',
-        'Python Send(lsqMaxTrialMinutes << Get, Python Name("tdm_ui_lsq_max_trial_minutes"));',
         'Python Send(lsqPhysicalAcceptance << Get Selected, Python Name("tdm_ui_lsq_physical_acceptance_mode"));',
         'Python Send(lsqMinBound << Get, Python Name("tdm_ui_lsq_min_bound_percent"));',
         'Python Send(lsqMinRecovery << Get, Python Name("tdm_ui_lsq_min_recovery_percent"));',
@@ -706,7 +710,8 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         for i in range(1, max_steps + 1):
             v = f"{varprefix}{i}"
             cols = {
-                "Mode": f"StageModeToken({v}Mode)", "CV": f"{v}CV << Get", "Flow_mL_min": f"{v}Flow << Get",
+                "Mode": (f"StageModeToken({v}Mode)" if prefix == "Elution" else '"SET_POINT"'),
+                "CV": f"{v}CV << Get", "Flow_mL_min": f"{v}Flow << Get",
                 "Chemistry_Control": f"{v}ChemControl << Get Selected", "Start_Percent_B": f"{v}StartB << Get", "End_Percent_B": f"{v}EndB << Get",
                 "Start_Source": f"{v}StartSource << Get Selected", "Start_pH": f"{v}StartPH << Get",
                 "Start_Conductivity_mS_cm": f"{v}StartCond << Get",
@@ -716,6 +721,15 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
                 "Start_Salt_Input_Mode": f"{v}StartSaltMode << Get Selected",
                 "End_Salt_Input_Mode": f"{v}EndSaltMode << Get Selected",
             }
+            if prefix == "PLW":
+                cols.update({
+                    "End_Percent_B": f"{v}StartB << Get",
+                    "End_Source": f"{v}StartSource << Get Selected",
+                    "End_pH": f"{v}StartPH << Get",
+                    "End_Conductivity_mS_cm": f"{v}StartCond << Get",
+                    "End_Salt_M": f"{v}StartSalt << Get",
+                    "End_Salt_Input_Mode": f"{v}StartSaltMode << Get Selected",
+                })
             for suffix, expr in cols.items():
                 col = f"{prefix}{i}_{suffix}"
                 copy_cols.append(col)
@@ -725,8 +739,10 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
                     f'{v}{side}Salt << Set(Column(dtRuns, {_q(prefix+str(i)+"_"+side+"_Salt_M")})[currentRun]);',
                     f'{v}{side}SaltMode << Set(If(Uppercase(Char(Column(dtRuns, {_q(prefix+str(i)+"_"+side+"_Salt_Input_Mode")})[currentRun])) == "SALT_M", 2, 1));',
                 ]
+            if prefix == "Elution":
+                load_run_lines.append(
+                    f'SetModeCombo({v}Mode, Char(Column(dtRuns, {_q(prefix+str(i)+"_Mode")})[currentRun]));')
             load_run_lines += [
-                f'SetModeCombo({v}Mode, Char(Column(dtRuns, {_q(prefix+str(i)+"_Mode")})[currentRun]));',
                 f'{v}CV << Set(Column(dtRuns, {_q(prefix+str(i)+"_CV")})[currentRun]);',
                 f'{v}Flow << Set(Column(dtRuns, {_q(prefix+str(i)+"_Flow_mL_min")})[currentRun]);',
                 f'If(Uppercase(Char(Column(dtRuns, {_q(prefix+str(i)+"_Chemistry_Control")})[currentRun])) == "ENDPOINT_CHEMISTRY", {v}ChemControl << Set(2), {v}ChemControl << Set(1));',
@@ -744,9 +760,11 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     for prefix, max_steps, varprefix, countvar in (("PLW", MAX_PLW_STEPS, "plw", "plwCount"), ("Elution", MAX_ELUTION_STEPS, "el", "elutionCount")):
         for i in range(1, max_steps + 1):
             v = f"{varprefix}{i}"
+            mode_expr = '"SET_POINT"' if prefix == "PLW" else f"StageModeToken({v}Mode)"
+            mode_label = '"Set point"' if prefix == "PLW" else f"Char({v}Mode << Get Selected)"
             process_vis.append(f'''{v}Panel << Visibility(If({countvar} >= {i}, "Visible", "Collapse"));
             {v}ChemPanel << Visibility("Visible");
-            stepMode = StageModeToken({v}Mode);
+            stepMode = {mode_expr};
             stepControl = {v}ChemControl << Get Selected;
             {v}PercentPanel << Visibility(If(stepControl == "BUFFER_B_PERCENT", "Visible", "Collapse"));
             {v}EndpointPanel << Visibility(If(stepControl == "ENDPOINT_CHEMISTRY", "Visible", "Collapse"));
@@ -765,7 +783,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
                 ResolvedStepSalt({v}EndSource, {v}EndCond, {v}EndSalt, {v}EndSaltMode));
             activeStart = If(stepMode == "STEP", endSalt, startSalt);
             activeEnd = If(stepMode == "LINEAR", endSalt, activeStart);
-            {v}BlendDerived << Set Text("Pump salt used (" || Char({v}Mode << Get Selected) || "): " || Char(activeStart) ||
+            {v}BlendDerived << Set Text("Pump salt used (" || {mode_label} || "): " || Char(activeStart) ||
                 If(stepMode == "LINEAR", " → " || Char(activeEnd), "") || " M" ||
                 If(isLangmuir, "   |   target b_eff: " || Char(TargetLangmuirBEff(activeStart)) ||
                     If(stepMode == "LINEAR", " → " || Char(TargetLangmuirBEff(activeEnd)), "") || " L/g", "") ||
@@ -831,7 +849,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     )
     method_sends += "\n    " + "\n    ".join(
         f'Python Send(method_{name} << Get, Python Name("tdm_ui_method_{name}"));'
-        for name in ("min_purity_percent", "max_pool_volume_mL", "max_evaluations", "max_trial_minutes",
+        for name in ("min_purity_percent", "max_pool_volume_mL", "max_evaluations",
                      "min_recovery_percent", "min_product_mass_g", "max_run_time_min", "max_buffer_volume_L",
                      "max_pressure_bar", "reference_pressure_bar", "reference_flow_mL_min")
     )
@@ -1723,7 +1741,6 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                     {_nrow("Safety cap: model evaluations [2–10000]", "lsqMaxEvaluations", cfg['least_squares'].get('max_nfev', 120), 320)},
                     H List Box(Text Box("Stopping policy", << Set Width(320)), lsqFullBudget = Combo Box({{"Stop on convergence", "Use full cap"}}, << Set({2 if cfg['least_squares'].get('force_full_evaluation_budget') else 1}), << Set Width(210))),
                     Text Box("Use full cap continues with bounded LSQ restarts after local convergence and retains the best tested parameters. It may take much longer; the cap still reserves one final verification. Set Stop on convergence for the previous behavior.", << Set Wrap(740)),
-                    {_nrow("TDM–CPA trial timeout [minutes; 0 = off]", "lsqMaxTrialMinutes", cfg['least_squares'].get('max_trial_minutes', 30), 320)},
                     Outline Box("TDM–CPA fit acceptance", << Close(1), V List Box(
                         H List Box(Text Box("Physical check", << Set Width(240)), lsqPhysicalAcceptance = Combo Box({{"Require bind + elute", "Allow flow-through fit"}}, << Set({1 if cfg['least_squares']['physical_acceptance_mode']=='REQUIRE_BIND_ELUTE' else 2}), << Set Width(250))),
                         {_nrow("Minimum target bound after load [%]", "lsqMinBound", cfg['least_squares']['minimum_bound_percent_after_load'], 240)},
@@ -1767,7 +1784,6 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                     {_nrow("Maximum modelled cycle time [min; blank = off]", "method_max_run_time_min", None, 290)},
                     {_nrow("Maximum wash + elution buffer [L; blank = off]", "method_max_buffer_volume_L", None, 290)},
                     {_nrow("Search evaluation cap [2–1000]", "method_max_evaluations", 30, 290)},
-                    {_nrow("TDM–CPA trial timeout [minutes; 0 = off]", "method_max_trial_minutes", 30, 290)},
                     Text Box("Maximum species mass% in pool (blank disables a cap). Match impurity order in Model Parameters.", << Set Wrap(740)),
                     {', '.join(_nrow(f'Impurity {i} maximum mass% in pool', f'method_impurity_{i}_cap', 5, 290) for i in range(1, MAX_IMPURITIES + 1))},
                     Text Box("Pressure is optional. Enter all three values to constrain it using a flow-scaled estimate from a measured pressure at the same column and liquid.", << Set Wrap(740)),
@@ -1935,10 +1951,10 @@ def _validate_jsl(jsl: str) -> None:
                 "Flow_mL_min": (f"{variable}{i}Flow", "Get"),
                 "Chemistry_Control": (f"{variable}{i}ChemControl", "Get Selected"),
                 "Start_Percent_B": (f"{variable}{i}StartB", "Get"),
-                "End_Percent_B": (f"{variable}{i}EndB", "Get"),
+                "End_Percent_B": (f"{variable}{i}{'Start' if prefix == 'PLW' else 'End'}B", "Get"),
             }
             for field, (control, getter) in expected_controls.items():
-                value = f'StageModeToken({control})' if field == "Mode" else f'{control} << {getter}'
+                value = ('"SET_POINT"' if prefix == "PLW" else f'StageModeToken({control})') if field == "Mode" else f'{control} << {getter}'
                 expected = f'Column(dtRuns, "{prefix}{i}_{field}")[currentRun] = {value};'
                 if expected not in jsl:
                     raise ValueError(f"{prefix} {i} {field} is not saved from its current UI control.")
@@ -1950,7 +1966,8 @@ def _validate_jsl(jsl: str) -> None:
                 if callback_fragment not in jsl:
                     raise ValueError(f"{prefix} {i} {control} must save on numeric edit commit.")
             for control in (f"{variable}{i}StartSource", f"{variable}{i}EndSource"):
-                if f"{control} << Get Selected" not in jsl:
+                saved_control = (f"{variable}{i}StartSource" if prefix == "PLW" else control)
+                if f"{saved_control} << Get Selected" not in jsl:
                     raise ValueError(f"{prefix} {i} source Combo Box must be read as selected text.")
                 if f"{control} << Get()" in jsl:
                     raise ValueError(f"{prefix} {i} source Combo Box is incorrectly read as an item index.")

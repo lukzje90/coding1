@@ -16,7 +16,7 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-11-09-R25AH-STEP-ELUTION-VALIDATION"
+RESULT_GUARD_BUILD = "2026-11-09-R25AI-FIXED-PLW-NO-TRIAL-TIMEOUT"
 CPA_AREA_M_INV_PER_M2_ML_SOLID = 1_000_000.0
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
@@ -202,7 +202,7 @@ def blank_config() -> dict[str, Any]:
         "system": system_defaults(),
         "least_squares": {"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
                           "force_full_evaluation_budget": False,
-                          "max_trial_minutes": 30.0,
+                          "max_trial_minutes": 0.0,
                           "unlocked_paths": None, "selected_run_numbers": None, "fit_range_percent": {},
                           "physical_acceptance_mode": "REQUIRE_BIND_ELUTE",
                           "minimum_bound_percent_after_load": 5.0,
@@ -1439,6 +1439,27 @@ def _migrate_row_salt_inputs(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _plw_setpoint_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep saved washes fixed at one %B or explicit chemistry setpoint.
+
+    Older LINEAR washes keep their Start endpoint; older STEP washes keep their
+    End endpoint. Mirror that chosen endpoint into both stored sides so the
+    report and any later save agree with the fixed wash actually simulated.
+    """
+    fixed = dict(row)
+    endpoint_fields = ("Percent_B", "Source", "pH", "Salt_M",
+                       "Conductivity_mS_cm", "Salt_Input_Mode")
+    for i in range(1, MAX_PLW_STEPS + 1):
+        prefix = f"PLW{i}"
+        side = "End" if str(fixed.get(f"{prefix}_Mode") or "SET_POINT").upper() == "STEP" else "Start"
+        for field in endpoint_fields:
+            value = fixed.get(f"{prefix}_{side}_{field}")
+            fixed[f"{prefix}_Start_{field}"] = value
+            fixed[f"{prefix}_End_{field}"] = value
+        fixed[f"{prefix}_Mode"] = "SET_POINT"
+    return fixed
+
+
 def batch_run_fields() -> list[str]:
     fields = [
         "Run_Number", "Run_Name", "LSQ_Chromatogram_CSV", "LSQ_Weight", "LSQ_Sheet", "LSQ_X_Column", "LSQ_Signal_Column", "LSQ_Conductivity_Fit", "LSQ_Conductivity_Column", "LSQ_X_Unit", "LSQ_X_Origin", "LSQ_Model_Source", "LSQ_Model_Run_Number", "Load_Flow_mL_min", "Feed_Concentration_mg_mL",
@@ -1679,7 +1700,7 @@ def ensure_batch_runs_csv(path: Path | str = BATCH_RUNS_CSV) -> Path:
                         base[f"{prefix}{i}_End_Percent_B"] = 100.0 if es == "BUFFER_B" else 0.0
                     else:
                         base[control_col] = "ENDPOINT_CHEMISTRY"
-        rows.append(base)
+        rows.append(_plw_setpoint_row(base))
     _write_csv_atomically(p, fields, rows, skip_unchanged=True)
     return p
 
@@ -1700,7 +1721,7 @@ def save_batch_rows(rows: list[dict[str, Any]], path: Path | str = BATCH_RUNS_CS
         if index < len(rows):
             row.update({key: value for key, value in _migrate_row_salt_inputs(rows[index]).items() if key in fields})
         row["Run_Number"] = index + 1
-        normalized.append(row)
+        normalized.append(_plw_setpoint_row(row))
     _write_csv_atomically(p, fields, normalized)
     return p
 
@@ -1819,6 +1840,7 @@ def _as_int(raw: Any, default: int = 0) -> int:
 
 
 def batch_row_to_run_config(row: dict[str, Any]) -> dict[str, Any]:
+    row = _plw_setpoint_row(row)
     cfg = blank_config()
     cfg["column"]["flow_mL_min"] = _as_float(row.get("Load_Flow_mL_min"))
     cfg["feed"]["total_concentration_mg_mL"] = _as_float(row.get("Feed_Concentration_mg_mL"))

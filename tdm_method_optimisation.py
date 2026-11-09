@@ -205,7 +205,7 @@ def _check_options(config: dict[str, Any], options: dict[str, Any]) -> tuple[np.
         min_purity = float(options["min_purity_percent"])
         max_pool_volume = float(options["max_pool_volume_mL"])
         raw_cap = float(options.get("max_evaluations", 30))
-        timeout = float(options.get("max_trial_minutes", 30))
+        timeout = float(options.get("max_trial_minutes", 0))
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("Enter numeric minimum purity, maximum pool volume, evaluation cap and trial timeout.") from exc
     if not math.isfinite(min_purity) or min_purity <= 0:
@@ -339,8 +339,8 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *,
                     solve_count += 1
                     evaluation_id = solve_count
                     new_simulation = True
-                    deadline = (time.monotonic() + 60 * float(options.get("max_trial_minutes", 30))
-                                if float(options.get("max_trial_minutes", 30)) > 0 else None)
+                    deadline = (time.monotonic() + 60 * float(options.get("max_trial_minutes", 0))
+                                if float(options.get("max_trial_minutes", 0)) > 0 else None)
                     try:
                         result = (simulate(candidate, solver_deadline=deadline)
                                   if simulator is simulate else simulator(candidate))
@@ -506,7 +506,7 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *,
         "pool_screening_grid_size": 17,
         "pool_screening_candidates_added": sum(v["phase"] == "pool_screen" for v in cache.values()),
         "local_starts_attempted": local_starts_attempted,
-        "max_trial_minutes_TDM_CPA": float(options.get("max_trial_minutes", 30)),
+        "max_trial_minutes_TDM_CPA": float(options.get("max_trial_minutes", 0)),
         "evaluation_cap": cap, "evaluation_cap_reached": cap_reached,
         "search_status": search_status, "local_search": local_status, "best_feasible": best is not None,
         "retained_full_simulations": len({id(result) for _, result, _ in simulation_cache.values()
@@ -617,8 +617,8 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *,
                         robustness_calls += 1
                         simulated = True
                     varied_result = (result if varied_config is None else
-                                     (simulate(varied_config, solver_deadline=(time.monotonic() + 60 * float(options.get("max_trial_minutes", 30))
-                                                                         if float(options.get("max_trial_minutes", 30)) > 0 else None))
+                                     (simulate(varied_config, solver_deadline=(time.monotonic() + 60 * float(options.get("max_trial_minutes", 0))
+                                                                         if float(options.get("max_trial_minutes", 0)) > 0 else None))
                                       if simulator is simulate else simulator(varied_config)))
                     varied_metrics = _metrics(varied_result, varied_config or _recipe(config, varied), varied, options)
                     robustness.append({"variation": name, "direction": sign, "magnitude": scale,

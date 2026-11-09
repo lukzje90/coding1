@@ -2797,8 +2797,7 @@ def run_global_least_squares_refinement(
     active_path = FIT_HISTORY_CSV.with_name("least_squares_active_evaluation.txt")
     try:
         active_path.write_text(
-            f"Initial model evaluation started {time.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-            f"TDM+CPA trial timeout: {first['least_squares']['max_trial_minutes']:g} minutes (0 = off)\n",
+            f"Initial model evaluation started {time.strftime('%Y-%m-%d %H:%M:%S %Z')}\n",
             encoding="utf-8")
     except OSError:
         pass
@@ -2878,8 +2877,7 @@ def run_global_least_squares_refinement(
                 + (f"Parameter: {label}\n" if label else "")
                 + (f"Current evaluation cap: {current_cap}\n" if current_cap is not None else "")
                 + (f"Cap control file: {live_cap_path}\n" if live_cap_path is not None else "")
-                + (f"Cap warning: {cap_warnings[-1]}\n" if cap_warnings else "")
-                + f"TDM+CPA trial timeout: {first['least_squares']['max_trial_minutes']:g} minutes (0 = off)\n",
+                + (f"Cap warning: {cap_warnings[-1]}\n" if cap_warnings else ""),
                 encoding="utf-8")
         except OSError:
             pass  # Progress I/O cannot invalidate a solver evaluation.

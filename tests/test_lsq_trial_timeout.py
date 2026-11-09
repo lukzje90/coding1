@@ -18,20 +18,15 @@ from verify_model import make_config
 
 
 class TrialTimeoutTests(unittest.TestCase):
-    def test_jmp_timeout_is_adjustable_and_validated(self):
+    def test_jmp_fit_and_method_search_have_no_trial_timeout_control(self):
         jsl = build_jsl()
-        self.assertIn('Python Send(lsqMaxTrialMinutes << Get, Python Name("tdm_ui_lsq_max_trial_minutes"));', jsl)
+        self.assertNotIn("lsqMaxTrialMinutes", jsl)
+        self.assertNotIn("method_max_trial_minutes", jsl)
         with patch.dict(tdm_bridge.__dict__, {"tdm_ui_lsq_max_trial_minutes": 25.0}):
             cfg = tdm_bridge.build_shared_config_from_jmp()
-        self.assertEqual(cfg["least_squares"]["max_trial_minutes"], 25.0)
+        self.assertEqual(cfg["least_squares"]["max_trial_minutes"], 0.0)
         complete = make_config(MODEL_TDM_CPA, 0, multistep=False)
-        complete["least_squares"]["max_trial_minutes"] = 25.0
         self.assertFalse(validate_config(complete, strict=True))
-        for invalid in (-1, 241, None):
-            with self.subTest(invalid=invalid), patch.dict(
-                    tdm_bridge.__dict__, {"tdm_ui_lsq_max_trial_minutes": invalid}):
-                with self.assertRaisesRegex(ValueError, "Trial timeout must be"):
-                    tdm_bridge.build_shared_config_from_jmp()
 
     def test_deadline_interrupts_both_tdm_cpa_solver_stages_only_when_requested(self):
         cfg = make_config(MODEL_TDM_CPA, 0, multistep=False)

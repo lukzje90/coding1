@@ -117,11 +117,15 @@ def _check_generated_contract(config: dict) -> dict:
     process_schema = schema - lsq_association_fields
     saved = set(re.findall(r'Column\(dtRuns,\s*"([^"]+)"\)\[currentRun\]\s*=', jsl))
     loaded = set(re.findall(r'Column\(dtRuns,\s*"([^"]+)"\)\[currentRun\]\)', jsl))
+    fixed_plw_modes = {f"PLW{i}_Mode" for i in range(1, 6)}
     # Run_Number is assigned from the selected row index, rather than read back.
     if process_schema - saved:
         raise AssertionError(f"JMP fields not saved to the run table: {sorted(process_schema - saved)}")
-    if (process_schema - {"Run_Number"}) - loaded:
-        raise AssertionError(f"JMP fields not restored from the run table: {sorted((process_schema - {'Run_Number'}) - loaded)}")
+    for field in fixed_plw_modes:
+        if f'Column(dtRuns, "{field}")[currentRun] = "SET_POINT";' not in jsl:
+            raise AssertionError(f"PLW mode must be saved as a fixed setpoint: {field}")
+    if (process_schema - {"Run_Number"} - fixed_plw_modes) - loaded:
+        raise AssertionError(f"JMP fields not restored from the run table: {sorted((process_schema - {'Run_Number'} - fixed_plw_modes) - loaded)}")
     if any(f'Column(dtLSQRuns, "{field}")[r] =' not in jsl for field in lsq_association_fields):
         raise AssertionError("An LSQ association field is not saved with its profile")
     if not re.search(r"SaveCurrentRun\(\);\s*UpdateLSQRunSummary\(\);\s*SendSharedModel\(\);", jsl):
@@ -131,7 +135,7 @@ def _check_generated_contract(config: dict) -> dict:
     if "loadSaturationStatus << Set Text" not in jsl or "Above saturation: protein can break through" not in jsl:
         raise AssertionError("The load must show stationary-phase saturation and overload in JMP")
     return {"generated_python_send_names": len(sent_names), "saved_run_fields": len(schema),
-            "restored_run_fields": len(schema - {"Run_Number"})}
+            "restored_run_fields": len(schema - {"Run_Number"} - fixed_plw_modes)}
 
 
 def _run_row() -> dict:

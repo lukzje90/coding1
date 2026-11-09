@@ -1,4 +1,14 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ah)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ai)
+
+FIXED POST-LOAD WASHES AND NO TRIAL TIMEOUT (R25ai)
+Every PLW now has one fixed Buffer B setpoint. Its mode selector is removed;
+elution mode choices remain available. Existing PLW gradients become fixed at
+their Start %B, and existing PLW STEP washes become fixed at their End %B.
+Explicit chemistry uses the corresponding active endpoint. The selected wash
+chemistry is mirrored into the hidden endpoint fields when saved. The LSQ and
+method-optimisation TDM+CPA trial-timeout controls are removed and their
+user-facing runs have no per-trial deadline. The LSQ model-evaluation cap and
+method search cap still apply. This does not change the CPA equations.
 
 STEP ELUTION IN LSQ PREVIEW AND FIT (R25ah)
 STEP elution uses the End Buffer B setpoint immediately. Its hidden Start
@@ -7,7 +17,7 @@ recipe; LSQ attachment, alignment preview and fitting now validate only the
 active end setpoint. SET_POINT likewise needs only Start, while LINEAR still
 needs both endpoints. The same rule applies to explicit endpoint chemistry.
 The solver and process program are unchanged.
-In the JMP PLW and elution mode menus and the chromatogram result table,
+In the JMP elution mode menu and the chromatogram result table,
 LINEAR is shown as Gradient and STEP as Isocratic. Set point remains the
 first choice. Saved recipe files retain the existing mode tokens, so older
 runs load with the same behavior and no conversion is needed.
@@ -33,7 +43,7 @@ reserves one evaluation for final verification. The history CSV records the
 local search number and the settings/report list each search and its outcome.
 The cap still counts global residual evaluations across all selected run
 profiles; it is not a time limit. A live cap change made with the helper below
-also applies to full-budget mode. Solving failures or a trial timeout may stop
+also applies to full-budget mode. Solving failures may stop
 a fit early, and using the full cap does not establish a global optimum.
 This policy must be selected before the fit starts; it cannot be switched for
 an already running fit.
@@ -135,7 +145,7 @@ The pressure cap is optional and needs a measured reference pressure and flow;
 it uses a linear flow-scaled estimate for the same bed and liquid. If omitted,
 pressure is explicitly reported as unconstrained. A bounded Latin-hypercube
 exploration is followed by SLSQP local searches, subject to a hard evaluation
-cap and a TDM–CPA trial timeout. Failed simulations receive penalties and remain in evaluation_history.csv.
+cap. Failed simulations receive penalties and remain in evaluation_history.csv.
 Pool masses integrate column outlet species concentration over collected
 volume, before UV detector delay. The best observed feasible candidate, full recipe JSON, chromatogram, pool
 composition, constraint margins and local robustness are written under

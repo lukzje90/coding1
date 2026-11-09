@@ -227,7 +227,7 @@ def _validate(config: dict[str, Any], options: dict[str, Any]) -> tuple[tuple[st
         if float(options["reference_pressure_bar"])*lower[1]/float(options["reference_flow_mL_min"]) > float(options["max_pressure_bar"]):
             raise ValueError("Every permitted flow exceeds the pressure cap estimate.")
     cap = float(options.get("max_evaluations", 30))
-    timeout = float(options.get("max_trial_minutes", 30))
+    timeout = float(options.get("max_trial_minutes", 0))
     if not math.isfinite(cap) or cap != int(cap) or not 2 <= cap <= 1000:
         raise ValueError("Evaluation cap must be an integer from 2 to 1000.")
     if not math.isfinite(timeout) or timeout < 0:
@@ -345,8 +345,8 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
                     solve_count += 1
                     eval_id = solve_count
                     new = True
-                    deadline = (time.monotonic()+60*float(options.get("max_trial_minutes", 30))
-                                if float(options.get("max_trial_minutes", 30)) > 0 else None)
+                    deadline = (time.monotonic()+60*float(options.get("max_trial_minutes", 0))
+                                if float(options.get("max_trial_minutes", 0)) > 0 else None)
                     try:
                         result = (simulate(candidate, solver_deadline=deadline) if simulator is simulate
                                   else simulator(candidate))
@@ -564,8 +564,8 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
                                 process[field] *= 1 + direction*scale
                     if simulated:
                         robustness_calls += 1
-                        deadline = (time.monotonic()+60*float(options.get("max_trial_minutes", 30))
-                                    if float(options.get("max_trial_minutes", 30)) > 0 else None)
+                        deadline = (time.monotonic()+60*float(options.get("max_trial_minutes", 0))
+                                    if float(options.get("max_trial_minutes", 0)) > 0 else None)
                         varied_result = (simulate(varied_config, solver_deadline=deadline)
                                          if simulator is simulate else simulator(varied_config))
                     vm = _metrics(varied_result, varied_config, varied, options)
