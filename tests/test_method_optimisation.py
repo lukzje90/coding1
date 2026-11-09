@@ -34,6 +34,10 @@ class MethodOptimisationTests(unittest.TestCase):
         self.assertIn('Button Box("Optimise selected run method", SendAndRun("OPTIMISE_METHOD"))', jsl)
         self.assertIn('Python Name("tdm_ui_method_max_trial_minutes")', jsl)
         self.assertIn('Button Box("Import parameters from LSQ JSON", ImportLSQParameters())', jsl)
+        self.assertIn('Save Text File(importStagingFile, Load Text File(importFile));', jsl)
+        self.assertIn('Python Send(importStagingFile, Python Name("tdm_ui_import_parameter_path"));', jsl)
+        self.assertLess(jsl.index('Save Text File(importStagingFile, Load Text File(importFile));'),
+                        jsl.index('Python Send(importStagingFile, Python Name("tdm_ui_import_parameter_path"));'))
         self.assertIn('plw1EndBRow << Visibility(If(stepMode == "SET_POINT", "Collapse", "Visible"))', jsl)
         self.assertIn('actionText == "OPTIMISE_METHOD"),', jsl)
 

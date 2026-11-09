@@ -1,4 +1,14 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25af)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ag)
+
+LSQ PARAMETER IMPORT FROM JMP PICKER (R25ag)
+On Model Parameters, select Import parameters from LSQ JSON and pick the
+least_squares_fitted_inputs.json from a completed fit. JMP reads the selected
+JSON and copies it into the extracted model folder before passing it to Python.
+This avoids a selected OneDrive or virtual-picker path appearing missing to
+Python. The same importer still checks the model, chromatography mode, impurity
+count, species names and parameter values before applying them. A companion
+parameter-list CSV/TXT can also be selected when its fitted-inputs JSON is in
+the same folder. The reported source remains the file you selected.
 
 USE THE FULL LSQ EVALUATION CAP (R25af)
 On the Least-Squares Refinement tab, set Stopping policy to Use full cap before

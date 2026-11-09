@@ -870,6 +870,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     jsl = f'''Names Default To Here(1);
 projectDir = {_path(PROJECT_DIR)};
 bridgeFile = {_path(BRIDGE_PATH)};
+importStagingFile = {_path(PROJECT_DIR / 'least_squares_import_staged.json')};
 batchRunsFile = {_path(BATCH_RUNS_CSV)};
 lsqRunsFile = {_path(LSQ_RUNS_CSV)};
 lsqMassFile = {_path(LSQ_MASS_CSV)};
@@ -1396,7 +1397,6 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     Python Send(If(actionText == "ATTACH_LSQ_CSV", lsqLoadedRuns[lsqAttachSlot], RunNumberFromLabel(lsqTargetRunSelector << Get Selected)), Python Name("tdm_ui_lsq_target_run"));
     Python Send(projectDir, Python Name("tdm_project_dir"));
     Python Send(projectDir, Python Name("tdm_project_dir_posix"));
-    If(actionText == "IMPORT_FIT_PARAMETERS", Python Send(importParameterPath, Python Name("tdm_ui_import_parameter_path")));
     If(actionText == "OPTIMISE_METHOD", {method_sends});
     If(actionText == "FIT_LSQ",
         lsqStatusText << Set Text("Refinement running. JMP will respond when it finishes. To change the cap now, run SET_LSQ_CAP_WHILE_RUNNING.cmd from the extracted model folder; the change applies before the next model evaluation. Progress: least_squares_objective_history.csv.");
@@ -1434,10 +1434,31 @@ SendAndRun = Function({{actionText}}, {{rc, statusValue}},
     UpdateUI();
 );
 
-ImportLSQParameters = Function({{}}, {{chosen}},
+ImportLSQParameters = Function({{}}, {{chosen, importFile, fileName, fileExtension}},
     chosen = Pick File("Select LSQ fitted-inputs JSON or parameter list", "", {{"LSQ parameter files|json;csv;txt"}}, 1, 0, "");
     If(Is Empty(chosen), Return());
-    importParameterPath = chosen;
+    importFile = chosen;
+    fileName = Lowercase(chosen);
+    fileExtension = Right(fileName, 4);
+    If(fileExtension == ".csv" | fileExtension == ".txt",
+        If(Contains(fileName, "least_squares_improved_parameters") == 0 &
+           Contains(fileName, "least_squares_fit_results") == 0,
+            statusText << Set Text("Select least_squares_fitted_inputs.json or its LSQ parameter-list CSV/TXT."); Return()
+        );
+        importFile = Substitute(chosen,
+            "least_squares_improved_parameters", "least_squares_fitted_inputs",
+            "least_squares_fit_results", "least_squares_fitted_inputs");
+        importFile = Left(importFile, Length(importFile) - 4) || ".json";
+    );
+    If(!File Exists(importFile),
+        statusText << Set Text("The LSQ parameter JSON is unavailable to JMP: " || importFile);
+        Return()
+    );
+    // JMP can read a picked OneDrive file even when its path is unavailable to Python.
+    // Pass a fresh local copy of the JSON through the normal validated importer.
+    Save Text File(importStagingFile, Load Text File(importFile));
+    Python Send(importStagingFile, Python Name("tdm_ui_import_parameter_path"));
+    Python Send(chosen, Python Name("tdm_ui_import_parameter_source_path"));
     SendAndRun("IMPORT_FIT_PARAMETERS");
 );
 

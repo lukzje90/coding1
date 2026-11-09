@@ -937,9 +937,10 @@ def main() -> int:
             imported, changed = import_lsq_parameters(shared, path)
             save_config(imported, CONFIG_PATH)
             _save_fit_handoff(shared, imported, changed)
+            selected_path = _text("tdm_ui_import_parameter_source_path") or str(resolved_path)
             _write_status("LSQ_PARAMETERS_IMPORTED: " + str(len(changed)) +
                           " model parameter(s) changed. Run recipes and column geometry were retained.\n"
-                          "Source: " + str(resolved_path))
+                          "Source: " + selected_path)
             return 0
 
         if action == "OPTIMISE_METHOD":
