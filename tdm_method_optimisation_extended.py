@@ -172,6 +172,78 @@ def _metrics(result: dict[str, Any], config: dict[str, Any], values: dict[str, f
             "margins": margins, "feasible": all(v >= -1e-6 for v in margins.values())}
 
 
+def _optimise_pool_window(result: dict[str, Any], config: dict[str, Any],
+                          values: dict[str, float], options: dict[str, Any],
+                          start_bounds: tuple[float, float], end_bounds: tuple[float, float],
+                          metric_key: str, grid_size: int = 17
+                          ) -> tuple[dict[str, float], dict[str, Any]] | None:
+    """Refine collection cuts on one simulated profile, without another model solve.
+
+    Grid screening supplies feasible starts; continuous cut refinement follows
+    the fixed-chromatogram strategy in Leweke & von Lieres (2018), Sec. 6.2.2.
+    """
+    program = result["simulation"]["program"]
+    elution_start = float(program.stage_start_CV[1 + int(config["process"]["plw_count"])])
+    available = min(sum(float(s["CV"]) for s in config["process"]["elution_steps"][:
+                        int(config["process"]["elution_count"])]),
+                    float(result["trace"]["CV"][-1]) - elution_start)
+    max_span = float(options["max_pool_volume_mL"]) / float(config["column"]["volume_mL"])
+    start_lo, start_hi = start_bounds[0], min(start_bounds[1], available - 1.01e-4)
+    end_lo, end_hi = end_bounds[0], min(end_bounds[1], available)
+    if start_lo > start_hi or end_lo > end_hi:
+        return None
+
+    def measure(x: np.ndarray) -> dict[str, Any] | None:
+        start, end = map(float, x)
+        if (end - start <= 1e-4 or end - start > max_span + 1e-9 or
+                start < start_lo - 1e-9 or start > start_hi + 1e-9 or
+                end < end_lo - 1e-9 or end > end_hi + 1e-9):
+            return None
+        try:
+            return _metrics(result, config, dict(values, pool_start_CV=start,
+                                                 pool_end_CV=end), options)
+        except (ValueError, FloatingPointError):
+            return None
+
+    pairs = [np.array([values["pool_start_CV"], values["pool_end_CV"]], dtype=float)]
+    for start in np.linspace(start_lo, start_hi, grid_size):
+        pairs.extend(np.array([start, end]) for end in np.linspace(end_lo, end_hi, grid_size))
+        pairs.append(np.array([start, min(end_hi, start + max_span)]))
+    measured = [(x, m) for x in pairs if (m := measure(x)) is not None]
+    if not measured:
+        return None
+    feasible = [(x, m) for x, m in measured if m["feasible"]]
+    rank_key = "yield_percent" if metric_key == "minimum_peak_resolution" else metric_key
+    feasible.sort(key=lambda item: (item[1][rank_key], item[1]["yield_percent"]), reverse=True)
+    best_x, best_m = feasible[0] if feasible else (None, None)
+
+    def objective(x: np.ndarray) -> float:
+        m = measure(x)
+        return -float(m[rank_key]) if m is not None else 1e6
+
+    def margin(x: np.ndarray, name: str) -> float:
+        m = measure(x)
+        return float(m["margins"][name]) if m is not None else -1e3
+
+    near_feasible = (sorted(
+        measured, key=lambda item: sum(max(0.0, -float(margin))**2
+                                       for margin in item[1]["margins"].values()))[:3]
+                     if not feasible else [])
+    for seed, seed_metrics in feasible[:3] + near_feasible:
+        trial = minimize(objective, seed, method="SLSQP",
+                         bounds=[(start_lo, start_hi), (end_lo, end_hi)],
+                         constraints=[{"type": "ineq", "fun": margin, "args": (name,)}
+                                      for name in seed_metrics["margins"]],
+                         options={"maxiter": 60, "ftol": 1e-9, "eps": 1e-6})
+        refined = measure(trial.x)
+        if (refined is not None and refined["feasible"] and
+                (best_m is None or refined[rank_key] > best_m[rank_key] + 1e-10 or
+                 (abs(refined[rank_key] - best_m[rank_key]) <= 1e-10 and
+                  refined["yield_percent"] > best_m["yield_percent"] + 1e-10))):
+            best_x, best_m = trial.x, refined
+    return (dict(values, pool_start_CV=float(best_x[0]), pool_end_CV=float(best_x[1])), best_m) if best_m is not None else None
+
+
 def _validate(config: dict[str, Any], options: dict[str, Any]) -> tuple[tuple[str, ...], np.ndarray, np.ndarray]:
     errors = validate_config(config, strict=True)
     if errors:
@@ -364,30 +436,16 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
                 entry["error"] = f"{type(exc).__name__}: {exc}"
             add(entry, eval_id, reused)
             if new and entry["metrics"] is not None:
-                # Pool windows are cheap to scan on the same simulated outlet profile.
-                s, e = ix["pool_start_CV"], ix["pool_end_CV"]
-                span = min(sum(v[f"el{i}_CV"] for i in range(1, elutions+1)),
-                           float(result["trace"]["CV"][-1])
-                           - float(result["simulation"]["program"].stage_start_CV[1+washes]))
-                pool_best = None
-                for a in np.linspace(lower[s], min(upper[s], span-1.01e-4), 17):
-                    for b in np.r_[np.linspace(lower[e], min(upper[e], span), 17),
-                                   min(upper[e], span, a+pool_limit_CV)]:
-                        vv = dict(v, pool_start_CV=float(a), pool_end_CV=float(b))
-                        if not valid_geometry(vv) or not lower[e] <= b <= upper[e]:
-                            continue
-                        try:
-                            mm = _metrics(result, candidate, vv, options)
-                        except (ValueError, FloatingPointError):
-                            continue
-                        if mm["feasible"] and better_metrics(mm, pool_best[1] if pool_best else None):
-                            pool_best = vv, mm
+                pool_best = _optimise_pool_window(
+                    result, candidate, v, options,
+                    (float(lower[-2]), float(upper[-2])),
+                    (float(lower[-1]), float(upper[-1])), metric_key)
                 if pool_best:
                     vv, mm = pool_best
                     kk = tuple(vv[k] for k in variables)
                     if kk not in cache:
                         screened = {"values": vv, "metrics": mm, "error": None,
-                                    "result": None, "phase": "pool_screen"}
+                                    "result": None, "phase": "pool_refine"}
                         consider(screened, result)
                         add(screened, eval_id, True)
             return entry
@@ -523,6 +581,37 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
             writer.writerow(["species", "mass_g", "mass_percent"])
             for i, name in enumerate(names):
                 writer.writerow([name, m["masses_g"][i], m["fractions_percent"][name]])
+        # Fixed-recipe purity/recovery trade-off: vary only collection cuts on
+        # this already simulated chromatogram (Leweke & von Lieres, Sec. 6.2.2).
+        purity_levels = sorted({float(options["min_purity_percent"]), *(
+            level for level in (90, 95, 97, 98, 99, 99.5, 99.9)
+            if level >= float(options["min_purity_percent"]))})
+        tradeoff = []
+        for minimum in purity_levels:
+            tradeoff_options = dict(options, min_purity_percent=minimum)
+            optimum = _optimise_pool_window(
+                result, candidate, v, tradeoff_options,
+                (float(lower[-2]), float(upper[-2])),
+                (float(lower[-1]), float(upper[-1])), "yield_percent")
+            row = {"minimum_purity_percent": minimum, "feasible": optimum is not None,
+                   "achieved_purity_percent": None, "product_recovery_percent": None,
+                   "pool_start_CV": None, "pool_end_CV": None}
+            if optimum is not None:
+                cuts, tradeoff_metrics = optimum
+                row.update(achieved_purity_percent=tradeoff_metrics["purity_percent"],
+                           product_recovery_percent=tradeoff_metrics["yield_percent"],
+                           pool_start_CV=cuts["pool_start_CV"],
+                           pool_end_CV=cuts["pool_end_CV"])
+            tradeoff.append(row)
+        report["fixed_recipe_pool_tradeoff"] = tradeoff
+        report["pool_tradeoff_basis"] = (
+            "Best observed recovery at each minimum purity, varying only pool cuts on "
+            "the best recipe's simulated outlet profile; all other selected constraints apply. "
+            "This is not a global method Pareto frontier.")
+        with (folder/"fixed_recipe_pool_tradeoff.csv").open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(tradeoff[0]))
+            writer.writeheader()
+            writer.writerows(tradeoff)
         robustness = []
         robustness_calls = 0
         for variation, scale in (("pH", .1), ("loading", .05), ("flow", .05),
@@ -588,6 +677,15 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
         report["robustness_model_evaluations"] = robustness_calls
         report["total_model_evaluations"] = solve_count+robustness_calls
         report["history_rows"] = len(cache)+len(robustness)
+        observed = [row["metrics"] for row in robustness if row["metrics"] is not None]
+        report["robustness_summary"] = {
+            "tested_variations": len(robustness),
+            "simulation_failures": sum(row["metrics"] is None for row in robustness),
+            "constraint_failures": sum(not row["feasible"] for row in observed),
+            "lowest_purity_percent": min((row["purity_percent"] for row in observed), default=None),
+            "lowest_recovery_percent": min((row["yield_percent"] for row in observed), default=None),
+            "basis": ("Local one-factor perturbations only; these counts are not a failure "
+                      "probability or a validated confidence interval.")}
     report_html = folder/"method_optimisation_report.html"
     report["report_html"] = str(report_html)
     (folder/"method_optimisation_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -615,7 +713,12 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
                     "<h3>Constraint margins and active limits</h3><pre>"+
                     html.escape(json.dumps({"active": report["active_constraints"],
                                             "margins": m["margins"]}, indent=2))+"</pre>" +
+                    "<h3>Fixed-recipe pool purity/recovery trade-off</h3><p>"+
+                    html.escape(report["pool_tradeoff_basis"])+"</p><p>"+
+                    "<a href='fixed_recipe_pool_tradeoff.csv'>Download trade-off CSV</a></p><pre>"+
+                    html.escape(json.dumps(tradeoff, indent=2))+"</pre>"+
                     "<h3>Local robustness</h3><pre>"+
+                    html.escape(json.dumps(report["robustness_summary"], indent=2))+"</pre><pre>"+
                     html.escape(json.dumps(robustness, indent=2))+"</pre>" +
                     "<img style='max-width:100%' src='predicted_chromatogram.svg'>")
     else:

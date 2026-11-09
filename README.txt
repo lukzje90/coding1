@@ -1,4 +1,17 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ai)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25aj)
+
+PAPER-INFORMED METHOD OPTIMISATION (R25aj)
+The method optimiser now refines the start and end of the product collection
+pool continuously after screening each simulated chromatogram. This can find
+feasible, higher-recovery cuts between the old grid points without another
+mechanistic model evaluation. For the best feasible recipe, its report also
+includes fixed-recipe purity/recovery trade-offs and a downloadable CSV. The
+robustness report now counts local perturbations that fail simulation or
+selected constraints and lists the lowest observed purity and recovery. These
+are local checks, not a statistical failure probability. The method follows
+the cut-point and robustness analysis in Leweke and von Lieres, "Chromatography
+Analysis and Design Toolkit (CADET)," Computers & Chemical Engineering 113
+(2018), Sections 6.2 and 7. Solver equations, LSQ and process setup are unchanged.
 
 FIXED POST-LOAD WASHES AND NO TRIAL TIMEOUT (R25ai)
 Every PLW now has one fixed Buffer B setpoint. Its mode selector is removed;

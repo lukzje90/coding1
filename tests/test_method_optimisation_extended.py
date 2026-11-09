@@ -9,7 +9,8 @@ import unittest
 import numpy as np
 
 from tdm_method_optimisation_extended import (
-    OBJECTIVES, _metrics, _peak_resolution, _recipe, optimise_method, variable_names)
+    OBJECTIVES, _metrics, _optimise_pool_window, _peak_resolution, _recipe,
+    optimise_method, variable_names)
 from tdm_minimal_io import (MODEL_EDM_CPA, MODEL_EDM_LANGMUIR, MODEL_TDM_CPA,
                             MODEL_TDM_LANGMUIR, MODEL_TDM_WANG, validate_config)
 from tdm_minimal_model import simulate
@@ -54,6 +55,38 @@ class ExtendedMethodOptimisationTests(unittest.TestCase):
         self.assertGreater(detail[0]["resolution"], detail[1]["resolution"])
         self.assertAlmostEqual(resolution, detail[1]["resolution"])
         self.assertEqual(_peak_resolution(x, np.column_stack([g(4), np.zeros_like(x)]), 0)[0], 0)
+
+    def test_continuous_pool_cuts_improve_coarse_screen_without_another_solve(self):
+        config, options = setup(0, 1)
+        options.update(min_purity_percent=95, max_pool_volume_mL=2)
+        values = {key: sum(pair)/2 for key, pair in options["bounds"].items()}
+        candidate = _recipe(config, values, 0, 1, "GRADIENT")
+        result = simulate(candidate)
+        elution_start = float(result["simulation"]["program"].stage_start_CV[1])
+        x = np.linspace(0, elution_start + values["el1_CV"], 1201)
+        position = x - elution_start
+        product = np.exp(-.5*((position-.105)/.03)**2)
+        impurity = .8*np.exp(-.5*((position-.16)/.02)**2)
+        result["trace"]["CV"] = x
+        result["trace"]["column_component_g_L"] = np.column_stack([product, impurity])
+        start_bounds, end_bounds = (0, .03), (.08, .18)
+        screened = []
+        for start in np.linspace(*start_bounds, 5):
+            for end in np.linspace(*end_bounds, 5):
+                if end - start <= 1e-4:
+                    continue
+                measured = _metrics(result, candidate, dict(values, pool_start_CV=start,
+                                                           pool_end_CV=end), options)
+                if measured["feasible"]:
+                    screened.append(measured["yield_percent"])
+        optimum = _optimise_pool_window(result, candidate, values, options,
+                                        start_bounds, end_bounds, "yield_percent", grid_size=5)
+        self.assertIsNotNone(optimum)
+        cuts, measured = optimum
+        self.assertTrue(measured["feasible"])
+        self.assertGreater(measured["yield_percent"], max(screened) + .01)
+        self.assertGreaterEqual(measured["purity_percent"], 95 - 1e-6)
+        self.assertLess(cuts["pool_end_CV"], .18)
 
     def test_chosen_structure_builds_valid_candidate_without_changing_source(self):
         for washes, elutions, style in ((0, 1, "ISOCRATIC"), (2, 2, "BOTH"),
@@ -114,6 +147,16 @@ class ExtendedMethodOptimisationTests(unittest.TestCase):
                                            info["pool"][OBJECTIVES[goal][0]])
                     recipe = json.loads((Path(info["folder"])/"best_recipe.json").read_text())
                     self.assertEqual(recipe["process"]["elution_count"], elutions)
+                    tradeoff = info["fixed_recipe_pool_tradeoff"]
+                    self.assertTrue((Path(info["folder"])/"fixed_recipe_pool_tradeoff.csv").is_file())
+                    self.assertEqual(tradeoff[0]["minimum_purity_percent"],
+                                     options["min_purity_percent"])
+                    self.assertTrue(tradeoff[0]["feasible"])
+                    self.assertGreaterEqual(tradeoff[0]["achieved_purity_percent"],
+                                            options["min_purity_percent"] - 1e-6)
+                    self.assertEqual(info["total_model_evaluations"],
+                                     info["evaluations"] + info["robustness_model_evaluations"])
+                    self.assertEqual(info["robustness_summary"]["tested_variations"], 12)
 
     def test_ui_exposes_goals_stage_counts_styles_and_bounds(self):
         jsl = build_jsl(setup()[0])
