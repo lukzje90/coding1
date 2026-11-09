@@ -157,6 +157,13 @@ class ExtendedMethodOptimisationTests(unittest.TestCase):
                     self.assertEqual(info["total_model_evaluations"],
                                      info["evaluations"] + info["robustness_model_evaluations"])
                     self.assertEqual(info["robustness_summary"]["tested_variations"], 12)
+                    summary = info["robustness_summary"]
+                    self.assertGreaterEqual(summary["invalid_pool_perturbations"], 1)
+                    self.assertEqual(summary["simulation_failures"], 0)
+                    self.assertEqual(summary["total_failed_perturbations"],
+                                     sum(summary[key] for key in (
+                                         "simulation_failures", "setup_failures", "metric_failures",
+                                         "invalid_pool_perturbations", "constraint_failures")))
 
     def test_ui_exposes_goals_stage_counts_styles_and_bounds(self):
         jsl = build_jsl(setup()[0])
@@ -166,6 +173,27 @@ class ExtendedMethodOptimisationTests(unittest.TestCase):
                      'Python Name("tdm_ui_method_elution_style")',
                      'method_el5_end_B_min', 'UpdateMethodStepVisibility'):
             self.assertIn(text, jsl)
+
+    def test_robustness_distinguishes_failed_simulations_from_invalid_pool_cuts(self):
+        config, options = setup(0, 1)
+        calls = 0
+
+        def failing_robustness_simulator(candidate):
+            nonlocal calls
+            calls += 1
+            if calls > options["max_evaluations"]:
+                raise RuntimeError("Perturbation simulation failed")
+            return simulate(candidate)
+
+        with tempfile.TemporaryDirectory() as directory:
+            info = optimise_method(config, options, output_root=directory,
+                                   simulator=failing_robustness_simulator)
+        self.assertTrue(info["best_feasible"])
+        summary = info["robustness_summary"]
+        self.assertEqual(summary["simulation_failures"], 8)
+        self.assertGreaterEqual(summary["invalid_pool_perturbations"], 1)
+        self.assertEqual(info["robustness_model_evaluations"], 8)
+        self.assertEqual(calls, info["total_model_evaluations"])
 
     def test_invalid_mixed_single_elution_fails_before_creating_output(self):
         config, options = setup(0, 1, "BOTH")

@@ -1,4 +1,10 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25aj)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ak)
+
+METHOD ROBUSTNESS REPORT CHECK (R25ak)
+The local robustness summary distinguishes model-simulation failures, invalid
+pool-boundary perturbations, setup errors, metric errors and perturbations
+that violate a method constraint. Pool starts before the first elution are
+reported as invalid. These checks refine method-optimisation reporting only.
 
 PAPER-INFORMED METHOD OPTIMISATION (R25aj)
 The method optimiser now refines the start and end of the product collection

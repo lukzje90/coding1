@@ -622,6 +622,7 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
                 error = ""
                 vm = None
                 simulated = variation not in ("pool_start", "pool_end")
+                failure_stage = "setup"
                 try:
                     if variation == "loading":
                         varied["loading_g_L"] *= 1 + direction*scale
@@ -629,6 +630,9 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
                         varied["flow_mL_min"] *= 1 + direction*scale
                     elif variation.startswith("pool_"):
                         varied[variation + "_CV"] += direction*scale
+                        if varied["pool_start_CV"] < 0:
+                            failure_stage = "pool_evaluation"
+                            raise ValueError("Pool start cannot precede the first elution")
                     varied_config = _recipe(config, varied, washes, elutions, style)
                     if variation == "pH":
                         process = varied_config["process"]
@@ -655,14 +659,17 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
                         robustness_calls += 1
                         deadline = (time.monotonic()+60*float(options.get("max_trial_minutes", 0))
                                     if float(options.get("max_trial_minutes", 0)) > 0 else None)
+                        failure_stage = "simulation"
                         varied_result = (simulate(varied_config, solver_deadline=deadline)
                                          if simulator is simulate else simulator(varied_config))
+                    failure_stage = "metric_evaluation" if simulated else "pool_evaluation"
                     vm = _metrics(varied_result, varied_config, varied, options)
+                    failure_stage = ""
                 except Exception as exc:
                     error = f"{type(exc).__name__}: {exc}"
                 observation = {"variation": variation, "direction": direction, "magnitude": scale,
                                "objective_value": vm[metric_key] if vm else None,
-                               "metrics": vm, "error": error}
+                               "metrics": vm, "error": error, "failure_stage": failure_stage}
                 robustness.append(observation)
                 with history.open("a", newline="", encoding="utf-8") as fh:
                     csv.DictWriter(fh, fieldnames=fields).writerow({
@@ -680,8 +687,13 @@ def optimise_method(config: dict[str, Any], options: dict[str, Any], *, run_name
         observed = [row["metrics"] for row in robustness if row["metrics"] is not None]
         report["robustness_summary"] = {
             "tested_variations": len(robustness),
-            "simulation_failures": sum(row["metrics"] is None for row in robustness),
+            "simulation_failures": sum(row["failure_stage"] == "simulation" for row in robustness),
+            "setup_failures": sum(row["failure_stage"] == "setup" for row in robustness),
+            "metric_failures": sum(row["failure_stage"] == "metric_evaluation" for row in robustness),
+            "invalid_pool_perturbations": sum(row["failure_stage"] == "pool_evaluation" for row in robustness),
             "constraint_failures": sum(not row["feasible"] for row in observed),
+            "total_failed_perturbations": sum(row["metrics"] is None or not row["metrics"]["feasible"]
+                                              for row in robustness),
             "lowest_purity_percent": min((row["purity_percent"] for row in observed), default=None),
             "lowest_recovery_percent": min((row["yield_percent"] for row in observed), default=None),
             "basis": ("Local one-factor perturbations only; these counts are not a failure "
