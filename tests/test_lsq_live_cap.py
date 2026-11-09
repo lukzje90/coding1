@@ -20,7 +20,7 @@ OUTPUTS = ("FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
 
 
 class LiveEvaluationCapTests(unittest.TestCase):
-    def fit_with_update(self, initial_cap, new_text, *, after_call=2):
+    def fit_with_update(self, initial_cap, new_text, *, after_call=2, force_full=False):
         truth = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
         truth["numerics"].update(time_steps=50, axial_positions=6)
         trace = simulate(truth)["trace"]
@@ -51,7 +51,8 @@ class LiveEvaluationCapTests(unittest.TestCase):
                 result = lsq.run_global_least_squares_refinement(
                     [{"config": initial, "chromatogram_csv": source}],
                     unlocked_paths=["components[0].qmax_g_L"], max_nfev=initial_cap,
-                    max_model_evaluations=initial_cap, live_evaluation_cap_path=cap_file)
+                    max_model_evaluations=initial_cap, live_evaluation_cap_path=cap_file,
+                    force_full_evaluation_budget=force_full)
             settings = json.loads(patched["FIT_SETTINGS_JSON"].read_text())
             with patched["FIT_HISTORY_CSV"].open(newline="", encoding="utf-8") as fh:
                 history = list(csv.DictReader(fh))
@@ -87,6 +88,14 @@ class LiveEvaluationCapTests(unittest.TestCase):
         self.assertEqual(result["residual_evaluations"], 3)
         self.assertEqual(result["max_model_evaluations"], 3)
         self.assertTrue(any("effective cap is 3" in x for x in settings["evaluation_cap_warnings"]))
+
+    def test_full_budget_mode_uses_live_increased_cap(self):
+        result, settings, history, _ = self.fit_with_update(6, "8", force_full=True)
+        self.assertEqual(result["residual_evaluations"], 8)
+        self.assertEqual(result["max_model_evaluations"], 8)
+        self.assertTrue(result["evaluation_cap_reached"])
+        self.assertTrue(settings["force_full_evaluation_budget"])
+        self.assertEqual(len(history), 9)
 
 
 if __name__ == "__main__":

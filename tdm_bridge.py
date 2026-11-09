@@ -458,6 +458,11 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
         if cap is None or not cap.is_integer() or not 2 <= cap <= 10000:
             raise ValueError("Safety cap must be a whole number from 2 to 10000 model evaluations.")
         config["least_squares"]["max_nfev"] = int(cap)
+    if "tdm_ui_lsq_full_budget" in globals():
+        selected = _text("tdm_ui_lsq_full_budget")
+        if selected not in {"Stop on convergence", "Use full cap"}:
+            raise ValueError("Choose whether LSQ stops on convergence or uses the full cap.")
+        config["least_squares"]["force_full_evaluation_budget"] = selected == "Use full cap"
     if "tdm_ui_lsq_max_trial_minutes" in globals():
         minutes = _num("tdm_ui_lsq_max_trial_minutes")
         if minutes is None or not 0 <= minutes <= 240:
@@ -1149,6 +1154,7 @@ def main() -> int:
                 f"Least-squares refinement running: {len(profiles)} profile(s), "
                 f"{len(fitted_paths)} unlocked parameters, "
                 f"{shared_raw['least_squares']['max_nfev']} model-evaluation safety cap (including Jacobian probes and final verification); "
+                f"full-budget restarts: {bool(shared_raw['least_squares']['force_full_evaluation_budget'])}; "
                 "serial model evaluations.\n"
                 f"TDM+CPA trial timeout: {shared_raw['least_squares']['max_trial_minutes']:g} minutes "
                 "(0 means off).\n"
@@ -1168,6 +1174,7 @@ def main() -> int:
                 max_nfev=int(shared_raw["least_squares"]["max_nfev"]),
                 max_model_evaluations=int(shared_raw["least_squares"]["max_nfev"]),
                 live_evaluation_cap_path=FIT_LIVE_CAP_TXT,
+                force_full_evaluation_budget=bool(shared_raw["least_squares"]["force_full_evaluation_budget"]),
             )
             if fit["accepted"]:
                 fitted_shared = sanitize_config_for_selected_model(fit["fitted_config"])
@@ -1205,6 +1212,7 @@ def main() -> int:
                 f"Optimizer candidate evaluations: {fit['nfev']}; total fitted residual evaluations: {fit['residual_evaluations']} "
                 f"of {fit['max_model_evaluations']} allowed; cap reached: {fit['evaluation_cap_reached']}\n"
                 f"Live cap changes: {fit['evaluation_cap_changes']}; warnings: {fit['evaluation_cap_warnings']}\n"
+                f"Full-budget restarts: {fit['force_full_evaluation_budget']}; local searches: {len(fit['local_search_history'])}\n"
                 f"Optimizer converged: {fit['success']}; {fit['message']}\n"
                 f"{fit_warning_line}"
                 f"Accepted/applied to shared batch parameters: {fit['accepted']}\n"

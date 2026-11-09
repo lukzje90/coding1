@@ -2246,6 +2246,21 @@ def _optimizer_method(initial: np.ndarray, lower: np.ndarray, upper: np.ndarray)
     return "dogbox" if np.any((initial <= lower) | (initial >= upper)) else "trf"
 
 
+def _full_budget_restart_seed(best: np.ndarray, lower: np.ndarray, upper: np.ndarray,
+                              index: int, rng: np.random.Generator) -> tuple[np.ndarray, str]:
+    """Alternate local perturbations and broad bounded starts after convergence."""
+    span = upper - lower
+    fraction = np.clip((np.asarray(best, dtype=float) - lower) / span, 0.0, 1.0)
+    if index % 4 == 0:
+        unit = rng.uniform(0.05, 0.95, len(best))
+        kind = "global_bounded"
+    else:
+        width = (0.05, 0.15, 0.35)[(index - 1) % 3]
+        unit = np.clip(fraction + rng.uniform(-width, width, len(best)), 0.001, 0.999)
+        kind = f"local_{width:g}_of_bounds"
+    return lower + unit * span, kind
+
+
 def run_least_squares_refinement(
     config: dict[str, Any],
     *,
@@ -2595,6 +2610,7 @@ def run_global_least_squares_refinement(
     max_nfev: int = 60,
     max_model_evaluations: int | None = None,
     live_evaluation_cap_path: Path | str | None = None,
+    force_full_evaluation_budget: bool = False,
 ) -> dict[str, Any]:
     """Fit one shared mechanistic parameter vector against selected run profiles.
 
@@ -2725,6 +2741,11 @@ def run_global_least_squares_refinement(
         unlocked_paths=unlocked_paths,
         candidate_paths=candidate_paths,
     )
+    if force_full_evaluation_budget:
+        if max_model_evaluations is None:
+            raise ValueError("Using the full LSQ budget requires a model-evaluation cap.")
+        if not specs:
+            raise ValueError("Using the full LSQ budget requires at least one unlocked model parameter.")
     if max_model_evaluations is not None:
         if int(max_model_evaluations) != max_model_evaluations or max_model_evaluations < 2:
             raise ValueError("Model-evaluation safety cap must be a whole number of at least 2.")
@@ -2747,6 +2768,9 @@ def run_global_least_squares_refinement(
         live_cap_path.parent.mkdir(parents=True, exist_ok=True)
         live_cap_path.write_text(str(int(max_model_evaluations)) + "\n", encoding="utf-8")
     x0, lo, hi = _encode_initial(specs)
+    if force_full_evaluation_budget and (not np.isfinite(lo).all() or not np.isfinite(hi).all()
+                                         or not np.all(lo < hi)):
+        raise ValueError("Using the full LSQ budget requires finite ordered parameter bounds.")
     n_profiles = len(normalized_profiles)
     normalized_objective = first["least_squares"]["objective"] == "NORMALIZED_MSE"
     weighted_objective = first["least_squares"]["objective"] == "WEIGHTED_RMSE"
@@ -2797,11 +2821,14 @@ def run_global_least_squares_refinement(
     cap_changes: list[dict[str, Any]] = []
     cap_warnings: list[str] = []
     last_cap_text = str(current_cap) if current_cap is not None else ""
-    optimizer_candidate_limit = 10000 if live_cap_path is not None else max(2, int(max_nfev))
+    optimizer_candidate_limit = 10000 if live_cap_path is not None or force_full_evaluation_budget else max(2, int(max_nfev))
     history[0]["evaluation_cap"] = current_cap if current_cap is not None else ""
-    history_fields = ["evaluation", "elapsed_seconds", "objective", "best_objective", "improvement_percent", "phase", "status", "evaluation_cap"]
+    history[0]["restart"] = 0
+    history_fields = ["evaluation", "elapsed_seconds", "objective", "best_objective", "improvement_percent", "phase", "status", "evaluation_cap", "restart"]
     history_path: Path | None = FIT_HISTORY_CSV
     current_probe_label = ""
+    active_restart = 0
+    restart_history: list[dict[str, Any]] = []
     history_backup = FIT_HISTORY_CSV.with_name(
         f"{FIT_HISTORY_CSV.stem}_recovered_{os.getpid()}_{time.time_ns()}.csv")
     history_temp = Path(tempfile.gettempdir()) / history_backup.name
@@ -2847,6 +2874,7 @@ def run_global_least_squares_refinement(
             active_path.write_text(
                 f"Evaluation {eval_count} started {time.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
                 f"Phase: {phase}\n"
+                f"Local search: {active_restart + 1}\n"
                 + (f"Parameter: {label}\n" if label else "")
                 + (f"Current evaluation cap: {current_cap}\n" if current_cap is not None else "")
                 + (f"Cap control file: {live_cap_path}\n" if live_cap_path is not None else "")
@@ -2902,6 +2930,7 @@ def run_global_least_squares_refinement(
             "phase": phase,
             "status": status,
             "evaluation_cap": current_cap if current_cap is not None else "",
+            "restart": active_restart,
         }
         history.append(row)
         # Normal progress writes append one row; only a locked file triggers
@@ -2956,40 +2985,94 @@ def run_global_least_squares_refinement(
 
     if specs:
         cached_residual = _cache_last_evaluation(residual)
-        try:
-            opt = least_squares(
-                cached_residual,
-                x0,
-                bounds=(lo, hi),
-                jac=_bounded_jacobian(
-                    cached_residual, lo, hi, serial_jacobian,
-                    trial_valid=lambda vector: np.asarray(vector, dtype=float).tobytes()
-                    not in invalid_trial_vectors,
-                    trial_timed_out=lambda vector: np.asarray(vector, dtype=float).tobytes()
-                    in timed_out_trial_vectors,
-                    parameter_labels=[spec.label for spec in specs],
-                    probe_callback=label_probe),
-                method=_optimizer_method(x0, lo, hi),
-                loss="linear",
-                x_scale="jac",
-                ftol=1e-4,
-                xtol=1e-4,
-                gtol=1e-7,
-                max_nfev=optimizer_candidate_limit,
-            )
-        except EvaluationBudgetReached as exc:
-            budget_reached = True
-            opt = SimpleNamespace(x=x0.copy(), success=False, message=str(exc),
-                                  nfev=candidate_evaluations)
-        except TimeoutError as exc:
+        rng = np.random.default_rng(73)
+        local_seed = x0.copy()
+        seed_kind = "entered_values"
+        locally_converged = False
+        opt = None
+        while True:
+            refresh_live_cap()
+            if current_cap is not None and eval_count >= current_cap - 1:
+                budget_reached = True
+                break
+            active_restart = len(restart_history)
+            evaluation_before = eval_count
+            candidates_before = candidate_evaluations
+            if force_full_evaluation_budget and active_restart > 0:
+                try:
+                    cached_residual(local_seed)
+                except EvaluationBudgetReached:
+                    budget_reached = True
+                    break
+                if local_seed.tobytes() in invalid_trial_vectors:
+                    restart_history.append({"search": active_restart + 1, "seed_kind": seed_kind,
+                                            "evaluations_before": evaluation_before,
+                                            "evaluations_after": eval_count,
+                                            "candidate_evaluations": candidate_evaluations-candidates_before,
+                                            "converged": False,
+                                            "message": "Restart seed failed the model; skipped local solve.",
+                                            "best_objective": best_objective})
+                    active_restart += 1
+                    local_seed, seed_kind = _full_budget_restart_seed(
+                        best_vector if best_vector is not None else x0, lo, hi, active_restart, rng)
+                    continue
             try:
-                active_path.write_text(
-                    f"Least-squares fit stopped: {exc}\n"
-                    f"Completed model residual evaluations: {eval_count}.\n",
-                    encoding="utf-8")
-            except OSError:
-                pass
-            raise
+                trial_opt = least_squares(
+                    cached_residual,
+                    local_seed,
+                    bounds=(lo, hi),
+                    jac=_bounded_jacobian(
+                        cached_residual, lo, hi, serial_jacobian,
+                        trial_valid=lambda vector: np.asarray(vector, dtype=float).tobytes()
+                        not in invalid_trial_vectors,
+                        trial_timed_out=lambda vector: np.asarray(vector, dtype=float).tobytes()
+                        in timed_out_trial_vectors,
+                        parameter_labels=[spec.label for spec in specs],
+                        probe_callback=label_probe),
+                    method=_optimizer_method(local_seed, lo, hi),
+                    loss="linear",
+                    x_scale="jac",
+                    ftol=1e-4,
+                    xtol=1e-4,
+                    gtol=1e-7,
+                    max_nfev=optimizer_candidate_limit,
+                )
+                opt = trial_opt
+                locally_converged |= bool(trial_opt.success)
+                restart_history.append({"search": active_restart + 1, "seed_kind": seed_kind,
+                                        "evaluations_before": evaluation_before,
+                                        "evaluations_after": eval_count,
+                                        "candidate_evaluations": candidate_evaluations-candidates_before,
+                                        "converged": bool(trial_opt.success),
+                                        "message": str(trial_opt.message),
+                                        "best_objective": best_objective})
+            except EvaluationBudgetReached as exc:
+                budget_reached = True
+                restart_history.append({"search": active_restart + 1, "seed_kind": seed_kind,
+                                        "evaluations_before": evaluation_before,
+                                        "evaluations_after": eval_count,
+                                        "candidate_evaluations": candidate_evaluations-candidates_before,
+                                        "converged": False, "message": str(exc),
+                                        "best_objective": best_objective})
+                break
+            except TimeoutError as exc:
+                try:
+                    active_path.write_text(
+                        f"Least-squares fit stopped: {exc}\n"
+                        f"Completed model residual evaluations: {eval_count}.\n",
+                        encoding="utf-8")
+                except OSError:
+                    pass
+                raise
+            if not force_full_evaluation_budget:
+                break
+            active_restart += 1
+            local_seed, seed_kind = _full_budget_restart_seed(
+                best_vector if best_vector is not None else x0, lo, hi, active_restart, rng)
+        if opt is None:
+            opt = SimpleNamespace(x=x0.copy(), success=False,
+                                  message="Selected model-evaluation safety cap reached.",
+                                  nfev=candidate_evaluations)
         jac_diagnostics = _jacobian_diagnostics(opt, best_vector if best_vector is not None else x0, specs)
         if best_vector is None:
             fitted_configs = [copy.deepcopy(cfg) for cfg in base_configs]
@@ -2998,9 +3081,12 @@ def run_global_least_squares_refinement(
         else:
             opt.x = best_vector.copy()
             fitted_configs = [_apply_vector(cfg, specs, opt.x) for cfg in base_configs]
-        opt_success = bool(opt.success)
-        opt_message = str(opt.message)
-        opt_nfev = int(opt.nfev)
+        opt_success = locally_converged if force_full_evaluation_budget else bool(opt.success) and not budget_reached
+        opt_message = ("Full evaluation budget used; best tested parameters retained. "
+                       f"{len(restart_history)} bounded local search(es); "
+                       f"{sum(row['converged'] for row in restart_history)} converged locally."
+                       if force_full_evaluation_budget and budget_reached else str(opt.message))
+        opt_nfev = candidate_evaluations if force_full_evaluation_budget else int(opt.nfev)
     else:
         fitted_configs = [copy.deepcopy(cfg) for cfg in base_configs]
         opt_success = True
@@ -3252,6 +3338,11 @@ def run_global_least_squares_refinement(
         "evaluation_cap_changes": cap_changes,
         "evaluation_cap_warnings": cap_warnings,
         "optimizer_candidate_limit": optimizer_candidate_limit,
+        "force_full_evaluation_budget": bool(force_full_evaluation_budget),
+        "local_search_history": restart_history,
+        "restart_seed_rule": ("Deterministic seed 73; bounded local perturbations alternating with broad starts; "
+                              "each new seed is simulated before local refinement."
+                              if force_full_evaluation_budget else None),
         "max_trial_minutes": float(first["least_squares"]["max_trial_minutes"]),
         "evaluation_cap_reached": budget_reached,
         "composition_profile_metrics": composition_profile_metrics,
@@ -3398,6 +3489,7 @@ def run_global_least_squares_refinement(
 <p><b>Initial global objective:</b> {initial_obj:.7g}<br><b>Final global objective:</b> {final_obj:.7g}<br><b>Improvement:</b> {improvement:.4g}%<br>
 <b>Decision:</b> {acceptance['status']}; <b>Applied:</b> {accepted}; <b>Optimizer converged:</b> {opt_success}; {html.escape(opt_message)}<br><b>Model residual evaluations:</b> {eval_count}; <b>Optimizer candidate evaluations:</b> {opt_nfev}; <b>Evaluation safety cap:</b> {current_cap if current_cap is not None else int(max_nfev)}; <b>Unlocked parameters:</b> {len(specs)}. The model-evaluation cap includes optimizer candidates, finite-difference Jacobian probes, and final verification; the initial reference calculation is logged at evaluation 0.</p>
 <p><b>Live cap control:</b> {html.escape(str(live_cap_path)) if live_cap_path is not None else 'not enabled'}; <b>Changes:</b> {html.escape(json.dumps(cap_changes))}; <b>Warnings:</b> {html.escape('; '.join(cap_warnings) or 'none')}. Edits take effect before the next model evaluation; an evaluation already running cannot be interrupted.</p>
+<p><b>Use full cap:</b> {bool(force_full_evaluation_budget)}; <b>Local searches:</b> {len(restart_history)}; <b>Converged locally:</b> {sum(row['converged'] for row in restart_history)}. {('After local convergence, bounded starts continued until the cap while preserving the best tested parameters. This does not establish a global optimum.' if force_full_evaluation_budget else 'The search stopped on normal local convergence or the evaluation cap.')}</p>
 <p><b>Acceptance checks:</b> {html.escape('; '.join(acceptance['reasons']) or 'All enabled checks passed.')} Bound-after-load minimum {first['least_squares']['minimum_bound_percent_after_load']:.3g}%; elution recovery minimum {first['least_squares']['minimum_elution_recovery_percent']:.3g}% of end-load column inventory. CPA policy: {html.escape(first['least_squares']['physical_acceptance_mode'])}. Candidate parameters are saved for diagnosis and applied to the active model only after all enabled checks pass.</p>
 <p><b>Local Jacobian diagnostics:</b> {html.escape(json.dumps(jac_diagnostics, ensure_ascii=False))}</p>
 {f'<p><b>Fit quality warning:</b> {html.escape(fit_quality_warning)}</p>' if fit_quality_warning else ''}
@@ -3429,6 +3521,8 @@ def run_global_least_squares_refinement(
         "live_evaluation_cap_file": str(live_cap_path) if live_cap_path is not None else None,
         "evaluation_cap_changes": cap_changes,
         "evaluation_cap_warnings": cap_warnings,
+        "force_full_evaluation_budget": bool(force_full_evaluation_budget),
+        "local_search_history": restart_history,
         "fit_quality_warning": fit_quality_warning,
         "fit_elapsed_seconds": fit_elapsed_seconds,
         "fit_elapsed_hms": fit_elapsed_hms,

@@ -16,7 +16,7 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-11-07-R25AE-LIVE-LSQ-CAP"
+RESULT_GUARD_BUILD = "2026-11-09-R25AF-FULL-LSQ-BUDGET"
 CPA_AREA_M_INV_PER_M2_ML_SOLID = 1_000_000.0
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
@@ -201,6 +201,7 @@ def blank_config() -> dict[str, Any]:
         "wang": {"q0_g_L": 20.0, "eta": 1.0},
         "system": system_defaults(),
         "least_squares": {"objective": "RAW_SSE", "baseline_mode": "NONE", "detector_baseline": 0.0, "max_nfev": 120,
+                          "force_full_evaluation_budget": False,
                           "max_trial_minutes": 30.0,
                           "unlocked_paths": None, "selected_run_numbers": None, "fit_range_percent": {},
                           "physical_acceptance_mode": "REQUIRE_BIND_ELUTE",
@@ -1077,6 +1078,8 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
     max_nfev = _number(lsq.get("max_nfev"), "Least-squares maximum solver evaluations", errors, lower=2, upper=10000)
     if max_nfev is not None and not max_nfev.is_integer():
         errors.append("Least-squares maximum solver evaluations must be a whole number.")
+    if not isinstance(lsq.get("force_full_evaluation_budget"), bool):
+        errors.append("Use full LSQ evaluation budget must be true or false.")
     _number(lsq.get("max_trial_minutes"), "Least-squares trial timeout [minutes]", errors,
             lower=0.0, upper=240.0)
     conv = config.get("conversion", {})

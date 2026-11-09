@@ -1,4 +1,20 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ae)
+TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25af)
+
+USE THE FULL LSQ EVALUATION CAP (R25af)
+On the Least-Squares Refinement tab, set Stopping policy to Use full cap before
+starting a fit. The default Stop on convergence preserves the earlier behavior.
+Use full cap keeps the same SciPy least-squares residuals, bounds and local
+stopping tolerances. After a local search converges, it starts another bounded
+search from a deterministic nearby or broad parameter set. It tests each new
+start before local refinement, keeps the best valid parameter vector and
+reserves one evaluation for final verification. The history CSV records the
+local search number and the settings/report list each search and its outcome.
+The cap still counts global residual evaluations across all selected run
+profiles; it is not a time limit. A live cap change made with the helper below
+also applies to full-budget mode. Solving failures or a trial timeout may stop
+a fit early, and using the full cap does not establish a global optimum.
+This policy must be selected before the fit starts; it cannot be switched for
+an already running fit.
 
 LIVE LSQ EVALUATION CAP (R25ae)
 The LSQ evaluation cap can be changed after a fit starts. JMP waits for the
