@@ -19,7 +19,7 @@ from verify_model import make_config
 
 
 def setup(washes=1, elutions=1, style="GRADIENT", objective="RECOVERY"):
-    config = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
+    config = make_config(MODEL_TDM_LANGMUIR, 1, multistep=False)
     config["numerics"].update(time_steps=50, axial_positions=6)
     bounds = {"loading_g_L": [.32, .48], "flow_mL_min": [.8, 1.2],
               "pool_start_CV": [0, .05], "pool_end_CV": [.12, .18]}
@@ -111,8 +111,7 @@ class ExtendedMethodOptimisationTests(unittest.TestCase):
                 self.assertEqual(len(result["simulation"]["program"].stages), 1+washes+elutions)
 
     def test_multi_stage_recipe_preserves_every_model_family_parameters(self):
-        for model in (MODEL_EDM_CPA, MODEL_EDM_LANGMUIR, MODEL_TDM_CPA,
-                      MODEL_TDM_LANGMUIR, MODEL_TDM_WANG):
+        for model in (MODEL_TDM_CPA, MODEL_TDM_LANGMUIR, MODEL_TDM_WANG):
             with self.subTest(model=model):
                 _, options = setup(2, 2, "BOTH")
                 # Use the complete valid model-specific recipe and buffer-ion inputs.

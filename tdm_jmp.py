@@ -36,6 +36,7 @@ from tdm_minimal_io import (
     MODEL_EDM_CPA,
     MODEL_EDM_LANGMUIR,
     MODEL_LABELS,
+    SELECTABLE_MODELS,
     MODEL_TDM_CPA,
     MODEL_TDM_LANGMUIR,
     MODEL_TDM_WANG,
@@ -162,7 +163,6 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
                 {_nrow("Effective mass transfer k_eff,i [µm/s]", f"{p}Keff", row.get("k_eff_um_s"), fit_path=f"components[{i-1}].k_eff_um_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {p}EpsPiRow = {_nrow("Accessible particle porosity ε_p,i [-]", f"{p}EpsPi", row.get("accessible_particle_porosity"), fit_path=f"components[{i-1}].accessible_particle_porosity", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}
             ),
-            {p}EdmTransport = V List Box({_nrow("Apparent dispersion D_app,i [mm²/s]", f"{p}Dapp", row.get("D_app_mm2_s"), fit_path=f"components[{i-1}].D_app_mm2_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}),
             {p}SaltRow = {_nrow("HIC salt sensitivity k_s,i [M⁻¹]", f"{p}SaltSensitivity", row.get("salt_sensitivity_per_M", 1.0), 360, "If(!isLoading, UpdateUI())", fit_path=f"components[{i-1}].salt_sensitivity_per_M", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
             {p}Langmuir = V List Box(
                 {_nrow("Saturation capacity qmax,i [g/L stationary phase]", f"{p}Qmax", qmax, 360, "If(!isLoading, SyncLangmuirDerived(); UpdateUI())", fit_path=f"components[{i-1}].qmax_g_L", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
@@ -205,7 +205,6 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
         (f"{p}Dax << Get", f"tdm_ui_c{i}_D_ax_mm2_s"),
         (f"{p}Keff << Get", f"tdm_ui_c{i}_k_eff_um_s"),
         (f"{p}EpsPi << Get", f"tdm_ui_c{i}_accessible_particle_porosity"),
-        (f"{p}Dapp << Get", f"tdm_ui_c{i}_D_app_mm2_s"),
         (f"{p}Qmax << Get", f"tdm_ui_c{i}_qmax_g_L"),
         (f"{p}B << Get", f"tdm_ui_c{i}_b_L_g"),
         (f"{p}SaltSensitivity << Get", f"tdm_ui_c{i}_salt_sensitivity_per_M"),
@@ -236,7 +235,6 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
     visible = f'''{p}Panel << Visibility(If({1 if i == 1 else f'impurityCount >= {i-1}'}, "Visible", "Collapse"));
     {p}TdmTransport << Visibility(If(isTDM, "Visible", "Collapse"));
     {p}EpsPiRow << Visibility(If(modelLabel != {_q(MODEL_LABELS[MODEL_TDM_CPA])}, "Visible", "Collapse"));
-    {p}EdmTransport << Visibility(If(isEDM, "Visible", "Collapse"));
     {p}Langmuir << Visibility(If(isLangmuir, "Visible", "Collapse"));
     {p}Wang << Visibility(If(isWang, "Visible", "Collapse"));
     {p}CPA << Visibility(If(isCPA, "Visible", "Collapse"));
@@ -373,7 +371,7 @@ def _default_lsq_unlocked_paths(config: dict[str, Any]) -> set[str]:
         prefix = f"components[{i}]"
         if model == MODEL_TDM_WANG:
             paths.update({f"{prefix}.wang_k_eq", f"{prefix}.wang_beta1_per_M"})
-        elif model in {MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR}:
+        elif model == MODEL_TDM_LANGMUIR:
             paths.update({f"{prefix}.qmax_g_L", f"{prefix}.b_L_g", f"{prefix}.salt_sensitivity_per_M"})
         else:
             paths.update({f"{prefix}.delta_ref", f"{prefix}.As_m_inv"})
@@ -390,14 +388,19 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     ensure_lsq_runs_csv()
     ensure_lsq_mass_csv()
     cfg = normalize_config(config or load_config(CONFIG_PATH))
-    selected = MODEL_LABELS.get(cfg.get("model"), MODEL_LABELS[MODEL_TDM_CPA])
-    labels = [MODEL_LABELS[model] for model in (
-        MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_EDM_CPA,
-        MODEL_TDM_CPA, MODEL_TDM_WANG,
-    )]
+    retired_model = cfg.get("model")
+    if retired_model in {MODEL_EDM_LANGMUIR, MODEL_EDM_CPA}:
+        cfg = dict(cfg)
+        cfg["model"] = MODEL_TDM_LANGMUIR if retired_model == MODEL_EDM_LANGMUIR else MODEL_TDM_CPA
+        cfg = normalize_config(cfg)
+    selected = MODEL_LABELS[cfg["model"]] if cfg.get("model") in SELECTABLE_MODELS else MODEL_LABELS[MODEL_TDM_LANGMUIR]
+    legacy_model_note = ("This saved project uses an EDM model that is no longer selectable. "
+                         "The corresponding TDM model is selected; enter its TDM parameters before running."
+                         if retired_model in {MODEL_EDM_LANGMUIR, MODEL_EDM_CPA} else "")
+    labels = [MODEL_LABELS[model] for model in SELECTABLE_MODELS]
     model_items = "{" + ", ".join(_q(x) for x in ([selected] + [x for x in labels if x != selected])) + "}"
     imp_count = min(max(int(cfg.get("impurity_count", 0) or 0), 0), MAX_IMPURITIES)
-    c, t, e, cp, conv = cfg["column"], cfg["tdm"], cfg["edm"], cfg["cpa"], cfg.get("conversion", {})
+    c, t, cp, conv = cfg["column"], cfg["tdm"], cfg["cpa"], cfg.get("conversion", {})
     try:
         batch_count = min(max(int(BATCH_COUNT_FILE.read_text().strip()), 1), MAX_RUNS)
     except Exception:
@@ -480,12 +483,10 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         f'Python Send(voidFraction << Get, Python Name("tdm_ui_void_fraction"));',
         f'Python Send(particlePorosity << Get, Python Name("tdm_ui_particle_porosity"));',
         f'Python Send(saltDax << Get, Python Name("tdm_ui_salt_Dax"));',
-        f'Python Send(edmPorosity << Get, Python Name("tdm_ui_edm_porosity"));',
         f'Python Send(uvToProtein << Get, Python Name("tdm_ui_uv_to_protein_factor"));',
         f'Python Send(condToSalt << Get, Python Name("tdm_ui_cond_to_salt_factor"));',
         f'Python Send(ligandSurface << Get, Python Name("tdm_ui_ligand_surface_density"));',
         f'Python Send(ligandPK << Get, Python Name("tdm_ui_ligand_pK"));',
-        f'Python Send(systemAdsorption << Get, Python Name("tdm_ui_system_adsorption_parameter"));',
         f'Python Send(wangQ0 << Get, Python Name("tdm_ui_wang_q0_g_L"));',
         f'Python Send(wangEta << Get, Python Name("tdm_ui_wang_eta"));',
     ] + component_sends
@@ -731,6 +732,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
             }
             if prefix == "PLW":
                 cols.update({
+                    "Chemistry_Control": '"BUFFER_B_PERCENT"',
                     "End_Percent_B": f"{v}StartB << Get",
                     "End_Source": f"{v}StartSource << Get Selected",
                     "End_pH": f"{v}StartPH << Get",
@@ -753,7 +755,8 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
             load_run_lines += [
                 f'{v}CV << Set(Column(dtRuns, {_q(prefix+str(i)+"_CV")})[currentRun]);',
                 f'{v}Flow << Set(Column(dtRuns, {_q(prefix+str(i)+"_Flow_mL_min")})[currentRun]);',
-                f'If(Uppercase(Char(Column(dtRuns, {_q(prefix+str(i)+"_Chemistry_Control")})[currentRun])) == "ENDPOINT_CHEMISTRY", {v}ChemControl << Set(2), {v}ChemControl << Set(1));',
+                (f'{v}ChemControl << Set(1);' if prefix == "PLW" else
+                 f'If(Uppercase(Char(Column(dtRuns, {_q(prefix+str(i)+"_Chemistry_Control")})[currentRun])) == "ENDPOINT_CHEMISTRY", {v}ChemControl << Set(2), {v}ChemControl << Set(1));'),
                 f'{v}StartB << Set(Column(dtRuns, {_q(prefix+str(i)+"_Start_Percent_B")})[currentRun]);',
                 f'{v}EndB << Set(Column(dtRuns, {_q(prefix+str(i)+"_End_Percent_B")})[currentRun]);',
                 f'SetSourceCombo({v}StartSource, Char(Column(dtRuns, {_q(prefix+str(i)+"_Start_Source")})[currentRun]));',
@@ -768,6 +771,16 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
     for prefix, max_steps, varprefix, countvar in (("PLW", MAX_PLW_STEPS, "plw", "plwCount"), ("Elution", MAX_ELUTION_STEPS, "el", "elutionCount")):
         for i in range(1, max_steps + 1):
             v = f"{varprefix}{i}"
+            if prefix == "PLW":
+                process_vis.append(f'''{v}Panel << Visibility(If({countvar} >= {i}, "Visible", "Collapse"));
+            {v}ChemPanel << Visibility("Collapse");
+            {v}StartBRow << Visibility("Visible");
+            {v}EndBRow << Visibility("Collapse");
+            {v}BlendDerived << Set Text("Buffer A/B at " || Char({v}StartB << Get) || "% B: pH " ||
+                Char(BlendBufferPH({v}StartB << Get)) || "; conductivity " ||
+                Char(BlendBufferCond({v}StartB << Get)) || " mS/cm; salt " ||
+                Char(BlendBufferSalt({v}StartB << Get)) || " M");''')
+                continue
             mode_expr = '"SET_POINT"' if prefix == "PLW" else f"StageModeToken({v}Mode)"
             mode_label = '"Set point"' if prefix == "PLW" else f"Char({v}Mode << Get Selected)"
             process_vis.append(f'''{v}Panel << Visibility(If({countvar} >= {i}, "Visible", "Collapse"));
@@ -798,15 +811,10 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
                 If(stepControl == "BUFFER_B_PERCENT", "   |   Buffer A/B blend at " || Char(If(stepMode == "STEP", endPct, startPct)) || "% B", "   |   explicit endpoint chemistry"));''')
 
     req_wang = _req_expr(MODEL_TDM_WANG, 0, "HIC")
-    req_edm_l = _req_expr(MODEL_EDM_LANGMUIR, 0)
     req_tdm_l = _req_expr(MODEL_TDM_LANGMUIR, 0)
     req_tdm_c0 = _req_expr(MODEL_TDM_CPA, 0)
     req_tdm_c05 = _req_expr(MODEL_TDM_CPA, 0.5)
     req_tdm_c2 = _req_expr(MODEL_TDM_CPA, 2.0)
-    req_edm_c0 = _req_expr(MODEL_EDM_CPA, 0)
-    req_edm_c05 = _req_expr(MODEL_EDM_CPA, 0.5)
-    req_edm_c2 = _req_expr(MODEL_EDM_CPA, 2.0)
-    req_edm_hic = _req_expr(MODEL_EDM_CPA, 0, "HIC")
     req_tdm_hic = _req_expr(MODEL_TDM_CPA, 0, "HIC")
 
     run_labels = "{" + ", ".join(_q(f"Run {i}") for i in range(1, MAX_RUNS + 1)) + "}"
@@ -1269,15 +1277,8 @@ ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r,
         );
         c = Num(Column(runsTable, "PLW_Count")[r]);
         For(i = 1, i <= c, i++,
-            stepMode = Uppercase(Char(Column(runsTable, "PLW" || Char(i) || "_Mode")[r]));
-            chemControl = Uppercase(Char(Column(runsTable, "PLW" || Char(i) || "_Chemistry_Control")[r]));
-            If(chemControl == "BUFFER_B_PERCENT",
-                If(stepMode != "STEP", v = ResolvedPHFromPercentBRow(runsTable, r, "PLW" || Char(i) || "_Start_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
-                If(stepMode != "SET_POINT", v = ResolvedPHFromPercentBRow(runsTable, r, "PLW" || Char(i) || "_End_Percent_B"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
-            ,
-                If(stepMode != "STEP", v = ResolvedPHFromRow(runsTable, r, "PLW" || Char(i) || "_Start_Source", "PLW" || Char(i) || "_Start_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
-                If(stepMode != "SET_POINT", v = ResolvedPHFromRow(runsTable, r, "PLW" || Char(i) || "_End_Source", "PLW" || Char(i) || "_End_pH"); If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v)));
-            );
+            v = ResolvedPHFromPercentBRow(runsTable, r, "PLW" || Char(i) || "_Start_Percent_B");
+            If(!Is Missing(v), mn = Min(mn, v); mx = Max(mx, v));
         );
         c = Num(Column(runsTable, "Elution_Count")[r]);
         For(i = 1, i <= c, i++,
@@ -1295,11 +1296,11 @@ ComputePHSpanForRuns = Function({{runsTable, useSelectedLSQ}}, {{nRuns, slot, r,
     If(mn > mx, 0, mx - mn)
 );
 
-UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLangmuir, isWang, isHIC, plwCount, elutionCount, stepMode, stepControl, startPct, endPct, startSalt, endSalt, activeStart, activeEnd, batchPHSpan, fitPHSpan, reqText, lsqUsesComposition, lsqRefCount, loadSaltValue, loadSourceLabel, loadPHValue, loadCondValue, stationaryFraction, nominalCapacity, targetDose, speciesName}},
+UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isCPA, isLangmuir, isWang, isHIC, plwCount, elutionCount, stepMode, stepControl, startPct, endPct, startSalt, endSalt, activeStart, activeEnd, batchPHSpan, fitPHSpan, reqText, lsqUsesComposition, lsqRefCount, loadSaltValue, loadSourceLabel, loadPHValue, loadCondValue, stationaryFraction, nominalCapacity, targetDose, speciesName}},
     modelLabel = Char(modelBox << Get Selected);
     SyncLangmuirDerived();
     impurityCount = Num(impurityCountBox << Get Selected); If(Is Missing(impurityCount), impurityCount = 0);
-    isTDM = Contains(modelLabel, "TDM") > 0; isEDM = Contains(modelLabel, "EDM") > 0;
+    isTDM = Contains(modelLabel, "TDM") > 0;
     isCPA = Contains(modelLabel, "CPA") > 0; isLangmuir = Contains(modelLabel, "Competitive Langmuir") > 0; isWang = Contains(modelLabel, "Modified Wang") > 0;
     If(isCPA,
         If(Uppercase(Char(chromatographyMode << Get Selected)) != "ION_EXCHANGE", chromatographyMode << Set(2)),
@@ -1308,8 +1309,8 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     chromatographyMode << Enable(0);
     isHIC = Uppercase(Char(chromatographyMode << Get Selected)) == "HIC";
     If(isLangmuir & !Is Missing(c1Qmax << Get) & !Is Missing(c1Mass << Get) & !Is Missing(loadDensity << Get) &
-       If(isEDM, !Is Missing(edmPorosity << Get), !Is Missing(voidFraction << Get) & !Is Missing(particlePorosity << Get)),
-        stationaryFraction = If(isEDM, 1 - (edmPorosity << Get), (1 - (voidFraction << Get)) * (1 - (particlePorosity << Get)));
+       !Is Missing(voidFraction << Get) & !Is Missing(particlePorosity << Get),
+        stationaryFraction = (1 - (voidFraction << Get)) * (1 - (particlePorosity << Get));
         nominalCapacity = (c1Qmax << Get) * stationaryFraction;
         targetDose = (loadDensity << Get) * (c1Mass << Get) / 100;
         loadSaturationStatus << Set Text("Target load " || Char(Round(targetDose, 0.0001)) ||
@@ -1378,10 +1379,9 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
             ", conductivity " || Char(BlendBufferCond(loadStartB << Get)) || " mS/cm; end pH " ||
             Char(BlendBufferPH(loadEndB << Get)) || ", conductivity " || Char(BlendBufferCond(loadEndB << Get)) || " mS/cm.");
     );
-    tdmPanel << Visibility(If(isTDM, "Visible", "Collapse")); edmPanel << Visibility(If(isEDM, "Visible", "Collapse"));
+    tdmPanel << Visibility("Visible");
     cpaSystemPanel << Visibility(If(isCPA & !isHIC, "Visible", "Collapse"));
     ligandPKRow << Visibility(If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])} & !isHIC, "Visible", "Collapse"));
-    systemAdsorptionRow << Visibility(If(isCPA & !isHIC & modelLabel != {_q(MODEL_LABELS[MODEL_TDM_CPA])}, "Visible", "Collapse"));
     wangSharedPanel << Visibility(If(isWang, "Visible", "Collapse"));
     wangModeHelp << Visibility(If(isWang, "Visible", "Collapse"));
     legacyModeHelp << Visibility(If(isWang, "Collapse", "Visible"));
@@ -1391,12 +1391,9 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     {''.join(process_vis)}
     speciesStatus << Set Text("Target protein + " || Char(impurityCount) || If(impurityCount == 1, " impurity", " impurities"));
     reqText = "";
-    If(modelLabel == {_q(MODEL_LABELS[MODEL_EDM_LANGMUIR])}, reqText = {req_edm_l});
     If(isWang, reqText = {req_wang});
     If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_LANGMUIR])}, reqText = {req_tdm_l});
     If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])}, If(batchPHSpan > 1, reqText = {req_tdm_c2}, If(batchPHSpan > 1e-9, reqText = {req_tdm_c05}, reqText = {req_tdm_c0})));
-    If(modelLabel == {_q(MODEL_LABELS[MODEL_EDM_CPA])}, If(batchPHSpan > 1, reqText = {req_edm_c2}, If(batchPHSpan > 1e-9, reqText = {req_edm_c05}, reqText = {req_edm_c0})));
-    If(isHIC & modelLabel == {_q(MODEL_LABELS[MODEL_EDM_CPA])}, reqText = {req_edm_hic});
     If(isHIC & modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])}, reqText = {req_tdm_hic});
     requiredList << Set Text(reqText);
     batchPHStatus << Set Text(If(isCPA, "Selected-batch pH span: " || Char(Round(batchPHSpan, 6)), ""));
@@ -1693,6 +1690,7 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                 Text Box("Imports only fitted model parameters for the same model and species. Select least_squares_fitted_inputs.json or its companion least_squares_improved_parameters.csv; run recipes stay as saved.", << Set Wrap(740)),
                 Outline Box("Model selection", V List Box(
                     H List Box(Text Box("Model combination", << Set Width(275)), modelBox = Combo Box({model_items}, << Set Width(235), << Set Function(Function({{this}}, UpdateUI())))),
+                    Text Box({_q(legacy_model_note)}, << Set Wrap(760)),
                     H List Box(Text Box("Number of impurities [0-5]", << Set Width(275)), impurityCountBox = Combo Box({imp_items}, << Set Width(75), << Set Function(Function({{this}}, UpdateUI())))),
                     speciesStatus = Text Box("", << Set Wrap(760)), batchPHStatus = Text Box("", << Set Wrap(760))
                 )),
@@ -1725,11 +1723,10 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                     {_nrow("Particle porosity ε_p [-]", "particlePorosity", t.get("particle_porosity"), 360, "If(!isLoading, UpdateUI())", fit_path="tdm.particle_porosity", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                     tdmSaltRow = {_nrow("Salt axial dispersion D_ax,salt [mm²/s]", "saltDax", t.get("salt_axial_dispersion_mm2_s"), 360, fit_path="tdm.salt_axial_dispersion_mm2_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}
                 )),
-                edmPanel = Outline Box("EDM parameters", V List Box({_nrow("Total bed porosity ε [-]", "edmPorosity", e.get("total_bed_porosity"), 360, "If(!isLoading, UpdateUI())", fit_path="edm.total_bed_porosity", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)})),
                 cpaSystemPanel = Outline Box("CPA resin/system parameters", V List Box(
                     {_nrow("Ligand surface density Γ_L [µmol/m²]", "ligandSurface", cp.get("ligand_surface_density_umol_m2"), 360, fit_path="cpa.ligand_surface_density_umol_m2", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                     ligandPKRow = {_nrow("CEX ligand pK (2.3 for sulfonate)", "ligandPK", cp.get("ligand_pK", 2.3), 360)},
-                    systemAdsorptionRow = {_nrow("System-specific adsorption parameter [-]", "systemAdsorption", cp.get("system_specific_adsorption_parameter"), 360, fit_path="cpa.system_specific_adsorption_parameter", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}
+                    Text Box("CPA ligand properties are shared by the selected resin.")
                 )),
                 wangSharedPanel = Outline Box("Modified Wang shared parameters", V List Box(
                     {wang_q0_row},
@@ -1893,8 +1890,7 @@ def _validate_jsl(jsl: str) -> None:
         "Column(dtRuns, \"Elution_Count\")[currentRun] = Num(elutionCountBox << Get Selected)",
         "dtRuns << Save(activeRunsFile)",
         "modelLabel = Char(modelBox << Get Selected)",
-        'tdmPanel << Visibility(If(isTDM, "Visible", "Collapse"))',
-        'edmPanel << Visibility(If(isEDM, "Visible", "Collapse"))',
+        'tdmPanel << Visibility("Visible")',
         "CHECK_RESULT_CURRENT", "OpenCurrentResult(0)", "OpenCurrentResult(1)",
         "statusValue = Load Text File(statusFile)", "CHECK_RESULT_CURRENT pending", "RESULT_CURRENT:", RESULT_GUARD_BUILD,
     ]
@@ -1911,10 +1907,7 @@ def _validate_jsl(jsl: str) -> None:
         model_choices = json.loads("[" + model_combo.group(1) + "]")
     except (ValueError, TypeError) as exc:
         raise ValueError("Could not parse model selector choices.") from exc
-    expected_models = [MODEL_LABELS[model] for model in (
-        MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_EDM_CPA,
-        MODEL_TDM_CPA, MODEL_TDM_WANG,
-    )]
+    expected_models = [MODEL_LABELS[model] for model in SELECTABLE_MODELS]
     if sorted(model_choices) != sorted(expected_models):
         raise ValueError(f"Model selector contains unsupported choices: {model_choices}")
     mode_combo = re.search(r'chromatographyMode\s*=\s*Combo Box\(\s*\{([^{}]*)\}', jsl)
@@ -1965,7 +1958,7 @@ def _validate_jsl(jsl: str) -> None:
                 "End_Percent_B": (f"{variable}{i}{'Start' if prefix == 'PLW' else 'End'}B", "Get"),
             }
             for field, (control, getter) in expected_controls.items():
-                value = ('"SET_POINT"' if prefix == "PLW" else f'StageModeToken({control})') if field == "Mode" else f'{control} << {getter}'
+                value = ('"SET_POINT"' if prefix == "PLW" else f'StageModeToken({control})') if field == "Mode" else ('"BUFFER_B_PERCENT"' if prefix == "PLW" else f'{control} << {getter}') if field == "Chemistry_Control" else f'{control} << {getter}'
                 expected = f'Column(dtRuns, "{prefix}{i}_{field}")[currentRun] = {value};'
                 if expected not in jsl:
                     raise ValueError(f"{prefix} {i} {field} is not saved from its current UI control.")

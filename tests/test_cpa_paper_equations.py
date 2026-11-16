@@ -81,7 +81,7 @@ class CPAPaperEquationsTests(unittest.TestCase):
         jsl = build_jsl(self.config)
         self.assertIn('c1MolecularWeight = Number Edit Box(150', jsl)
         self.assertIn('Python Name("tdm_ui_c1_molecular_weight_kDa")', jsl)
-        self.assertIn('systemAdsorptionRow << Visibility', jsl)
+        self.assertNotIn('systemAdsorptionRow << Visibility', jsl)
         self.assertIn('ligandPKRow << Visibility', jsl)
         self.assertIn('Python Name("tdm_ui_ligand_pK")', jsl)
         self.assertIn('c1EpsPiRow << Visibility', jsl)

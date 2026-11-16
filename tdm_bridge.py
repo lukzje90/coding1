@@ -87,6 +87,7 @@ from tdm_minimal_io import (
     _get_path,
     _set_path,
     LABEL_TO_MODEL,
+    SELECTABLE_MODELS,
     LSQ_MODEL_SOURCE_BATCH,
     LSQ_MODEL_SOURCE_INDEPENDENT,
     MAX_LSQ_PROFILES,
@@ -426,7 +427,10 @@ def _write_status(text: str) -> None:
 
 def build_shared_config_from_jmp() -> dict[str, Any]:
     config = blank_config()
-    config["model"] = LABEL_TO_MODEL.get(_text("tdm_ui_model"), MODEL_TDM_CPA)
+    selected_label = _text("tdm_ui_model")
+    config["model"] = LABEL_TO_MODEL.get(selected_label, MODEL_TDM_CPA if not selected_label else None)
+    if config["model"] not in SELECTABLE_MODELS:
+        raise ValueError("Only TDM model combinations are supported.")
     n = _num("tdm_ui_impurity_count")
     config["impurity_count"] = int(n) if n is not None else 0
     config["chromatography_mode"] = _text("tdm_ui_chromatography_mode") or ("HIC" if config["model"] == MODEL_TDM_WANG or "LANGMUIR" in config["model"] else "ION_EXCHANGE")
@@ -489,7 +493,6 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
     )
     if _num("tdm_ui_system_salt_dispersion_mm2_s") is None and _num("tdm_ui_salt_Dax") is not None:
         config["system"]["salt_dispersion_mm2_s"] = _num("tdm_ui_salt_Dax")
-    config["edm"]["total_bed_porosity"] = _num("tdm_ui_edm_porosity")
     config["conversion"].update(
         uv_to_protein_mAU_L_g=_num("tdm_ui_uv_to_protein_factor"),
         conductivity_to_salt_M_per_mS_cm=_num("tdm_ui_cond_to_salt_factor"),
@@ -497,7 +500,6 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
     config["cpa"].update(
         ligand_surface_density_umol_m2=_num("tdm_ui_ligand_surface_density"),
         ligand_pK=_num("tdm_ui_ligand_pK") if "tdm_ui_ligand_pK" in globals() else 2.3,
-        system_specific_adsorption_parameter=_num("tdm_ui_system_adsorption_parameter"),
     )
     for i, row in enumerate(config["components"], start=1):
         p = f"tdm_ui_c{i}_"
@@ -517,7 +519,6 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
             D_ax_mm2_s=_num(p + "D_ax_mm2_s"),
             k_eff_um_s=_num(p + "k_eff_um_s"),
             accessible_particle_porosity=_num(p + "accessible_particle_porosity"),
-            D_app_mm2_s=_num(p + "D_app_mm2_s"),
             qmax_g_L=_num(p + "qmax_g_L") if p + "qmax_g_L" in globals() else _num(p + "qmax_mg_ml"),
             b_L_g=_num(p + "b_L_g"),
             salt_sensitivity_per_M=_num(p + "salt_sensitivity_per_M"),

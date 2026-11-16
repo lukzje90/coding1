@@ -44,9 +44,7 @@ class ModifiedWangTests(unittest.TestCase):
         ]
         expected = {
             MODEL_TDM_CPA: {"tdm.bead_radius_um", "cpa.ligand_surface_density_umol_m2", "components[0].delta_ref"},
-            MODEL_EDM_CPA: {"edm.total_bed_porosity", "cpa.ligand_surface_density_umol_m2", "components[0].delta_ref"},
             MODEL_TDM_LANGMUIR: {"tdm.bead_radius_um", "components[0].qmax_g_L"},
-            MODEL_EDM_LANGMUIR: {"edm.total_bed_porosity", "components[0].qmax_g_L"},
             MODEL_TDM_WANG: {"tdm.bead_radius_um", "wang.q0_g_L", "components[0].wang_k_eq"},
         }
         for combination, active in expected.items():
@@ -113,17 +111,19 @@ class ModifiedWangTests(unittest.TestCase):
                                        np.array([salt]), np.array([ph]), cfg)[0, 0]
         self.assertLess(competing, alone)
 
-    def test_existing_model_choices_remain_available(self):
+    def test_only_tdm_model_choices_remain_available(self):
         saved = load_config()
         jsl = build_jsl(saved)
         _validate_jsl(jsl)
         choices = json.loads("[" + re.search(
             r'modelBox\s*=\s*Combo Box\(\s*\{([^{}]*)\}', jsl).group(1) + "]")
-        self.assertEqual(choices[0], MODEL_LABELS[saved["model"]])
+        self.assertEqual(choices[0], MODEL_LABELS[MODEL_TDM_LANGMUIR])
         self.assertEqual(set(choices), {MODEL_LABELS[m] for m in (
-            MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_EDM_CPA,
-            MODEL_TDM_CPA, MODEL_TDM_WANG,
+            MODEL_TDM_LANGMUIR, MODEL_TDM_CPA, MODEL_TDM_WANG,
         )})
+        legacy = copy.deepcopy(saved)
+        legacy["model"] = MODEL_EDM_LANGMUIR
+        self.assertIn("This saved project uses an EDM model that is no longer selectable.", build_jsl(legacy))
         self.assertIn('chromatographyMode = Combo Box({"HIC", "ION_EXCHANGE"}', jsl)
         self.assertIn('wangSharedPanel << Visibility(If(isWang, "Visible", "Collapse"))', jsl)
         self.assertIn('If(Uppercase(Char(chromatographyMode << Get Selected)) != "ION_EXCHANGE", chromatographyMode << Set(2))', jsl)
@@ -132,12 +132,12 @@ class ModifiedWangTests(unittest.TestCase):
         self.assertIn('c1WangKeqFitLock = Combo Box({"Locked", "Unlocked"}, << Set(2)', jsl)
 
     def test_chromatography_mode_is_fixed_by_model_combination(self):
-        for model in (MODEL_EDM_CPA, MODEL_TDM_CPA):
+        for model in (MODEL_TDM_CPA,):
             cfg = make_config(model, 0, multistep=False)
             cfg["chromatography_mode"] = "HIC"
             self.assertTrue(any("requires ion-exchange" in error
                                 for error in validate_config(cfg, strict=True)))
-        for model in (MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_TDM_WANG):
+        for model in (MODEL_TDM_LANGMUIR, MODEL_TDM_WANG):
             cfg = wang_config() if model == MODEL_TDM_WANG else make_config(model, 0, multistep=False)
             cfg["chromatography_mode"] = "ION_EXCHANGE"
             self.assertTrue(any("require HIC" in error

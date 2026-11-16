@@ -1,5 +1,5 @@
 {
-  "model": "EDM_LANGMUIR",
+  "model": "TDM_LANGMUIR",
   "chromatography_mode": "HIC",
   "system": {
     "buffer_dispersion_enabled": true,

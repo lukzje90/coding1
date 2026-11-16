@@ -25,8 +25,6 @@ from tdm_minimal_io import (
     LATEST_RESULTS_CSV,
     LATEST_RESULTS_HTML,
     LATEST_RESULTS_MANIFEST,
-    MODEL_EDM_CPA,
-    MODEL_EDM_LANGMUIR,
     MODEL_LABELS,
     MODEL_TDM_CPA,
     MODEL_TDM_LANGMUIR,
@@ -726,13 +724,20 @@ def _build_program(config: dict[str, Any], feed_vector: np.ndarray) -> StageProg
     for kind, key, count_key in (("PLW", "plw_steps", "plw_count"), ("ELUTION", "elution_steps", "elution_count")):
         count = int(float(process.get(count_key, 0) or 0))
         for i, raw in enumerate(list(process.get(key, []))[:count], start=1):
-            mode = str(raw.get("mode") or "SET_POINT").upper()
-            control = str(raw.get("chemistry_control") or "BUFFER_B_PERCENT").strip().upper()
+            mode = "SET_POINT" if kind == "PLW" else str(raw.get("mode") or "SET_POINT").upper()
+            control = ("BUFFER_B_PERCENT" if kind == "PLW" else
+                       str(raw.get("chemistry_control") or "BUFFER_B_PERCENT").strip().upper())
             start_B = None
             end_B = None
             if control == "BUFFER_B_PERCENT":
-                start_B = raw.get("start_percent_B")
-                end_B = raw.get("end_percent_B")
+                if kind == "PLW":
+                    # Older step washes used End %B; a saved gradient keeps
+                    # Start %B when migrated to the fixed PLW setpoint.
+                    point_B = raw.get("end_percent_B") if str(raw.get("mode") or "").upper() == "STEP" else raw.get("start_percent_B")
+                    start_B = end_B = point_B
+                else:
+                    start_B = raw.get("start_percent_B")
+                    end_B = raw.get("end_percent_B")
                 if start_B is None:
                     start_B = end_B
                 if end_B is None:
@@ -1511,214 +1516,6 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
     }
 
 
-def _simulate_edm_langmuir(config: dict[str, Any]) -> dict[str, Any]:
-    rows, H, b = _langmuir_arrays(config)
-    names = [str(r["name"]) for r in rows]
-    mass_frac = np.array([float(r["mass_percent"]) / 100.0 for r in rows])
-    D = np.array([float(r["D_app_mm2_s"]) * 1e-6 for r in rows])
-    feed_vector = float(config["feed"]["total_concentration_mg_mL"]) * mass_frac
-    program = _build_program(config, feed_vector)
-    mobile_phase = MobilePhaseTransport(config, program, _scalar_transport)
-
-    L, _V, A = _column_geometry(config)
-    eps = float(config["edm"]["total_bed_porosity"])
-    salt_sensitivity = np.array([float(r["salt_sensitivity_per_M"]) for r in rows], dtype=float)
-    F = (1.0 - eps) / eps
-    time_steps, nx = _numerical_resolution(config)
-    dx = L / nx
-    x_centres = (np.arange(nx) + 0.5) * dx
-    n = len(rows)
-    y0 = np.zeros(nx*n)
-    # Dense BDF is cheaper for a small EDM state. At larger meshes its local
-    # structure avoids the cost of a dense Jacobian. Competitive equilibrium
-    # couples species in each cell; the limited flux reaches two cells aside.
-    sparsity = None
-    if nx * n >= 100:
-        pattern = lil_matrix((nx * n, nx * n), dtype=int)
-        for cell in range(nx):
-            for neighbor in range(max(0, cell - 2), min(nx, cell + 3)):
-                pattern[cell*n:(cell + 1)*n, neighbor*n:(neighbor + 1)*n] = 1
-        sparsity = pattern.tocsr()
-
-    def rhs(t: float, y: np.ndarray) -> np.ndarray:
-        total = np.maximum(y.reshape(nx, n), 0.0)
-        inlet, _, _, _ = program.at_time(t)
-        Q = program.flow_at_time(t) * 1e-6 / 60.0
-        u = Q / max(A * eps, SMALL)
-        current_cv = program.time_to_cv(t)
-        local_salts = mobile_phase.local(t)[:, 1]
-        c, _q = _langmuir_c_q_from_total(
-            total, H, b, salt_M=local_salts,
-            salt_sensitivity_per_M=salt_sensitivity, phase_ratio=F,
-        )
-        forcing = np.zeros_like(c)
-        for i in range(n):
-            forcing[:, i] = _scalar_transport(c[:, i], inlet[i], u, D[i], dx)
-        # total = c + F*q remains the conserved state as salt changes.
-        return forcing.ravel()
-
-    solution = solve_ivp(
-        rhs, (0.0, program.total_time_s), y0, method="BDF", rtol=1e-6, atol=1e-8,
-        max_step=max(program.total_time_s / max(time_steps, 1), 1e-6), dense_output=True,
-        jac_sparsity=sparsity,
-    )
-    if not solution.success:
-        raise RuntimeError("EDM+Competitive Langmuir integration failed: " + solution.message)
-    sample_t = np.linspace(0.0, program.total_time_s, time_steps + 1)
-    Y = solution.sol(sample_t)
-    c_out = np.empty((len(sample_t), n))
-    for k in range(len(sample_t)):
-        total_out = np.maximum(Y[:, k].reshape(nx, n)[-1], 0.0)
-        current_cv = program.time_to_cv(float(sample_t[k]))
-        source_cv = max(current_cv - eps * x_centres[-1] / L, 0.0)
-        local_salt_M = mobile_phase.local(float(sample_t[k]))[-1, 1]
-        c_out[k], _q_out = _langmuir_c_q_from_total(
-            total_out, H, b, salt_M=local_salt_M,
-            salt_sensitivity_per_M=salt_sensitivity, phase_ratio=F,
-        )
-    final_total = np.maximum(solution.y[:, -1].reshape(nx, n), 0.0)
-    final_cv = program.total_CV
-    final_salts = mobile_phase.local(program.total_time_s)[:, 1]
-    final_c, q_final = _langmuir_c_q_from_total(
-        final_total, H, b, salt_M=final_salts,
-        salt_sensitivity_per_M=salt_sensitivity, phase_ratio=F,
-    )
-    bed_cell_V_L = A * dx * 1000.0
-    inventory_g = bed_cell_V_L * np.sum(eps * final_c + (1.0 - eps) * q_final, axis=0)
-    return {
-        "program": program,
-        "mobile_phase": mobile_phase,
-        "component_names": names,
-        "component_mw_kDa": None,
-        "column_time_s": sample_t,
-        "column_component_native": c_out,
-        "column_pH": np.full(len(sample_t), np.nan),
-        "column_ionic_strength_M": np.full(len(sample_t), np.nan),
-        "final_inventory_native": inventory_g,
-        "native_basis": "g/L",
-        "diagnostics": {
-            "transport_model": "EDM",
-            "axial_transport_discretization": "conservative finite volume with monotonized-central slope-limited advection",
-            "isotherm": "Competitive Langmuir",
-            "axial_cells": nx,
-            "requested_time_steps": time_steps,
-            "internal_time_steps": max(len(solution.t) - 1, 0),
-            "competitive_langmuir_equation": "q_i*=qmax_i*b_i*exp(k_s_i*m_s)*c_i/(1+sum_j b_j*exp(k_s_j*m_s)*c_j)",
-            "competitive_langmuir_H_relation": "H_i(0 M)=qmax_i*b_i; H_eff_i(salt)=qmax_i*b_eff_i(salt)",
-            "hic_salt_model": "exponentially modified competitive Langmuir; salt concentration follows the shared buffer mixer and dispersive, pore-accessible column transport",
-            "hic_salt_concentration_basis": "entered/resolved molarity used as molality surrogate",
-            "hic_salt_sensitivity_per_M": salt_sensitivity.tolist(),
-            "qmax_g_L_stationary_phase": [float(r["qmax_g_L"]) for r in rows],
-            "number_of_competing_species": n,
-        },
-    }
-
-
-def _simulate_edm_cpa(config: dict[str, Any]) -> dict[str, Any]:
-    comps = _build_cpa_components(config, need_tdm_kinetics=False)
-    cpa_model = _cpa_model(config, comps)
-    feed_total_g_L = float(config["feed"]["total_concentration_mg_mL"])
-    feed_vector = np.array([feed_total_g_L * c.mass_fraction / c.mw_kDa for c in comps], dtype=float)
-    program = _build_program(config, feed_vector)
-    mobile_phase = MobilePhaseTransport(config, program, _scalar_transport)
-
-    rows = active_components(config)
-    D = np.array([float(r["D_app_mm2_s"]) * 1e-6 for r in rows])
-    L, _V, A = _column_geometry(config)
-    eps = float(config["edm"]["total_bed_porosity"])
-    Fphase = (1.0 - eps) / eps
-    time_steps, nx = _numerical_resolution(config)
-    dx = L / nx
-    n = len(comps)
-    x_centres = (np.arange(nx) + 0.5) * dx
-
-    ionic_index = 1 if is_hic(config) else 2
-
-    total = np.zeros((nx, n))  # c + F q, conserved by the EDM transport balance
-    c = np.zeros_like(total)
-    q = np.zeros_like(total)
-
-    maxD = max(float(np.max(D)), 0.0)
-    max_flow = max(stage.flow_mL_min for stage in program.stages) * 1e-6 / 60.0
-    max_u = max_flow / max(A * eps, SMALL)
-    rate = abs(max_u) / dx + 2.0 * maxD / (dx*dx)
-    base_dt = 0.35 / max(rate, 1e-12)
-    base_dt = min(base_dt, program.cv_time_s / 60.0, program.total_time_s / max(time_steps, 1))
-
-    times = [0.0]
-    outs = [np.zeros(n)]
-    outlet_amount_native = np.zeros(n)  # mol, accumulated with the exact finite-volume outlet flux
-    pH0, I0, _B0, _a, _b = program.environment_with_derivative(0.0)
-    pHs = [pH0]
-    Is = [I0]
-    t = 0.0
-    stage_boundaries = program.stage_boundaries_s
-    while t < program.total_time_s - 1e-12:
-        dt = min(base_dt, program.total_time_s - t)
-        for boundary in stage_boundaries:
-            if t + 1e-12 < boundary < t + dt - 1e-12:
-                dt = boundary - t
-                break
-        midpoint = t + 0.5*dt
-        inlet, _, _, _ = program.at_time(midpoint)
-        Q = program.flow_at_time(midpoint) * 1e-6 / 60.0
-        u = Q / max(A * eps, SMALL)
-        outlet_amount_native += Q * np.maximum(c[-1], 0.0) * dt
-        forcing = np.zeros_like(c)
-        for i in range(n):
-            forcing[:, i] = _scalar_transport(c[:, i], inlet[i], u, D[i], dx)
-        total = np.maximum(total + dt * forcing, 0.0)
-        t += dt
-        # Buffer chemistry is independent of protein concentration. Fetch the
-        # entire column once per step instead of rebuilding it for every cell.
-        chemistry = mobile_phase.local(t)
-        for cell in range(nx):
-            pH = float(chemistry[cell, 0])
-            ionic = float(chemistry[cell, ionic_index])
-            c[cell], q[cell] = cpa_model.equilibrium_from_total(total[cell], Fphase, pH, ionic)
-        times.append(t)
-        outs.append(np.maximum(c[-1].copy(), 0.0))
-        pHs.append(chemistry[-1, 0]); Is.append(chemistry[-1, 2])
-
-    raw_t = np.asarray(times)
-    raw_out = np.asarray(outs)
-    sample_t = np.linspace(0.0, program.total_time_s, time_steps + 1)
-    c_out = np.column_stack([np.interp(sample_t, raw_t, raw_out[:, i]) for i in range(n)])
-    pH_out = np.interp(sample_t, raw_t, np.asarray(pHs))
-    I_out = np.interp(sample_t, raw_t, np.asarray(Is))
-
-    bed_cell_V = A * dx
-    inventory_mol = bed_cell_V * np.sum(eps*c + (1.0-eps)*q, axis=0)
-    return {
-        "program": program,
-        "mobile_phase": mobile_phase,
-        "component_names": [comp.name for comp in comps],
-        "component_mw_kDa": np.array([comp.mw_kDa for comp in comps]),
-        "column_time_s": sample_t,
-        "column_component_native": c_out,
-        "mass_balance_time_s": raw_t,
-        "mass_balance_component_native": raw_out,
-        "outlet_amount_native": outlet_amount_native,
-        "column_pH": pH_out,
-        "column_ionic_strength_M": I_out,
-        "final_inventory_native": inventory_mol,
-        "native_basis": "mol/m3",
-        "diagnostics": {
-            "transport_model": "EDM",
-            "axial_transport_discretization": "conservative finite volume with monotonized-central slope-limited advection",
-            "isotherm": "CPA", "axial_cells": nx,
-            "requested_time_steps": time_steps,
-            "internal_time_steps": max(len(raw_t) - 1, 0),
-            "EDM_time_integrator": "conservative explicit finite-volume update of c+Fq with algebraic CPA equilibrium inversion",
-            "radius_rule": "diameter_nm / 2",
-            "buffer_transport": "shared upstream buffer mixer and dispersive column salt transport",
-            "fixed_temperature_K": CPA_TEMPERATURE_K,
-            "fixed_relative_permittivity": CPA_RELATIVE_PERMITTIVITY,
-            "fixed_CEX_ligand_pK": CPA_CEX_LIGAND_PK,
-        },
-    }
-
-
 def _output_trace(config: dict[str, Any], sim: dict[str, Any]) -> dict[str, Any]:
     program: StageProgram = sim["program"]
     t = np.asarray(sim["column_time_s"])
@@ -1848,11 +1645,8 @@ def _nominal_langmuir_saturation(config: dict[str, Any]) -> dict[str, float] | N
     """
     if not uses_langmuir(config["model"]):
         return None
-    if config["model"] == MODEL_EDM_LANGMUIR:
-        stationary_fraction = 1.0 - float(config["edm"]["total_bed_porosity"])
-    else:
-        tdm = config["tdm"]
-        stationary_fraction = (1.0 - float(tdm["void_fraction"])) * (1.0 - float(tdm["particle_porosity"]))
+    tdm = config["tdm"]
+    stationary_fraction = (1.0 - float(tdm["void_fraction"])) * (1.0 - float(tdm["particle_porosity"]))
     target = active_components(config)[0]
     capacity = stationary_fraction * float(target["qmax_g_L"])
     dose = float(config["feed"]["load_density_mg_mL_resin"]) * float(target["mass_percent"]) / 100.0
@@ -1906,10 +1700,6 @@ def simulate(config: dict[str, Any], *, solver_deadline: float | None = None) ->
             sim = _simulate_tdm_cpa(config, solver_deadline=solver_deadline)
         elif model == MODEL_TDM_LANGMUIR:
             sim = _simulate_tdm_langmuir(config)
-        elif model == MODEL_EDM_CPA:
-            sim = _simulate_edm_cpa(config)
-        elif model == MODEL_EDM_LANGMUIR:
-            sim = _simulate_edm_langmuir(config)
         else:
             raise ValueError(f"Unsupported model: {model}")
     trace = _output_trace(config, sim)
@@ -2088,7 +1878,8 @@ def _stage_receipt(config: dict[str, Any], program: StageProgram) -> list[dict[s
             counters[stage.kind] += 1
             key = "plw_steps" if stage.kind == "PLW" else "elution_steps"
             raw = process[key][counters[stage.kind] - 1]
-            control = str(raw.get("chemistry_control") or "BUFFER_B_PERCENT").upper()
+            control = ("BUFFER_B_PERCENT" if stage.kind == "PLW" else
+                       str(raw.get("chemistry_control") or "BUFFER_B_PERCENT").upper())
             if control == "BUFFER_B_PERCENT":
                 start_source = end_source = "BUFFER_BLEND"
                 start_mode = end_mode = blend_modes

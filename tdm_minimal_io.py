@@ -16,7 +16,7 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-11-16-R25AL-TDM-CPA-PAPER-REVISION"
+RESULT_GUARD_BUILD = "2026-11-16-R25AM-PLW-BUFFER-TDM-ONLY"
 CPA_AREA_M_INV_PER_M2_ML_SOLID = 1_000_000.0
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
@@ -25,16 +25,16 @@ BATCH_SUMMARY_CSV = PROJECT_DIR / "tdm_batch_summary.csv"
 BATCH_GALLERY_HTML = PROJECT_DIR / "tdm_batch_gallery.html"
 BATCH_COUNT_FILE = PROJECT_DIR / "tdm_batch_count.txt"
 
+# Retired IDs are kept only to recognise older saved projects during migration.
 MODEL_EDM_LANGMUIR = "EDM_LANGMUIR"
 MODEL_TDM_LANGMUIR = "TDM_LANGMUIR"
 MODEL_EDM_CPA = "EDM_CPA"
 MODEL_TDM_CPA = "TDM_CPA"
 MODEL_TDM_WANG = "TDM_WANG"
-MODELS = {MODEL_EDM_LANGMUIR, MODEL_TDM_LANGMUIR, MODEL_EDM_CPA, MODEL_TDM_CPA, MODEL_TDM_WANG}
+MODELS = {MODEL_TDM_LANGMUIR, MODEL_TDM_CPA, MODEL_TDM_WANG}
+SELECTABLE_MODELS = (MODEL_TDM_LANGMUIR, MODEL_TDM_CPA, MODEL_TDM_WANG)
 MODEL_LABELS = {
-    MODEL_EDM_LANGMUIR: "EDM – Competitive Langmuir",
     MODEL_TDM_LANGMUIR: "TDM – Competitive Langmuir",
-    MODEL_EDM_CPA: "EDM – CPA",
     MODEL_TDM_CPA: "TDM – CPA",
     MODEL_TDM_WANG: "TDM – Modified Wang",
 }
@@ -438,6 +438,18 @@ def normalize_config(config: Any) -> Any:
                 for step in process.get(key, []):
                     for side in ("start_", "end_"):
                         step[side + "salt_input_mode"] = salt_input_mode(step, side)
+                    if key == "plw_steps":
+                        # A PLW is a fixed %B setpoint. Older endpoint-chemistry
+                        # washes must not bypass the run's Buffer A/B recipe.
+                        old_mode = str(step.get("mode") or "SET_POINT").upper()
+                        selected = "end_" if old_mode == "STEP" else "start_"
+                        for field in ("percent_B", "source", "pH", "salt_concentration_M",
+                                      "conductivity_mS_cm", "salt_input_mode"):
+                            value = step.get(selected + field)
+                            step["start_" + field] = value
+                            step["end_" + field] = value
+                        step["mode"] = "SET_POINT"
+                        step["chemistry_control"] = "BUFFER_B_PERCENT"
         return out
     if isinstance(config, list):
         return [normalize_config(v) for v in config]
@@ -742,6 +754,7 @@ def resolve_process_chemistry(
 
 def process_pH_span(config: dict[str, Any]) -> float:
     """pH span actually consumed by the selected CPA process program."""
+    config = normalize_config(config)
     if not uses_cpa(str(config.get("model") or "")):
         return 0.0
     vals: list[float] = []
@@ -770,24 +783,30 @@ def process_pH_span(config: dict[str, Any]) -> float:
             vals.append(float(load.get("pH")))
         except Exception:
             pass
-    for step in selected_process_steps(config, "plw_steps") + selected_process_steps(config, "elution_steps"):
-        mode = str(step.get("mode") or "SET_POINT").upper()
-        sides = ("start", "end") if mode == "LINEAR" else (("end",) if mode == "STEP" else ("start",))
-        control = _chemistry_control(step.get("chemistry_control"))
-        for side in sides:
-            if control == "BUFFER_B_PERCENT":
-                resolved = buffer_blend_chemistry(config, step.get(f"{side}_percent_B"))
+    for kind in ("plw_steps", "elution_steps"):
+        for step in selected_process_steps(config, kind):
+            mode = str(step.get("mode") or "SET_POINT").upper()
+            if kind == "plw_steps":
+                sides = ("start",)
+                control = "BUFFER_B_PERCENT"
             else:
-                resolved = resolve_process_chemistry(
-                    config, source=step.get(f"{side}_source"), pH=step.get(f"{side}_pH"),
-                    salt_M=step.get(f"{side}_salt_concentration_M"),
-                    conductivity_mS_cm=step.get(f"{side}_conductivity_mS_cm"),
-                    salt_input_mode=step.get(f"{side}_salt_input_mode"),
-                )
-            try:
-                vals.append(float(resolved.get("pH")))
-            except Exception:
-                pass
+                sides = (("start", "end") if mode == "LINEAR" else
+                         (("end",) if mode == "STEP" else ("start",)))
+                control = _chemistry_control(step.get("chemistry_control"))
+            for side in sides:
+                if control == "BUFFER_B_PERCENT":
+                    resolved = buffer_blend_chemistry(config, step.get(f"{side}_percent_B"))
+                else:
+                    resolved = resolve_process_chemistry(
+                        config, source=step.get(f"{side}_source"), pH=step.get(f"{side}_pH"),
+                        salt_M=step.get(f"{side}_salt_concentration_M"),
+                        conductivity_mS_cm=step.get(f"{side}_conductivity_mS_cm"),
+                        salt_input_mode=step.get(f"{side}_salt_input_mode"),
+                    )
+                try:
+                    vals.append(float(resolved.get("pH")))
+                except Exception:
+                    pass
     return max(vals) - min(vals) if vals else 0.0
 
 
@@ -1277,6 +1296,7 @@ def _validate_buffer_definition(config: dict[str, Any], key: str, label: str, er
 
 
 def validate_operating_conditions(config: dict[str, Any]) -> list[str]:
+    config = normalize_config(config)
     errors: list[str] = []
     model = str(config.get("model") or "")
     _number(config["column"].get("flow_mL_min"), "Load flow [mL/min]", errors, positive=True)
@@ -1464,7 +1484,7 @@ def _migrate_row_salt_inputs(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _plw_setpoint_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Keep saved washes fixed at one %B or explicit chemistry setpoint.
+    """Keep saved washes at one Buffer A/B %B setpoint.
 
     Older LINEAR washes keep their Start endpoint; older STEP washes keep their
     End endpoint. Mirror that chosen endpoint into both stored sides so the
@@ -1481,6 +1501,7 @@ def _plw_setpoint_row(row: dict[str, Any]) -> dict[str, Any]:
             fixed[f"{prefix}_Start_{field}"] = value
             fixed[f"{prefix}_End_{field}"] = value
         fixed[f"{prefix}_Mode"] = "SET_POINT"
+        fixed[f"{prefix}_Chemistry_Control"] = "BUFFER_B_PERCENT"
     return fixed
 
 

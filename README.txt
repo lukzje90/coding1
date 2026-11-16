@@ -1,4 +1,18 @@
-TDM – MODIFIED WANG, mL LOADING AND MULTICHANNEL REFINEMENT (R25ak)
+TDM CHROMATOGRAPHY MODEL (R25am)
+
+FIXED PLW BUFFER CHEMISTRY AND TDM MODEL CHOICES (R25am)
+Each post-load wash (PLW) uses one Buffer B percentage. Its pH, conductivity,
+salt concentration and CPA ionic strength are resolved from the current Buffer
+A/B definitions at that percentage. Old PLW endpoint chemistry entries are
+ignored when a saved run is loaded or simulated. Old gradients use Start %B;
+old step washes use End %B. The process editor displays the resolved pH and
+conductivity next to each PLW setpoint. Buffer pH is linearly interpolated as
+a process approximation; it is not an acid/base equilibrium calculation.
+The model selector now offers TDM + Competitive Langmuir, TDM + CPA and TDM +
+Modified Wang. The supplied example opens with TDM + Competitive Langmuir.
+Older EDM projects open with the corresponding TDM model selected and prompt
+for its TDM parameters before running. EDM simulations are no longer supported.
+Sections below are a version history; earlier EDM descriptions are obsolete.
 
 METHOD ROBUSTNESS REPORT CHECK (R25ak)
 The local robustness summary distinguishes model-simulation failures, invalid

@@ -6,7 +6,7 @@ import numpy as np
 
 from tdm_jmp import build_jsl, _validate_jsl
 from tdm_minimal_io import (
-    MODEL_EDM_CPA, MODEL_TDM_CPA, apply_batch_shared_parameters,
+    MODEL_TDM_CPA, apply_batch_shared_parameters,
     batch_row_to_run_config, default_batch_row, validate_config,
 )
 from tdm_minimal_model import _build_program
@@ -14,8 +14,8 @@ from verify_model import make_config
 
 
 class CPABufferIonTests(unittest.TestCase):
-    def test_both_cpa_models_require_complete_oppositely_charged_buffer_ions(self):
-        for model in (MODEL_EDM_CPA, MODEL_TDM_CPA):
+    def test_cpa_requires_complete_oppositely_charged_buffer_ions(self):
+        for model in (MODEL_TDM_CPA,):
             with self.subTest(model=model):
                 cfg = make_config(model, 0, multistep=False)
                 self.assertEqual(validate_config(cfg), [])
@@ -34,7 +34,7 @@ class CPABufferIonTests(unittest.TestCase):
                                     for error in validate_config(partial)))
 
     def test_each_saved_run_uses_its_own_buffer_ion_concentrations(self):
-        shared = make_config(MODEL_EDM_CPA, 0, multistep=False)
+        shared = make_config(MODEL_TDM_CPA, 0, multistep=False)
         rows = []
         for run_number, salt in ((2, 0.10), (4, 0.30)):
             row = default_batch_row(run_number)

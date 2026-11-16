@@ -1,0 +1,15 @@
+To update an existing TDM project while keeping its setup, copy these four
+files from this package into the project folder:
+
+  tdm_minimal_io.py
+  tdm_minimal_model.py
+  tdm_jmp.py
+  tdm_bridge.py
+
+Keep the existing tdm_inputs.json and the saved run CSV files. The packaged
+tdm_inputs.json is a fresh TDM + Competitive Langmuir example. Existing
+EDM configurations can no longer run; the JMP editor selects the matching
+TDM model and its TDM parameters must be supplied before simulation.
+
+The bundled tests cover the supported TDM combinations. From the extracted
+package folder, run: python -m unittest discover -s tests -q
