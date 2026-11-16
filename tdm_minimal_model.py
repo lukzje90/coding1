@@ -1238,6 +1238,72 @@ def _simulate_tdm_wang(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cpa_released_ion_pairs_M(qv: np.ndarray, pore_pH: np.ndarray,
+                              comps: list[CPAComponent], epsp: float) -> np.ndarray:
+    """Free 1:1 electrolyte released by adsorbed proteins (JCA 1654, Eq. 21).
+
+    The projected protein area is one quarter of its spherical surface, so
+    z_c,i = Z_i(pH)/4 monovalent counter-ion *pairs* per adsorbed protein.
+    For a cation exchanger only positive protein charge neutralizes the
+    negatively charged surface. qv is mol/m³ stationary solid; the result is
+    mol/L pore liquid. Evaluating Z at the current pH also accounts for charge
+    regulation of proteins that remain bound during a pH change.
+    """
+    released = np.zeros(len(pore_pH), dtype=float)
+    for i, comp in enumerate(comps):
+        dpH = pore_pH - comp.pH_ref
+        z1, z2, z3 = comp.Z_poly
+        charge = np.maximum(comp.Z_ref + dpH * (z1 + dpH * (z2 + dpH * z3)), 0.0)
+        released += 0.25 * charge * qv[:, i]
+    return ((1.0 - epsp) / epsp) * released / 1000.0
+
+
+class _CounterionCoupledMobilePhase:
+    """Combine passive buffer transport with the conservative CPA ion balance."""
+
+    def __init__(self, baseline: MobilePhaseTransport, solution: Any, *,
+                 bulk_slice: slice, pore_slice: slice, adsorbed_slice: slice,
+                 nx: int, n: int, comps: list[CPAComponent], epsp: float,
+                 conductivity_to_salt: float):
+        self.baseline = baseline
+        self.program = baseline.program
+        self.initial_chemistry_state = baseline.initial_chemistry_state
+        self.solution = solution
+        self.bulk_slice = bulk_slice
+        self.pore_slice = pore_slice
+        self.adsorbed_slice = adsorbed_slice
+        self.nx = nx
+        self.n = n
+        self.comps = comps
+        self.epsp = epsp
+        self.conductivity_to_salt = conductivity_to_salt
+
+    def _correct(self, raw: np.ndarray, extra_M: np.ndarray) -> np.ndarray:
+        corrected = raw.copy()
+        corrected[:, 1] += extra_M
+        corrected[:, 2] += extra_M
+        corrected[:, 3] += extra_M / self.conductivity_to_salt
+        corrected[:, 1:4] = np.maximum(corrected[:, 1:4], 0.0)
+        return corrected
+
+    def local(self, t: float, *, pore: bool = False) -> np.ndarray:
+        raw = self.baseline.local(t, pore=pore)
+        state = self.solution.sol(float(np.clip(t, 0.0, self.baseline.program.total_time_s)))
+        if pore:
+            qv = state[self.adsorbed_slice].reshape(self.nx, self.n)
+            released = _cpa_released_ion_pairs_M(qv, raw[:, 0], self.comps, self.epsp)
+            extra = state[self.pore_slice] + released
+        else:
+            extra = state[self.bulk_slice]
+        return self._correct(raw, extra)
+
+    def outlet(self, times: np.ndarray) -> np.ndarray:
+        times = np.asarray(times, dtype=float)
+        raw = self.baseline.outlet(times)
+        extra = self.solution.sol(np.clip(times, 0.0, self.baseline.program.total_time_s))[self.bulk_slice.stop - 1]
+        return self._correct(raw, np.asarray(extra))
+
+
 def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None = None) -> dict[str, Any]:
     comps = _build_cpa_components(config, need_tdm_kinetics=True)
     cpa_model = _cpa_model(config, comps)
@@ -1265,11 +1331,15 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
     sl_cb = slice(0, block)
     sl_cp = slice(block, 2*block)
     sl_qv = slice(2*block, 3*block)
-    y0 = np.zeros(3*block)
+    sl_ion_bulk = slice(3*block, 3*block + nx)
+    sl_ion_pore = slice(3*block + nx, 3*block + 2*nx)
+    y0 = np.zeros(3*block + 2*nx)
+    ion_dispersion = (float(config["system"]["salt_dispersion_mm2_s"]) * 1e-6
+                      if config["system"]["salt_dispersion_enabled"] else 0.0)
     # The adsorption law couples species only within the same axial cell;
     # protein transport couples nearby bulk cells. This is the same physical
     # state layout and local Jacobian structure used by TDM–Wang.
-    sparsity = lil_matrix((3 * block, 3 * block), dtype=int)
+    sparsity = lil_matrix((len(y0), len(y0)), dtype=int)
     for cell in range(nx):
         for species in range(n):
             index = cell * n + species
@@ -1283,6 +1353,17 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
                 adsorbed_index = 2 * block + cell * n + competing
                 sparsity[block + index, adsorbed_index] = 1
                 sparsity[2 * block + index, adsorbed_index] = 1
+                sparsity[sl_ion_bulk.start + cell, adsorbed_index] = 1
+                sparsity[sl_ion_pore.start + cell, adsorbed_index] = 1
+            sparsity[2 * block + index, sl_ion_pore.start + cell] = 1
+            sparsity[block + index, sl_ion_pore.start + cell] = 1
+        ion_bulk_row = sl_ion_bulk.start + cell
+        ion_pore_row = sl_ion_pore.start + cell
+        for neighbor in range(max(0, cell - 2), min(nx, cell + 3)):
+            sparsity[ion_bulk_row, sl_ion_bulk.start + neighbor] = 1
+        sparsity[ion_bulk_row, ion_pore_row] = 1
+        sparsity[ion_pore_row, ion_bulk_row] = 1
+        sparsity[ion_pore_row, ion_pore_row] = 1
 
     def unpack(y: np.ndarray):
         return (
@@ -1300,7 +1381,12 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
             if deadline_checks % 32 == 1 and time.perf_counter() >= solver_deadline:
                 raise TimeoutError("TDM+CPA LSQ trial timed out during protein integration.")
         cb, cp, qv = unpack(y)
+        ion_bulk = y[sl_ion_bulk]
+        ion_pore_conserved = y[sl_ion_pore]
         local_chemistry = mobile_phase.local(t, pore=True)
+        released_ion_pairs = _cpa_released_ion_pairs_M(
+            qv, local_chemistry[:, 0], comps, epsp)
+        free_ion_pore_extra = ion_pore_conserved + released_ion_pairs
         inlet_protein, _, _, _ = program.at_time(t)
         Q = program.flow_at_time(t) * 1e-6 / 60.0
         u = Q / max(A * epsv, SMALL)
@@ -1311,7 +1397,7 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
             # propagate it as an unretained mobile-phase condition with the
             # interstitial convective delay to this axial cell.
             local_pH = float(local_chemistry[cell, 0])
-            binding_salt = float(local_chemistry[cell, 1 if is_hic(config) else 2])
+            binding_salt = max(float(local_chemistry[cell, 2] + free_ion_pore_extra[cell]), 0.0)
             dqv[cell] = cpa_model.kinetic_rate(cp[cell], qv[cell], local_pH, binding_salt)
         dcb = np.zeros_like(cb)
         dcp = np.zeros_like(cp)
@@ -1326,7 +1412,16 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
                 - (1.0 - epsp) / denom * dqv[:, i]
             )
 
-        return np.concatenate([dcb.ravel(), dcp.ravel(), dqv.ravel()])
+        # Eq. 22: adsorption exchanges a monovalent counter-ion pair with the
+        # mobile phase. Store pore free-ion excess *minus* the bound-protein
+        # release term, so pH-dependent changes in Z_i remain conservative
+        # without differentiating the prescribed pH profile numerically.
+        ion_transfer = ion_bulk - free_ion_pore_extra
+        dion_bulk = _scalar_transport(ion_bulk, 0.0, u, ion_dispersion, dx) - (
+            (1.0 - epsv) / epsv * ion_transfer)
+        dion_pore_conserved = ion_transfer / epsp
+        return np.concatenate([dcb.ravel(), dcp.ravel(), dqv.ravel(),
+                               dion_bulk, dion_pore_conserved])
 
     coverage_weights = np.array([math.pi * N_A * c.radius_m**2 / c.As_m_inv for c in comps])
     solution = solve_ivp(
@@ -1356,6 +1451,38 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
         raise FloatingPointError(
             f"TDM+CPA surface coverage {maximum_surface_coverage:.6g} exceeds the geometric ceiling by more than 5%.")
 
+    coupled_mobile_phase = _CounterionCoupledMobilePhase(
+        mobile_phase, solution, bulk_slice=sl_ion_bulk, pore_slice=sl_ion_pore,
+        adsorbed_slice=sl_qv, nx=nx, n=n, comps=comps, epsp=epsp,
+        conductivity_to_salt=float(config["conversion"]["conductivity_to_salt_M_per_mS_cm"]),
+    )
+
+    # Inspect accepted integration states before the display-only nonnegative
+    # clipping in the mobile-phase wrapper. A negative ion concentration is a
+    # physically invalid trial, not a legitimate prediction to hide in plots.
+    minima = {"pore_salt_M": math.inf, "pore_ionic_strength_M": math.inf,
+              "bulk_salt_M": math.inf, "bulk_ionic_strength_M": math.inf}
+    maximum_released_inventory_mol = 0.0
+    for k, t in enumerate(solution.t):
+        pore_base = mobile_phase.local(float(t), pore=True)
+        qv_state = solution.y[sl_qv, k].reshape(nx, n)
+        pore_released = _cpa_released_ion_pairs_M(qv_state, pore_base[:, 0], comps, epsp)
+        pore_extra = solution.y[sl_ion_pore, k] + pore_released
+        maximum_released_inventory_mol = max(
+            maximum_released_inventory_mol,
+            A * dx * (1.0 - epsv) * epsp * 1000.0 * float(np.sum(pore_released)))
+        bulk_base = mobile_phase.local(float(t))
+        bulk_extra = solution.y[sl_ion_bulk, k]
+        for name, raw in (("pore_salt_M", pore_base[:, 1] + pore_extra),
+                          ("pore_ionic_strength_M", pore_base[:, 2] + pore_extra),
+                          ("bulk_salt_M", bulk_base[:, 1] + bulk_extra),
+                          ("bulk_ionic_strength_M", bulk_base[:, 2] + bulk_extra)):
+            minima[name] = min(minima[name], float(np.min(raw)))
+    if min(minima.values()) < -1e-7:
+        raise FloatingPointError(
+            "TDM+CPA counter-ion balance produced a negative mobile-phase "
+            f"electrolyte concentration: {minima}.")
+
     sample_t = np.linspace(0.0, program.total_time_s, time_steps + 1)
     Y = solution.sol(sample_t)
     cb_out = np.empty((len(sample_t), n))
@@ -1364,11 +1491,31 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
     for k in range(len(sample_t)):
         cb, _, _ = unpack(Y[:, k])
         cb_out[k] = np.maximum(cb[-1], 0.0)
-        chemistry = mobile_phase.local(float(sample_t[k]))[-1]
+        chemistry = coupled_mobile_phase.local(float(sample_t[k]))[-1]
         ionic_out[k] = chemistry[2]
         pH_out[k] = chemistry[0]
     final_cb, final_cp, final_qv = unpack(solution.y[:, -1])
     bed_cell_V = A * dx
+    ion_final = solution.y[:, -1]
+    ion_inventory_mol = bed_cell_V * 1000.0 * float(np.sum(
+        epsv * ion_final[sl_ion_bulk] +
+        (1.0 - epsv) * epsp * ion_final[sl_ion_pore]))
+    ion_outlet_mol = 0.0
+    for stage_index, stage in enumerate(program.stages):
+        start = program.stage_start_time_s[stage_index]
+        end = program.stage_end_time_s[stage_index]
+        internal = solution.t[(solution.t > start) & (solution.t < end)]
+        stage_times = np.r_[start, internal, end]
+        excess_outlet = solution.sol(stage_times)[sl_ion_bulk.stop - 1]
+        ion_outlet_mol += (_trapezoidal_integral(excess_outlet, stage_times)
+                           * stage.flow_mL_min * 1e-6 / 60.0 * 1000.0)
+    ion_closure_mol = ion_outlet_mol + ion_inventory_mol
+    ion_closure_percent = (100.0 * ion_closure_mol / maximum_released_inventory_mol
+                           if maximum_released_inventory_mol > 0.0 else 0.0)
+    if abs(ion_closure_mol) > max(2e-10, 0.05 * maximum_released_inventory_mol):
+        raise FloatingPointError(
+            f"TDM+CPA counter-ion balance closure error {ion_closure_mol * 1e6:.6g} µmol "
+            f"({ion_closure_percent:.3g}% of maximum released inventory).")
     inventory_mol = bed_cell_V * np.sum(
         epsv * final_cb
         + (1.0 - epsv) * epspi * final_cp
@@ -1470,7 +1617,7 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
         })
     return {
         "program": program,
-        "mobile_phase": mobile_phase,
+        "mobile_phase": coupled_mobile_phase,
         "component_names": [c.name for c in comps],
         "component_mw_kDa": np.array([c.mw_kDa for c in comps]),
         "column_time_s": sample_t,
@@ -1504,6 +1651,19 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
             "minimum_solver_state_by_phase_mol_m3": phase_state_minimum,
             "negative_state_tolerance_by_phase_mol_m3": negative_tolerances,
             "maximum_surface_coverage_fraction": maximum_surface_coverage,
+            "counterion_exchange": {
+                "model": "Conservative monovalent ion-pair release and uptake, JCA 1654 Eqs. 21-22",
+                "released_pairs_per_adsorbed_protein": "max(Z_i(pH), 0) / 4",
+                "minimum_pore_ionic_strength_M": minima["pore_ionic_strength_M"],
+                "minimum_pore_salt_M": minima["pore_salt_M"],
+                "minimum_bulk_ionic_strength_M": minima["bulk_ionic_strength_M"],
+                "minimum_bulk_salt_M": minima["bulk_salt_M"],
+                "cumulative_outlet_excess_umol": ion_outlet_mol * 1e6,
+                "final_conserved_inventory_excess_umol": ion_inventory_mol * 1e6,
+                "maximum_released_inventory_umol": maximum_released_inventory_mol * 1e6,
+                "closure_error_umol": ion_closure_mol * 1e6,
+                "closure_percent_of_maximum_released_inventory": ion_closure_percent,
+            },
             "pH_rule": "user-programmed pH profile with interstitial convective delay; pH-dependent CPA parameters follow Briskot et al. (2021)",
             "radius_rule": "diameter_nm / 2",
             "molecular_weight_rule": "user-entered mass, independent of CPA radius",
@@ -1558,6 +1718,9 @@ def _output_trace(config: dict[str, Any], sim: dict[str, Any]) -> dict[str, Any]
     out["pH"] = chemistry[:, 0]
     out["salt_concentration_M"] = chemistry[:, 1]
     out["ionic_strength_M"] = chemistry[:, 2]
+    if config["model"] == MODEL_TDM_CPA:
+        baseline = sim["mobile_phase"].baseline.outlet(t)
+        out["counterion_pair_excess_M"] = chemistry[:, 2] - baseline[:, 2]
     binding = np.asarray([sim["mobile_phase"].local(float(time), pore=uses_tdm(config["model"]))[-1] for time in t])
     out["binding_salt_concentration_M"] = binding[:, 1]
     out["binding_ionic_strength_M"] = binding[:, 2]
@@ -1781,7 +1944,11 @@ def simulate(config: dict[str, Any], *, solver_deadline: float | None = None) ->
     sim["diagnostics"]["batch_shared_parameter_fingerprint"] = parameter_receipt["batch_shared_parameter_fingerprint"]
     sim["diagnostics"]["chromatography_mode"] = config["chromatography_mode"]
     sim["diagnostics"]["system_response"] = dict(config["system"])
-    sim["diagnostics"]["column_salt_transport"] = "stirred upstream buffer volume; conservative axial transport; TDM salt fully pore-accessible; initial column and mixer chemistry follows this run's initial equilibration source"
+    sim["diagnostics"]["column_salt_transport"] = (
+        "stirred upstream buffer volume; conservative axial transport; TDM salt fully pore-accessible; "
+        "initial column and mixer chemistry follows this run's initial equilibration source"
+        + ("; TDM+CPA counter-ion pair release/uptake is coupled to pore binding and outlet conductivity"
+           if model == MODEL_TDM_CPA else ""))
     sim["diagnostics"]["binding_chemistry"] = ("Analytical salt molarity [M]" if is_hic(config) or uses_langmuir(model)
                                                else "Ionic strength [M]")
     sim["diagnostics"]["target_peak"] = target_peak
@@ -2269,7 +2436,7 @@ def write_outputs(
               "programmed_conductivity_mS_cm", "column_conductivity_mS_cm", "column_total_protein_g_L",
               "stage_index", "pH", "salt_concentration_M", "conductivity_mS_cm", "ionic_strength_M",
               "programmed_salt_concentration_M", "binding_salt_concentration_M", "binding_ionic_strength_M",
-              "total_protein_g_L"] + [f"{name}_g_L" for name in names] + [f"{name}_uv_mAU" for name in names] + affinity_fields
+              "total_protein_g_L"] + (["counterion_pair_excess_M"] if config["model"] == MODEL_TDM_CPA else []) + [f"{name}_g_L" for name in names] + [f"{name}_uv_mAU" for name in names] + affinity_fields
     with csv_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
@@ -2294,6 +2461,8 @@ def write_outputs(
                        ionic_strength_M=trace["ionic_strength_M"][k])
             for field in ("programmed_salt_concentration_M", "binding_salt_concentration_M", "binding_ionic_strength_M"):
                 row[field] = trace[field][k]
+            if config["model"] == MODEL_TDM_CPA:
+                row["counterion_pair_excess_M"] = trace["counterion_pair_excess_M"][k]
             for i, name in enumerate(names):
                 row[f"{name}_g_L"] = trace["component_g_L"][k, i]
                 row[f"{name}_uv_mAU"] = trace["component_uv_mAU"][k, i]
@@ -2457,6 +2626,7 @@ def write_outputs(
 {initial_html}
 <p>Total run: {program.total_CV:g} CV; {len(trace['CV']) - 1} reported time steps; {diagnostics_obj.get('axial_cells', '—')} axial cells. Marker numbers in the chart match this table.</p>
 <p>The chart outputs UV in mAU, with dotted programmed %B and lagged column %B, conductivity, and the programmed stage flow rate on their own axes in the same plot. The three overlays can be toggled independently. CSV also records programmed salt, column salt and the outlet cell's binding salt / ionic strength (pore phase for TDM). Detector dead volumes are independent downstream delays; the column mass balance uses the undelayed outlet. %B is undefined for direct endpoint chemistry stages. pH blending is a linear process approximation, without acid-base speciation.</p>
+{('<p>CPA counter-ion exchange is coupled to the pore and bulk ion balance. The reported conductivity includes released or taken-up monovalent ion pairs; the CSV records their outlet excess in M. Conductivity uses the entered salt-to-conductivity conversion factor.</p>' if config['model'] == MODEL_TDM_CPA else '')}
 <div class="scroll"><table><thead><tr><th>Marker</th><th>Stage</th><th>Start CV</th><th>End CV</th><th>Duration CV</th><th>Mode</th><th>Flow mL/min</th><th>Chemistry control</th><th>Start %B</th><th>End %B</th><th>pH start → end</th><th>Salt M start → end</th><th>Salt source/input start → end</th><th>Conductivity mS/cm start → end</th></tr></thead><tbody>{stage_rows}</tbody></table></div>
 {affinity_html}
 {saturation_html}
@@ -2489,6 +2659,7 @@ def write_outputs(
         "warnings": diagnostics_obj.get("warnings", []),
         "nominal_langmuir_saturation": saturation,
         "CPA_adsorption_audit": cpa_audit,
+        "counterion_exchange": diagnostics_obj.get("counterion_exchange"),
         "langmuir_affinity_used": affinity_used,
         "target_peak": result.get("parameter_receipt", {}).get("target_peak"),
         "output_sha256": {

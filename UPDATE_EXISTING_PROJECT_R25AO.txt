@@ -1,0 +1,19 @@
+To update an existing extracted project while keeping its model parameters
+and process setup, copy these six Python files from this package into the
+project folder, replacing the older copies:
+
+  tdm_minimal_io.py
+  tdm_minimal_model.py
+  tdm_mobile_phase.py
+  tdm_least_squares.py
+  tdm_bridge.py
+  tdm_jmp.py
+
+Keep your existing tdm_inputs.json, tdm_batch_runs.csv,
+tdm_lsq_process_runs.csv, and tdm_lsq_fraction_mass.csv. Do not copy the
+packaged example inputs or run tables over your project files.
+
+TDM + CPA chromatograms and conductivity can change because adsorption now
+releases and takes up counter-ions. Existing result receipts are marked stale.
+Re-run and check or refit previously calibrated TDM + CPA parameters before
+using method optimisation predictions. Other TDM model equations are unchanged.

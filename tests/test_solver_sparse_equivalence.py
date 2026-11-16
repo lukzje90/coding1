@@ -6,7 +6,7 @@ from unittest.mock import patch
 import numpy as np
 
 import tdm_minimal_model as model
-from tdm_minimal_io import MODEL_EDM_LANGMUIR, MODEL_TDM_CPA, MODEL_TDM_LANGMUIR
+from tdm_minimal_io import MODEL_TDM_CPA, MODEL_TDM_LANGMUIR
 from verify_model import make_config
 
 
@@ -18,18 +18,15 @@ class SparseSolverEquivalenceTests(unittest.TestCase):
             kwargs.pop("jac_sparsity", None)
             return actual_solve_ivp(*args, **kwargs)
 
-        for choice in (MODEL_TDM_CPA, MODEL_TDM_LANGMUIR, MODEL_EDM_LANGMUIR):
+        for choice in (MODEL_TDM_CPA, MODEL_TDM_LANGMUIR):
             with self.subTest(model=choice):
                 config = make_config(choice, 1, multistep=False)
-                # EDM keeps its original dense solve on small grids; exercise
-                # its sparse path at the 50-cell size where it saves work.
-                cells = 50 if choice == MODEL_EDM_LANGMUIR else 8
-                config["numerics"].update(time_steps=50, axial_positions=cells)
+                config["numerics"].update(time_steps=50, axial_positions=8)
                 config["feed"]["load_density_mg_mL_resin"] = 0.2
                 config["process"]["plw_count"] = 0
                 elution = config["process"]["elution_steps"][0]
                 elution.update(mode="LINEAR", CV=8.0, flow_mL_min=1.0)
-                if choice in (MODEL_TDM_LANGMUIR, MODEL_EDM_LANGMUIR):
+                if choice == MODEL_TDM_LANGMUIR:
                     config["process"].update(load_start_percent_B=100.0,
                                              load_end_percent_B=100.0)
                     elution.update(start_percent_B=100.0, end_percent_B=0.0)

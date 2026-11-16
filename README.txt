@@ -1,4 +1,17 @@
-TDM CHROMATOGRAPHY MODEL (R25an)
+TDM CHROMATOGRAPHY MODEL (R25ao)
+
+CPA COUNTER-ION COUPLING (R25ao)
+TDM + CPA now couples adsorption and desorption to a conservative monovalent
+counter-ion pair balance. The charge-compensation term is Z_i(pH)/4 per
+adsorbed protein for the cation exchanger, following Briskot et al.,
+J. Chromatogr. A 1654 (2021) 462439, Eqs. 21-22. Released or taken-up
+ions change the local pore ionic strength used by CPA, the column outlet
+ionic strength and the predicted conductivity. The result CSV includes the
+counter-ion pair excess; the report and manifest include ion-balance
+diagnostics. This changes TDM + CPA predictions, so existing CPA fits need
+to be checked and normally refitted. Existing result receipts become stale;
+saved process setups and model parameters are retained. See
+COUNTERION_COUPLING_R25AO.md for equations, tests and assumptions.
 
 CPA CHARGE AND SATURATION AUDIT (R25an)
 The TDM + CPA surface coverage and scaled-particle blocking terms were checked

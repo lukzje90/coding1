@@ -41,9 +41,6 @@ measurement or fitting. Charge inputs near `Z_i = 1` are also much smaller
 than the paper's fitted examples (roughly 30–140), though a particular
 protein can differ.
 
-**Scope:** the current TDM transports programmed buffer ions independently
-of protein adsorption. It does not couple the paper's Eq. 22 counter-ion
-release balance back into the bulk-ion transport and conductivity trace.
-This limitation is separate from the fitted charge and saturation equations
-audited here and matters most when protein loading substantially perturbs
-the local mobile-phase ion balance.
+**R25an scope:** that version transported programmed buffer ions independently
+of protein adsorption. R25ao adds the coupled Eq. 22 counter-ion balance;
+see `COUNTERION_COUPLING_R25AO.md`.

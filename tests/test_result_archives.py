@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import tdm_bridge
-from tdm_minimal_io import MODEL_EDM_LANGMUIR
+from tdm_minimal_io import MODEL_TDM_LANGMUIR
 from tdm_minimal_model import (
     _saved_run_folder_name, _uk_archive_stamp, check_result_freshness,
     run_batch_and_write, simulate, write_outputs,
@@ -20,7 +20,7 @@ from verify_model import make_config
 
 class ResultArchiveTests(unittest.TestCase):
     def test_prediction_archive_keeps_run_receipt_and_does_not_replace_older_copy(self):
-        cfg = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
+        cfg = make_config(MODEL_TDM_LANGMUIR, 1, multistep=False)
         cfg["numerics"].update(time_steps=50, axial_positions=6)
         context = {"run_number": 4, "run_name": 'Product/Impurity: trial?'}
         with tempfile.TemporaryDirectory() as temp:
@@ -40,9 +40,14 @@ class ResultArchiveTests(unittest.TestCase):
                         self.assertEqual((folder / Path(paths[key]).name).read_bytes(),
                                          Path(paths[key]).read_bytes())
             self.assertTrue(Path(paths["manifest"]).is_file())
+            old_manifest = json.loads(Path(paths["manifest"]).read_text(encoding="utf-8"))
+            old_manifest["build_id"] = "2026-11-16-R25AN-CPA-CHARGE"
+            Path(paths["manifest"]).write_text(json.dumps(old_manifest), encoding="utf-8")
+            current, _reason = check_result_freshness(cfg, context, root)
+            self.assertFalse(current)
 
     def test_batch_gallery_points_to_dated_named_run_folders(self):
-        cfg = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+        cfg = make_config(MODEL_TDM_LANGMUIR, 0, multistep=False)
         cfg["numerics"].update(time_steps=50, axial_positions=5)
         first = dict(cfg, _run_name="Early/product")
         second = dict(cfg, _run_name="Late: product")
@@ -85,7 +90,7 @@ class ResultArchiveTests(unittest.TestCase):
                     writer.writeheader()
                     writer.writerows([{"Run_Number": 2, "Value": "two"},
                                      {"Run_Number": 4, "Value": "four"}])
-            initial2 = make_config(MODEL_EDM_LANGMUIR, 0, multistep=False)
+            initial2 = make_config(MODEL_TDM_LANGMUIR, 0, multistep=False)
             initial2["process"]["load_CV"] = 2.0
             initial4 = copy.deepcopy(initial2)
             initial4["process"]["load_CV"] = 4.0

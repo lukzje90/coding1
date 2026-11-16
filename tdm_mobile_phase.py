@@ -1,8 +1,10 @@
-"""Protein-independent buffer transport, shared by all column models.
+"""Base buffer transport, shared by all column models.
 
 The buffer mixer is a stirred volume upstream of the column. Column salt is
 unretained, dispersive, and fully pore-accessible in TDM. Detector dead volumes
 are applied separately, downstream, in accumulated volume rather than time.
+TDM + CPA couples a conservative protein-dependent counter-ion perturbation
+to this base transport in its column solver.
 """
 from __future__ import annotations
 
