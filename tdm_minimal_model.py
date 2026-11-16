@@ -290,7 +290,7 @@ class CPAComponent:
     Z_poly: tuple[float, float, float]
     delta_ref: float
     delta_pH_slope_m2_C: float
-    # The 2025 calibration paper neglected Z_lat,i; keep it fixed internally.
+    # The 2021 preparative IEX paper fits Z_lat,i independently of Z_i.
     salt_sensitivity_per_M: float = 0.0
     Z_lat: float = 0.0
     k_eff_m_s: float = 0.0
@@ -320,24 +320,31 @@ class CPAComponent:
 
 
 class CPAModel:
-    """CPA equilibrium and kinetic terms used by both EDM and TDM.
+    """CPA equilibrium and kinetics; paper equations are selected for TDM + CPA.
 
-    The supplied CPA paper refers detailed expressions for the protein/adsorber
-    electrostatic energy and available-surface term to earlier derivations. Those
-    sub-expressions are retained from the uploaded core model. Z_lat,i is fixed to
-    zero because the 2025 calibration paper explicitly neglected it; it is not a
-    user-facing parameter.
+    The EDM path retains its previous surface-energy approximation. The TDM
+    path uses Briskot et al. (2021), JCA 1653, Eqs. (12)-(19), with the
+    kinetic/steric terms in JCA 1654. The lateral charge is independent of
+    the protein–adsorber effective charge.
     """
 
-    def __init__(self, components: list[CPAComponent], ligand_density_mol_m2: float, system_scale: float, hic: bool = False):
+    def __init__(self, components: list[CPAComponent], ligand_density_mol_m2: float, system_scale: float,
+                 hic: bool = False, paper_tdm_cpa: bool = False, ligand_pK: float = CPA_CEX_LIGAND_PK):
         self.hic = hic
+        self.paper_tdm_cpa = paper_tdm_cpa
         self.components = components
         self.n = len(components)
         self.ligand_density_mol_m2 = float(ligand_density_mol_m2)
+        self.ligand_pK = float(ligand_pK)
         self.system_scale = float(system_scale)
         self.eps = CPA_RELATIVE_PERMITTIVITY * EPS0
         self.kBT = K_B * CPA_TEMPERATURE_K
         self.has_lateral_interactions = any(abs(c.Z_lat) > 0.0 for c in components)
+        # Chemistry depends on local pH and ionic strength, not on q. The BDF
+        # solver evaluates many q probes at the same environment; exact-key
+        # reuse avoids repeatedly solving the same surface charge balance.
+        self._adsorber_potential_cache: dict[tuple[float, float], float] = {}
+        self._adsorber_energy_cache: dict[tuple[float, float, float, float], float] = {}
 
     def ligand_ionisation(self, pH: float) -> float:
         exponent = _clip_scalar(CPA_CEX_LIGAND_PK - pH, -300.0, 300.0)
@@ -353,13 +360,74 @@ class CPAModel:
     def surface_potential_linear(self, sigma: float, kappa: float) -> float:
         return sigma / max(self.eps * kappa, SMALL)
 
+    def _grahame_scale(self, kappa: float) -> float:
+        return 2.0 * self.eps * kappa * self.kBT / E_CHARGE
+
+    def _protein_surface_potential(self, sigma: float, kappa: float) -> float:
+        # Briskot et al. (2021), JCA 1653, Eqs. (12), (13), (17):
+        # effective fitted Z(pH), with constant-charge regulation.
+        return (2.0 * self.kBT / E_CHARGE) * math.asinh(sigma / self._grahame_scale(kappa))
+
+    def _adsorber_surface_potential(self, pH: float, kappa: float) -> float:
+        # Eq. (15) must use surface pH (Eq. 16), not bulk pH. Solve its
+        # monotone charge balance with the Grahame diffuse-layer relation.
+        key = (pH, kappa)
+        cached = self._adsorber_potential_cache.get(key)
+        if cached is not None:
+            return cached
+        scale = self._grahame_scale(kappa)
+        ligand_charge = E_CHARGE * N_A * self.ligand_density_mol_m2
+        log_ratio = math.log(10.0) * (self.ligand_pK - pH)
+        s = math.asinh(-ligand_charge / scale)
+        for _ in range(24):
+            log_proton_ratio = log_ratio - 2.0 * s
+            alpha = (math.exp(-log_proton_ratio) if log_proton_ratio > 40.0
+                     else 1.0 / (1.0 + math.exp(log_proton_ratio)))
+            residual = scale * math.sinh(s) + ligand_charge * alpha
+            derivative = scale * math.cosh(s) + 2.0 * ligand_charge * alpha * (1.0 - alpha)
+            step = residual / derivative
+            s -= step
+            if abs(step) < 1e-12:
+                break
+        potential = (2.0 * self.kBT / E_CHARGE) * s
+        if len(self._adsorber_potential_cache) >= 16384:
+            self._adsorber_potential_cache.clear()
+        self._adsorber_potential_cache[key] = potential
+        return potential
+
+    def _paper_adsorber_energy(self, comp: CPAComponent, pH: float,
+                               kappa: float, psi_a: float) -> float:
+        # Briskot et al. (2021), JCA 1653, Eqs. (18)-(19). Integrating
+        # Parsegian-Gingell plate energy in the Derjaguin approximation and
+        # evaluating at its attractive minimum gives u_A(delta_m). This
+        # removes the arbitrary distance and energy multiplier.
+        key = (comp.radius_m, comp.Z(pH), pH, kappa)
+        cached = self._adsorber_energy_cache.get(key)
+        if cached is not None:
+            return cached
+        psi_p = self._protein_surface_potential(comp.sigma(pH), kappa)
+        if psi_a * psi_p >= 0.0:
+            energy = 0.0
+        else:
+            squares = psi_a * psi_a + psi_p * psi_p
+            t = min(-2.0 * psi_a * psi_p / squares, 1.0 - 1e-14)
+            bracket = 2.0 * psi_a * psi_p * math.atanh(t) - 0.5 * squares * math.log1p(-t * t)
+            energy = min(2.0 * math.pi * comp.radius_m * self.eps * bracket, 0.0)
+        if len(self._adsorber_energy_cache) >= 16384:
+            self._adsorber_energy_cache.clear()
+        self._adsorber_energy_cache[key] = energy
+        return energy
+
     def u_adsorber(self, comp: CPAComponent, pH: float, ionic_strength_mol_m3: float) -> float:
         kappa = self.debye_kappa(ionic_strength_mol_m3)
-        psi_a = self.surface_potential_linear(self.sigma_adsorber(pH), kappa)
+        psi_a = (self._adsorber_surface_potential(pH, kappa) if self.paper_tdm_cpa
+                 else self.surface_potential_linear(self.sigma_adsorber(pH), kappa))
         return self._u_adsorber_at_environment(comp, pH, kappa, psi_a)
 
     def _u_adsorber_at_environment(self, comp: CPAComponent, pH: float,
                                   kappa: float, psi_a: float) -> float:
+        if self.paper_tdm_cpa:
+            return self._paper_adsorber_energy(comp, pH, kappa, psi_a)
         psi_p = self.surface_potential_linear(comp.sigma(pH), kappa)
         separation = max(0.15e-9, 0.02 * comp.radius_m)
         return self.system_scale * 4.0 * math.pi * self.eps * comp.radius_m * psi_a * psi_p * math.exp(-kappa * separation)
@@ -400,7 +468,8 @@ class CPAModel:
         kappa = self.debye_kappa(ionic_strength_mol_m3)
         hex_distance = math.sqrt(2.0 / (math.sqrt(3.0) * number_density))
         x = float(np.clip(kappa * hex_distance, 1e-8, 80.0))
-        lattice_factor = math.sqrt(3.0) * hex_distance * N_A * math.exp(-x) / max(1.0 - math.exp(-x), SMALL)
+        lattice_factor = (3.0 * math.sqrt(3.0) * hex_distance * N_A * math.exp(-x)
+                          / max(-math.expm1(-3.0 * math.sqrt(3.0) * x / (2.0 * math.pi)), SMALL))
         out = np.zeros(self.n)
         for i, ci in enumerate(self.components):
             total = 0.0
@@ -436,7 +505,8 @@ class CPAModel:
         ionic_mol_m3 = max(float(ionic_strength_M), 0.0) * 1000.0
         lateral = self.lateral_interactions(qv, ionic_mol_m3)
         kappa = self.debye_kappa(ionic_mol_m3)
-        psi_a = self.surface_potential_linear(self.sigma_adsorber(pH), kappa)
+        psi_a = (self._adsorber_surface_potential(pH, kappa) if self.paper_tdm_cpa
+                 else self.surface_potential_linear(self.sigma_adsorber(pH), kappa))
         K = np.zeros(self.n)
         for i, comp in enumerate(self.components):
             y = _clip_scalar(self._u_adsorber_at_environment(comp, pH, kappa, psi_a) / self.kBT, -80.0, 80.0)
@@ -853,7 +923,8 @@ def _build_cpa_components(config: dict[str, Any], *, need_tdm_kinetics: bool) ->
                 name=str(row["name"]),
                 mass_fraction=float(row["mass_percent"]) / 100.0,
                 radius_m=radius_nm * 1e-9,
-                mw_kDa=_mw_from_radius_nm(radius_nm),
+                mw_kDa=(float(row["molecular_weight_kDa"]) if config["model"] == MODEL_TDM_CPA
+                        else _mw_from_radius_nm(radius_nm)),
                 As_m_inv=float(row["As_m_inv"]),
                 Z_ref=0.0 if is_hic(config) else float(row["Z_ref"]),
                 pH_ref=float(row["pH_ref"]) if pH_varies else pHA,
@@ -865,7 +936,7 @@ def _build_cpa_components(config: dict[str, Any], *, need_tdm_kinetics: bool) ->
                 delta_ref=float(row["delta_ref"]),
                 delta_pH_slope_m2_C=float(row["delta_pH_slope_m2_C"]) if pH_varies else 0.0,
                 salt_sensitivity_per_M=float(row.get("salt_sensitivity_per_M", 1.0)),
-                Z_lat=0.0,
+                Z_lat=float(row["Z_lat"]) if config["model"] == MODEL_TDM_CPA and not is_hic(config) else 0.0,
                 k_eff_m_s=float(row["k_eff_um_s"]) * 1e-6 if need_tdm_kinetics else 0.0,
                 kkin_star_s=float(row["kkin_star_s"]) if need_tdm_kinetics else 0.0,
             )
@@ -877,7 +948,11 @@ def _cpa_model(config: dict[str, Any], comps: list[CPAComponent]) -> CPAModel:
     if is_hic(config):
         return CPAModel(comps, 0.0, 0.0, hic=True)
     ligand = float(config["cpa"]["ligand_surface_density_umol_m2"]) * 1e-6
-    return CPAModel(comps, ligand, float(config["cpa"]["system_specific_adsorption_parameter"]))
+    paper_tdm_cpa = config["model"] == MODEL_TDM_CPA
+    return CPAModel(comps, ligand,
+                    1.0 if paper_tdm_cpa else float(config["cpa"]["system_specific_adsorption_parameter"]),
+                    paper_tdm_cpa=paper_tdm_cpa,
+                    ligand_pK=float(config["cpa"].get("ligand_pK", CPA_CEX_LIGAND_PK)))
 
 
 def _column_geometry(config: dict[str, Any]) -> tuple[float, float, float]:
@@ -1173,8 +1248,10 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
     epsp = float(tdm["particle_porosity"])
     rp = float(tdm["bead_radius_um"]) * 1e-6
     Dax = np.array([float(r["D_ax_mm2_s"]) * 1e-6 for r in rows], dtype=float)
-    epspi = np.array([float(r["accessible_particle_porosity"]) for r in rows], dtype=float)
-    Facc = epspi / epsp
+    # Briskot et al. (2021), JCA 1654, Eq. (4): pore liquid uses the resin
+    # particle porosity. Species-specific pore access is already represented
+    # by A_s,i in the CPA surface state, not by a second fitted porosity.
+    epspi = np.full(len(rows), epsp)
     n = len(comps)
     time_steps, nx = _numerical_resolution(config)
     dx = L / nx
@@ -1237,7 +1314,7 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
             dcb[:, i] = _scalar_transport(cb[:, i], inlet_protein[i], u, Dax[i], dx) - (
                 (1.0 - epsv) / epsv * transfer
             )
-            denom = max(Facc[i] * epsp, SMALL)
+            denom = epsp
             dcp[:, i] = (
                 3.0 / rp * comp.k_eff_m_s / denom * (cb[:, i] - cp[:, i])
                 - (1.0 - epsp) / denom * dqv[:, i]
@@ -1423,9 +1500,12 @@ def _simulate_tdm_cpa(config: dict[str, Any], *, solver_deadline: float | None =
             "maximum_surface_coverage_fraction": maximum_surface_coverage,
             "pH_rule": "user-programmed pH profile with interstitial convective delay; pH-dependent CPA parameters follow Briskot et al. (2021)",
             "radius_rule": "diameter_nm / 2",
+            "molecular_weight_rule": "user-entered mass, independent of CPA radius",
+            "CPA_surface_potential_rule": "Grahame charge balance with ligand surface-pH regulation",
+            "CPA_adsorber_energy_rule": "Parsegian-Gingell/Derjaguin interaction at its attractive minimum",
             "fixed_temperature_K": CPA_TEMPERATURE_K,
             "fixed_relative_permittivity": CPA_RELATIVE_PERMITTIVITY,
-            "fixed_CEX_ligand_pK": CPA_CEX_LIGAND_PK,
+            "CEX_ligand_pK": cpa_model.ligand_pK,
             "CPA_adsorption_audit": adsorption_audit,
         },
     }

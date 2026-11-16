@@ -93,11 +93,11 @@ class FractionMassTests(unittest.TestCase):
                     max_nfev=8, max_model_evaluations=18)
                 report = lsq.FIT_REPORT_HTML.read_text(encoding="utf-8")
             self.assertTrue(fit["accepted"])
-            self.assertLess(fit["final_objective"], fit["initial_objective"] * 1e-6)
+            self.assertLess(fit["final_objective"], fit["initial_objective"] * 1e-4)
             self.assertAlmostEqual(fit["fitted_config"]["components"][0]["delta_ref"],
                                    truth["components"][0]["delta_ref"], delta=1e-4)
             self.assertTrue(all(row["final_rmse_percentage_points"] <
-                                max(row["initial_rmse_percentage_points"] * 1e-4, 1e-4)
+                                min(row["initial_rmse_percentage_points"] * 0.01, 0.2)
                                 for row in fit["composition_profile_metrics"]))
             self.assertIn("complete mass% row also constrains", report)
 

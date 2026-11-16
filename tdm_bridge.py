@@ -401,7 +401,12 @@ def import_lsq_parameters(current: dict[str, Any], source_path: str) -> tuple[di
     imported = copy.deepcopy(current)
     changed = []
     for spec in specs:
-        value = float(_get_path(source, spec.path))
+        source_value = _get_path(source, spec.path)
+        # Older TDM + CPA LSQ exports predate the independent lateral charge.
+        # Keep the current, explicitly entered value when importing them.
+        if source_value is None and current["model"] == MODEL_TDM_CPA and spec.path.endswith(".Z_lat"):
+            continue
+        value = float(source_value)
         if not math.isfinite(value):
             raise ValueError(f"Nonfinite LSQ parameter: {spec.path}")
         _set_path(imported, spec.path, value)
@@ -491,6 +496,7 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
     )
     config["cpa"].update(
         ligand_surface_density_umol_m2=_num("tdm_ui_ligand_surface_density"),
+        ligand_pK=_num("tdm_ui_ligand_pK") if "tdm_ui_ligand_pK" in globals() else 2.3,
         system_specific_adsorption_parameter=_num("tdm_ui_system_adsorption_parameter"),
     )
     for i, row in enumerate(config["components"], start=1):
@@ -516,8 +522,10 @@ def build_shared_config_from_jmp() -> dict[str, Any]:
             b_L_g=_num(p + "b_L_g"),
             salt_sensitivity_per_M=_num(p + "salt_sensitivity_per_M"),
             diameter_nm=_num(p + "diameter_nm"),
+            molecular_weight_kDa=_num(p + "molecular_weight_kDa"),
             As_m_inv=area_m_inv,
             Z_ref=_num(p + "Z_ref"),
+            Z_lat=_num(p + "Z_lat"),
             delta_ref=_num(p + "delta_ref"),
             kkin_star_s=_num(p + "kkin_star_s"),
             pH_ref=_num(p + "pH_ref"),

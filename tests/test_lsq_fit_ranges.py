@@ -42,7 +42,7 @@ class FitRangeTests(unittest.TestCase):
             (r'\b(\w+)FitRangeMode = Combo Box', r'\b(\w+)FitRangeMode << Get Selected'),
         ):
             self.assertEqual(set(re.findall(control, jsl)), set(re.findall(transmitted, jsl)))
-            self.assertEqual(len(set(re.findall(control, jsl))), 170)
+            self.assertEqual(len(set(re.findall(control, jsl))), 176)
         with patch.dict(tdm_bridge.__dict__, {
             "tdm_ui_lsq_parameter_lock_chunk_count": 2,
             "tdm_ui_lsq_parameter_lock_states_1": f"{path}=Unlocked;",

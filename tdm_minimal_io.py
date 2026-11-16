@@ -16,7 +16,7 @@ STATUS_PATH = PROJECT_DIR / "tdm_status.txt"
 LATEST_RESULTS_HTML = PROJECT_DIR / "latest_results.html"
 LATEST_RESULTS_CSV = PROJECT_DIR / "latest_results.csv"
 LATEST_RESULTS_MANIFEST = PROJECT_DIR / "latest_results_manifest.json"
-RESULT_GUARD_BUILD = "2026-11-09-R25AI-FIXED-PLW-NO-TRIAL-TIMEOUT"
+RESULT_GUARD_BUILD = "2026-11-16-R25AL-TDM-CPA-PAPER-REVISION"
 CPA_AREA_M_INV_PER_M2_ML_SOLID = 1_000_000.0
 BATCH_RUNS_CSV = PROJECT_DIR / "tdm_batch_runs.csv"
 LSQ_RUNS_CSV = PROJECT_DIR / "tdm_lsq_process_runs.csv"
@@ -116,8 +116,11 @@ def _blank_component(name: str) -> dict[str, Any]:
         "wang_beta2_L_g": 0.0,
         "wang_beta3_per_pH": 0.0,
         "diameter_nm": None,
+        # Molecular mass is independent of the fitted CPA adsorption radius.
+        "molecular_weight_kDa": None,
         "As_m_inv": None,
         "Z_ref": None,
+        "Z_lat": None,
         "delta_ref": None,
         "kkin_star_s": None,
         "pH_ref": None,
@@ -266,6 +269,7 @@ def blank_config() -> dict[str, Any]:
         },
         "cpa": {
             "ligand_surface_density_umol_m2": None,
+            "ligand_pK": 2.3,
             "system_specific_adsorption_parameter": None,
         },
         "components": [_blank_component(name) for name in COMPONENT_NAMES],
@@ -347,6 +351,7 @@ def normalize_config(config: Any) -> Any:
                                              for p in out["unlocked_paths"]})
         out = synchronize_langmuir_parameters(out)
         if "model" in out and "column" in out:
+            out.setdefault("cpa", {}).setdefault("ligand_pK", 2.3)
             out.setdefault("chromatography_mode", "HIC" if uses_langmuir(str(out["model"])) or uses_wang(str(out["model"])) else "ION_EXCHANGE")
             legacy_salt_d = _as_float(out.get("tdm", {}).get("salt_axial_dispersion_mm2_s"))
             defaults = system_defaults()
@@ -794,15 +799,15 @@ EDM_INPUT_FIELDS = ("edm.total_bed_porosity",)
 CPA_COMMON_INPUT_FIELDS = (
     "conversion.conductivity_to_salt_M_per_mS_cm",
     "cpa.ligand_surface_density_umol_m2",
-    "cpa.system_specific_adsorption_parameter",
 )
-CPA_TDM_ONLY_INPUT_FIELDS: tuple[str, ...] = ()  # Legacy value is migrated to system.salt_dispersion_mm2_s.
+CPA_TDM_ONLY_INPUT_FIELDS: tuple[str, ...] = ("cpa.ligand_pK",)
 COMPONENT_COMMON_FIELDS = ("mass_percent",)
 COMPONENT_TDM_FIELDS = ("D_ax_mm2_s", "k_eff_um_s", "accessible_particle_porosity")
+COMPONENT_TDM_CPA_TRANSPORT_FIELDS = ("D_ax_mm2_s", "k_eff_um_s")
 COMPONENT_EDM_FIELDS = ("D_app_mm2_s",)
 COMPONENT_LANGMUIR_FIELDS = ("qmax_g_L", "b_L_g", "salt_sensitivity_per_M")
 COMPONENT_CPA_FIELDS = ("diameter_nm", "As_m_inv", "Z_ref", "delta_ref")
-COMPONENT_TDM_CPA_FIELDS = ("kkin_star_s",)
+COMPONENT_TDM_CPA_FIELDS = ("molecular_weight_kDa", "Z_lat", "kkin_star_s")
 COMPONENT_WANG_FIELDS = ("wang_K_kin_s", "wang_k_eq", "wang_qmax_g_L", "wang_n",
                          "wang_beta0", "wang_beta1_per_M", "wang_beta2_L_g", "wang_beta3_per_pH")
 COMPONENT_CPA_PH_FIELDS = ("pH_ref", "Z1_per_pH", "Z2_per_pH2", "delta_pH_slope_m2_C")
@@ -820,6 +825,8 @@ def required_global_fields(model: str) -> tuple[str, ...]:
     used_buffers: set[str] = set()
     if uses_cpa(model):
         fields.extend(CPA_COMMON_INPUT_FIELDS)
+        if model == MODEL_EDM_CPA:
+            fields.append("cpa.system_specific_adsorption_parameter")
     elif uses_wang(model):
         fields.extend(("conversion.conductivity_to_salt_M_per_mS_cm", "wang.q0_g_L", "wang.eta"))
     elif uses_langmuir(model):
@@ -829,7 +836,8 @@ def required_global_fields(model: str) -> tuple[str, ...]:
 
 def required_component_fields(model: str, pH_span: float = 0.0) -> tuple[str, ...]:
     fields = list(COMPONENT_COMMON_FIELDS)
-    fields.extend(COMPONENT_TDM_FIELDS if uses_tdm(model) else COMPONENT_EDM_FIELDS)
+    fields.extend((COMPONENT_TDM_CPA_TRANSPORT_FIELDS if model == MODEL_TDM_CPA else COMPONENT_TDM_FIELDS)
+                  if uses_tdm(model) else COMPONENT_EDM_FIELDS)
     if uses_wang(model):
         fields.extend(COMPONENT_WANG_FIELDS)
     elif uses_langmuir(model):
@@ -881,7 +889,7 @@ def required_parameter_paths(config: dict[str, Any]) -> list[str]:
     span = process_pH_span(config) if uses_cpa(model) else 0.0
     fields = required_component_fields(model, span)
     if uses_cpa(model) and is_hic(config):
-        fields = tuple(f for f in fields if f not in {"Z_ref", *COMPONENT_CPA_PH_FIELDS, *COMPONENT_CPA_PH_LARGE_SPAN_FIELDS}) + ("salt_sensitivity_per_M",)
+        fields = tuple(f for f in fields if f not in {"Z_ref", "Z_lat", *COMPONENT_CPA_PH_FIELDS, *COMPONENT_CPA_PH_LARGE_SPAN_FIELDS}) + ("salt_sensitivity_per_M",)
         paths = [p for p in paths if not p.startswith("cpa.")]
     for i, _row in enumerate(selected_components(config)):
         paths.extend(f"components[{i}].{field}" for field in fields)
@@ -988,12 +996,15 @@ def requirement_text(model: str, pH_span: float = 0.0, selected_impurities: int 
     if uses_tdm(model):
         lines += ["• Bead radius r_p [µm]", "• Void fraction ε_v [-]", "• Particle porosity ε_p [-]"]
         if model == MODEL_TDM_CPA:
-            lines += ["• Salt axial dispersion D_ax,salt [mm²/s]"]
+            lines += ["• Salt axial dispersion D_ax,salt [mm²/s]",
+                      "• CEX ligand pK (2.3 for the paper's strong sulfonate exchangers)"]
     else:
         lines += ["• Total bed porosity ε [-]"]
     if uses_cpa(model):
         lines += ["• Conductivity → salt concentration factor [M per (mS/cm)]",
-                  "• Ligand surface density Γ_L [µmol/m²]", "• System-specific adsorption parameter [-]"]
+                  "• Ligand surface density Γ_L [µmol/m²]"]
+        if model == MODEL_EDM_CPA:
+            lines += ["• System-specific adsorption parameter [-]"]
     elif uses_wang(model):
         lines += ["• Conductivity → salt concentration factor [M per (mS/cm)]",
                   "• Shared Wang q0 [g/L stationary phase] and η [-]"]
@@ -1005,7 +1016,9 @@ def requirement_text(model: str, pH_span: float = 0.0, selected_impurities: int 
     if n_imp:
         lines += ["• UV → protein response factor [mAU·L/g] for every selected impurity"]
     if uses_tdm(model):
-        lines += ["• D_ax,i [mm²/s]", "• k_eff,i [µm/s]", "• Accessible particle porosity ε_p,i [-] (F_acc,i is derived)"]
+        lines += ["• D_ax,i [mm²/s]", "• k_eff,i [µm/s]"]
+        if model != MODEL_TDM_CPA:
+            lines += ["• Accessible particle porosity ε_p,i [-] (F_acc,i is derived)"]
     else:
         lines += ["• D_app,i [mm²/s]"]
     if uses_wang(model):
@@ -1021,7 +1034,10 @@ def requirement_text(model: str, pH_span: float = 0.0, selected_impurities: int 
         lines += ["• Diameter [nm] (a_i = diameter/2)",
                   "• Accessible area A_s,i [m²/mL stationary solid] in JMP", "• Z_i [-]", "• Δ_i [-]"]
         if model == MODEL_TDM_CPA:
-            lines += ["• k*kin,i [s⁻¹]"]
+            lines += ["• Molecular weight [kDa] (measured or assigned independently of diameter)",
+                      "• k*kin,i [s⁻¹]"]
+            if not hic:
+                lines += ["• Lateral CPA charge Z_lat,i [-] (may be zero if calibrated as negligible)"]
         if uses_cpa(model) and pH_span > 1e-9:
             lines += ["• pH_ref, Z1,i, Z2,i and Δ1,i because the selected batch contains a pH-changing run"]
             if pH_span > 1.0:
@@ -1098,7 +1114,10 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
         cp = config["cpa"]
         if not is_hic(config):
             _number(cp.get("ligand_surface_density_umol_m2"), "CPA ligand surface density Γ_L", errors, positive=True)
-            _number(cp.get("system_specific_adsorption_parameter"), "CPA system-specific adsorption parameter", errors, positive=True)
+            if model == MODEL_TDM_CPA:
+                _number(cp.get("ligand_pK"), "CEX ligand pK", errors, lower=0.0, upper=14.0)
+            if model == MODEL_EDM_CPA:
+                _number(cp.get("system_specific_adsorption_parameter"), "CPA system-specific adsorption parameter", errors, positive=True)
     elif uses_wang(model):
         _number(conv.get("conductivity_to_salt_M_per_mS_cm"), "Conductivity → salt concentration factor [M per (mS/cm)]", errors, positive=True)
         _number(config.get("wang", {}).get("q0_g_L"), "Wang q0 [g/L stationary phase]", errors, positive=True)
@@ -1118,9 +1137,10 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
         if uses_tdm(model):
             _number(row.get("D_ax_mm2_s"), f"{name} D_ax,i [mm²/s]", errors, nonnegative=True)
             _number(row.get("k_eff_um_s"), f"{name} k_eff,i [µm/s]", errors, positive=True)
-            epspi = _number(row.get("accessible_particle_porosity"), f"{name} ε_p,i", errors, lower=1e-12, upper=0.999999)
-            if epsp is not None and epspi is not None and epspi > epsp + 1e-12:
-                errors.append(f"{name} ε_p,i must be <= ε_p.")
+            if model != MODEL_TDM_CPA:
+                epspi = _number(row.get("accessible_particle_porosity"), f"{name} ε_p,i", errors, lower=1e-12, upper=0.999999)
+                if epsp is not None and epspi is not None and epspi > epsp + 1e-12:
+                    errors.append(f"{name} ε_p,i must be <= ε_p.")
         else:
             _number(row.get("D_app_mm2_s"), f"{name} D_app,i [mm²/s]", errors, nonnegative=True)
         if uses_wang(model):
@@ -1141,6 +1161,10 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
             _number(row.get("salt_sensitivity_per_M"), f"{name} HIC salt sensitivity k_s,i [M⁻¹]", errors, lower=(0.0 if is_hic(config) else -25.0), upper=25.0)
         else:
             _number(row.get("diameter_nm"), f"{name} diameter [nm]", errors, positive=True)
+            if model == MODEL_TDM_CPA:
+                _number(row.get("molecular_weight_kDa"), f"{name} measured/assigned molecular weight [kDa]", errors, positive=True)
+                if not is_hic(config):
+                    _number(row.get("Z_lat"), f"{name} lateral CPA charge Z_lat,i", errors, nonnegative=True)
             _number(row.get("As_m_inv"), f"{name} A_s,i [m⁻¹ internal = 10⁶ × m²/mL stationary solid]", errors, positive=True)
             if is_hic(config):
                 _number(row.get("salt_sensitivity_per_M"), f"{name} HIC salt sensitivity k_s,i", errors, lower=0.0, upper=25.0)

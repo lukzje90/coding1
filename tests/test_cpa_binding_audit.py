@@ -124,7 +124,7 @@ class CPABindingAuditTests(unittest.TestCase):
 
     def test_bound_and_flow_through_cases_are_distinguished(self):
         strong_cfg = binding_recipe(0.012)
-        weak_cfg = binding_recipe(1e-7)
+        weak_cfg = binding_recipe(1e-10)
         strong = simulate(strong_cfg)
         weak = simulate(weak_cfg)
         target_strong = strong["simulation"]["diagnostics"]["CPA_adsorption_audit"]["species"][0]
@@ -187,7 +187,7 @@ class CPABindingAuditTests(unittest.TestCase):
 
     def test_lsq_does_not_apply_a_flow_through_candidate(self):
         truth = binding_recipe(0.012)
-        weak = binding_recipe(1e-7)
+        weak = binding_recipe(1e-10)
         measured = simulate(truth)["trace"]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -214,7 +214,7 @@ class CPABindingAuditTests(unittest.TestCase):
             self.assertIn("Binding warning", report)
 
     def test_numerically_improved_flow_through_candidate_is_diagnostic_only(self):
-        weak = binding_recipe(1e-7)
+        weak = binding_recipe(1e-10)
         result = simulate(weak)
         info = {"result": result}
         decision = lsq._fit_acceptance(weak, 10.0, 1.0, [info])
@@ -224,7 +224,7 @@ class CPABindingAuditTests(unittest.TestCase):
         self.assertEqual(lsq._fit_acceptance(weak, 10.0, 1.0, [info])["status"], "ACCEPTED")
 
     def test_improved_but_unbound_fit_keeps_active_model_unchanged(self):
-        weak = binding_recipe(1e-7)
+        weak = binding_recipe(1e-10)
         measured = simulate(weak)["trace"]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

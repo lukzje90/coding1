@@ -188,7 +188,7 @@ class InitialEquilibrationTests(unittest.TestCase):
         # This test isolates parameter eligibility across recipes; its synthetic
         # pH programmes are not constructed as bind-and-elute acceptance runs.
         first["least_squares"]["physical_acceptance_mode"] = "DIAGNOSTIC_ONLY"
-        first["components"][0].update(pH_ref=6.0, Z1_per_pH=5.0,
+        first["components"][0].update(pH_ref=6.0, Z1_per_pH=-20.0,
                                       Z2_per_pH2=0.0, Z3_per_pH3=0.0,
                                       delta_pH_slope_m2_C=0.0)
         second = copy.deepcopy(first)
@@ -210,7 +210,7 @@ class InitialEquilibrationTests(unittest.TestCase):
                     writer.writerow(["CV", "UV 280 [mAU]"])
                     writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
                 initial = copy.deepcopy(truth)
-                initial["components"][0]["Z1_per_pH"] = 4.0
+                initial["components"][0]["Z1_per_pH"] = -10.0
                 profiles.append({"config": initial, "chromatogram_csv": source,
                                  "run_context": {"run_number": number,
                                                  "run_name": f"LSQ Run {number}"}})
@@ -228,7 +228,7 @@ class InitialEquilibrationTests(unittest.TestCase):
             self.assertTrue(result["accepted"])
             self.assertLess(result["final_objective"], result["initial_objective"] * 0.01)
             self.assertAlmostEqual(result["fitted_config"]["components"][0]["Z1_per_pH"],
-                                   5.0, delta=0.2)
+                                   -20.0, delta=0.2)
             self.assertIn("c1Z1 << Set(", apply_jsl)
             self.assertLess(result["profile_metrics"][1]["raw_rmse"], 0.1)
 

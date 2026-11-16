@@ -828,6 +828,7 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
         "diameter_nm": "Protein diameter [nm]",
         "As_m_inv": "Accessible area A_s,i [m²/mL stationary solid]",
         "Z_ref": "Protein charge Z_i [-]",
+        "Z_lat": "Lateral protein charge Z_lat,i [-]",
         "delta_ref": "CPA interaction parameter Δ_i [-]",
         "kkin_star_s": "CPA kinetic parameter k*kin,i [s⁻¹]",
         "pH_ref": "CPA reference pH",
@@ -883,6 +884,9 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
         elif field == "Z_ref":
             specs.append(FitParameter(path, labels[field], "LINEAR", -500.0, 500.0,
                                       float(np.clip(value, -500.0, 500.0))))
+        elif field == "Z_lat":
+            specs.append(FitParameter(path, labels[field], "LINEAR", 0.0, 500.0,
+                                      float(np.clip(value, 0.0, 500.0))))
         elif field == "pH_ref":
             specs.append(FitParameter(path, labels[field], "LINEAR", 0.0, 14.0,
                                       float(np.clip(value, 0.0, 14.0))))
@@ -2021,7 +2025,7 @@ class EvaluationBudgetReached(RuntimeError):
 def _write_apply_jsl(config: dict[str, Any], specs: list[FitParameter]) -> None:
     mapping = {
         "qmax_g_L": "Qmax", "b_L_g": "B", "Z_ref": "Zref", "delta_ref": "Delta",
-        "As_m_inv": "As", "kkin_star_s": "Kkin", "salt_sensitivity_per_M": "SaltSensitivity",
+        "As_m_inv": "As", "Z_lat": "Zlat", "kkin_star_s": "Kkin", "salt_sensitivity_per_M": "SaltSensitivity",
         "uv_response_factor_mAU_L_g": "UVResponse", "D_ax_mm2_s": "Dax",
         "k_eff_um_s": "Keff", "accessible_particle_porosity": "EpsPi",
         "D_app_mm2_s": "Dapp", "diameter_nm": "Diameter", "pH_ref": "PHref",

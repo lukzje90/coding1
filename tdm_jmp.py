@@ -160,7 +160,7 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
             {p}TdmTransport = V List Box(
                 {_nrow("Axial dispersion D_ax,i [mm²/s]", f"{p}Dax", row.get("D_ax_mm2_s"), fit_path=f"components[{i-1}].D_ax_mm2_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {_nrow("Effective mass transfer k_eff,i [µm/s]", f"{p}Keff", row.get("k_eff_um_s"), fit_path=f"components[{i-1}].k_eff_um_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
-                {_nrow("Accessible particle porosity ε_p,i [-]", f"{p}EpsPi", row.get("accessible_particle_porosity"), fit_path=f"components[{i-1}].accessible_particle_porosity", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}
+                {p}EpsPiRow = {_nrow("Accessible particle porosity ε_p,i [-]", f"{p}EpsPi", row.get("accessible_particle_porosity"), fit_path=f"components[{i-1}].accessible_particle_porosity", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}
             ),
             {p}EdmTransport = V List Box({_nrow("Apparent dispersion D_app,i [mm²/s]", f"{p}Dapp", row.get("D_app_mm2_s"), fit_path=f"components[{i-1}].D_app_mm2_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}),
             {p}SaltRow = {_nrow("HIC salt sensitivity k_s,i [M⁻¹]", f"{p}SaltSensitivity", row.get("salt_sensitivity_per_M", 1.0), 360, "If(!isLoading, UpdateUI())", fit_path=f"components[{i-1}].salt_sensitivity_per_M", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
@@ -181,8 +181,10 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
             ),
             {p}CPA = V List Box(
                 {_nrow("Protein diameter [nm] (a_i = diameter/2)", f"{p}Diameter", row.get("diameter_nm"), fit_path=f"components[{i-1}].diameter_nm", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {p}MolecularWeightRow = {_nrow("Molecular weight [kDa] (measured/assigned; fixed in LSQ)", f"{p}MolecularWeight", row.get("molecular_weight_kDa"), 360)},
                 {_nrow("Accessible area A_s,i [m²/mL solid]", f"{p}As", _cpa_area_ui_value(row.get("As_m_inv")), fit_path=f"components[{i-1}].As_m_inv", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {p}ZrefRow = {_nrow("Protein charge Z_i [-]", f"{p}Zref", row.get("Z_ref"), fit_path=f"components[{i-1}].Z_ref", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
+                {p}ZlatRow = {_nrow("Lateral protein charge Z_lat,i [-]", f"{p}Zlat", row.get("Z_lat"), fit_path=f"components[{i-1}].Z_lat", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {_nrow("CPA interaction parameter Δ_i [-]", f"{p}Delta", row.get("delta_ref"), fit_path=f"components[{i-1}].delta_ref", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {p}KkinRow = {_nrow("CPA kinetic parameter k*kin,i [s⁻¹]", f"{p}Kkin", row.get("kkin_star_s"), fit_path=f"components[{i-1}].kkin_star_s", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
                 {p}PHPanel = Outline Box("pH-dependent CPA parameters",
@@ -208,8 +210,10 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
         (f"{p}B << Get", f"tdm_ui_c{i}_b_L_g"),
         (f"{p}SaltSensitivity << Get", f"tdm_ui_c{i}_salt_sensitivity_per_M"),
         (f"{p}Diameter << Get", f"tdm_ui_c{i}_diameter_nm"),
+        (f"{p}MolecularWeight << Get", f"tdm_ui_c{i}_molecular_weight_kDa"),
         (f"{p}As << Get", f"tdm_ui_c{i}_As_m2_mL_solid"),
         (f"{p}Zref << Get", f"tdm_ui_c{i}_Z_ref"),
+        (f"{p}Zlat << Get", f"tdm_ui_c{i}_Z_lat"),
         (f"{p}Delta << Get", f"tdm_ui_c{i}_delta_ref"),
         (f"{p}Kkin << Get", f"tdm_ui_c{i}_kkin_star_s"),
         (f"{p}WangKkin << Get", f"tdm_ui_c{i}_wang_K_kin_s"),
@@ -231,13 +235,16 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
     sends = [f'Python Send({expr}, Python Name({_q(name)}));' for expr, name in pairs]
     visible = f'''{p}Panel << Visibility(If({1 if i == 1 else f'impurityCount >= {i-1}'}, "Visible", "Collapse"));
     {p}TdmTransport << Visibility(If(isTDM, "Visible", "Collapse"));
+    {p}EpsPiRow << Visibility(If(modelLabel != {_q(MODEL_LABELS[MODEL_TDM_CPA])}, "Visible", "Collapse"));
     {p}EdmTransport << Visibility(If(isEDM, "Visible", "Collapse"));
     {p}Langmuir << Visibility(If(isLangmuir, "Visible", "Collapse"));
     {p}Wang << Visibility(If(isWang, "Visible", "Collapse"));
     {p}CPA << Visibility(If(isCPA, "Visible", "Collapse"));
+    {p}MolecularWeightRow << Visibility(If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])}, "Visible", "Collapse"));
     {p}KkinRow << Visibility(If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])}, "Visible", "Collapse"));
     {p}SaltRow << Visibility(If(isLangmuir | (isCPA & isHIC), "Visible", "Collapse"));
     {p}ZrefRow << Visibility(If(isCPA & !isHIC, "Visible", "Collapse"));
+    {p}ZlatRow << Visibility(If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])} & !isHIC, "Visible", "Collapse"));
     {p}PHPanel << Visibility(If(isCPA & !isHIC & fitPHSpan > 1e-9, "Visible", "Collapse"));
     {p}Z3Row << Visibility(If(isCPA & !isHIC & fitPHSpan > 1, "Visible", "Collapse"));'''
     return body, sends, visible
@@ -477,6 +484,7 @@ def build_jsl(config: dict[str, Any] | None = None) -> str:
         f'Python Send(uvToProtein << Get, Python Name("tdm_ui_uv_to_protein_factor"));',
         f'Python Send(condToSalt << Get, Python Name("tdm_ui_cond_to_salt_factor"));',
         f'Python Send(ligandSurface << Get, Python Name("tdm_ui_ligand_surface_density"));',
+        f'Python Send(ligandPK << Get, Python Name("tdm_ui_ligand_pK"));',
         f'Python Send(systemAdsorption << Get, Python Name("tdm_ui_system_adsorption_parameter"));',
         f'Python Send(wangQ0 << Get, Python Name("tdm_ui_wang_q0_g_L"));',
         f'Python Send(wangEta << Get, Python Name("tdm_ui_wang_eta"));',
@@ -1372,6 +1380,8 @@ UpdateUI = Function({{}}, {{modelLabel, impurityCount, isTDM, isEDM, isCPA, isLa
     );
     tdmPanel << Visibility(If(isTDM, "Visible", "Collapse")); edmPanel << Visibility(If(isEDM, "Visible", "Collapse"));
     cpaSystemPanel << Visibility(If(isCPA & !isHIC, "Visible", "Collapse"));
+    ligandPKRow << Visibility(If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])} & !isHIC, "Visible", "Collapse"));
+    systemAdsorptionRow << Visibility(If(isCPA & !isHIC & modelLabel != {_q(MODEL_LABELS[MODEL_TDM_CPA])}, "Visible", "Collapse"));
     wangSharedPanel << Visibility(If(isWang, "Visible", "Collapse"));
     wangModeHelp << Visibility(If(isWang, "Visible", "Collapse"));
     legacyModeHelp << Visibility(If(isWang, "Collapse", "Visible"));
@@ -1718,7 +1728,8 @@ modelWindow = New Window("Chromatography Model — {RESULT_GUARD_BUILD}",
                 edmPanel = Outline Box("EDM parameters", V List Box({_nrow("Total bed porosity ε [-]", "edmPorosity", e.get("total_bed_porosity"), 360, "If(!isLoading, UpdateUI())", fit_path="edm.total_bed_porosity", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)})),
                 cpaSystemPanel = Outline Box("CPA resin/system parameters", V List Box(
                     {_nrow("Ligand surface density Γ_L [µmol/m²]", "ligandSurface", cp.get("ligand_surface_density_umol_m2"), 360, fit_path="cpa.ligand_surface_density_umol_m2", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)},
-                    {_nrow("System-specific adsorption parameter [-]", "systemAdsorption", cp.get("system_specific_adsorption_parameter"), 360, fit_path="cpa.system_specific_adsorption_parameter", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}
+                    ligandPKRow = {_nrow("CEX ligand pK (2.3 for sulfonate)", "ligandPK", cp.get("ligand_pK", 2.3), 360)},
+                    systemAdsorptionRow = {_nrow("System-specific adsorption parameter [-]", "systemAdsorption", cp.get("system_specific_adsorption_parameter"), 360, fit_path="cpa.system_specific_adsorption_parameter", fit_lock_vars=fit_lock_vars, default_unlocked_paths=default_unlocked_paths)}
                 )),
                 wangSharedPanel = Outline Box("Modified Wang shared parameters", V List Box(
                     {wang_q0_row},

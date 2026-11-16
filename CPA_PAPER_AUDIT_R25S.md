@@ -1,5 +1,10 @@
 # TDM–CPA equation and fraction-fit audit (R25s)
 
+**Historical audit.** The TDM + CPA molecular-mass inference and simplified
+adsorption-energy description below were replaced by the three-paper revision
+in [CPA_PAPER_TDM_REVISION.md](CPA_PAPER_TDM_REVISION.md). The EDM path still
+uses its older adsorption-energy approximation.
+
 Reference: Briskot et al., *Analysis of complex protein elution behavior in preparative ion exchange processes using a colloidal particle adsorption model*, Journal of Chromatography A 1654 (2021) 462439 (the supplied “CPA Paper 2.pdf”). The separately supplied Lorenz-Cristea et al. (2025) calibration paper supplies the species accessibility factor.
 
 | Published relation | Implementation | Check |
