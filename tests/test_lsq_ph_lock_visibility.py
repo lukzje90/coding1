@@ -16,8 +16,10 @@ class LSQPHLockVisibilityTests(unittest.TestCase):
         self.assertIn('Column(runsTable, "Load_Material_Chemistry_Mode")[r]', span_code)
         self.assertIn("fitPHSpan = ComputePHSpanForRuns(dtLSQRuns, 1);", jsl)
         self.assertIn("fitPHSpan = Max(fitPHSpan, batchPHSpan);", jsl)
-        self.assertIn("PHPanel << Visibility(If(isCPA & !isHIC & fitPHSpan > 1e-9", jsl)
-        self.assertIn("Z3Row << Visibility(If(isCPA & !isHIC & fitPHSpan > 1", jsl)
+        self.assertIn("PHPanel << Visibility(If(isCPA & !isHIC & (fitPHSpan > 1e-9 |", jsl)
+        self.assertIn("!Is Missing(c1PHref << Get) | !Is Missing(c1Z1 << Get)", jsl)
+        self.assertIn("Z3Row << Visibility(If(isCPA & !isHIC & (fitPHSpan > 1 |", jsl)
+        self.assertIn("!Is Missing(c1Z3 << Get) & Abs(c1Z3 << Get) > 0", jsl)
         slot_code = jsl.split("ChangeLSQSlot = Function", 1)[1].split("SwitchProcessScope = Function", 1)[0]
         self.assertIn("LoadLSQReference(slot, r);\n    UpdateUI();", slot_code)
 

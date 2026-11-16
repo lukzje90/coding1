@@ -107,6 +107,7 @@ from tdm_minimal_io import (
     load_lsq_rows,
     load_lsq_mass_rows,
     normalize_config,
+    process_pH_values,
     canonical_fit_parameter_path,
     required_parameter_values,
     required_parameter_paths,
@@ -1156,8 +1157,11 @@ def main() -> int:
             unlocked_paths = _lsq_unlocked_paths_from_jmp()
             from tdm_least_squares import FIT_HISTORY_CSV, FIT_LIVE_CAP_TXT, fit_parameter_specs
             spec_config = max(profiles, key=lambda p: len(required_parameter_paths(p["config"])))
+            pH_values = [value for profile in profiles for value in process_pH_values(profile["config"])]
+            shared_pH_span = max(pH_values) - min(pH_values) if pH_values else 0.0
             fitted_paths = fit_parameter_specs(spec_config["config"], unlocked_paths=unlocked_paths,
-                                               fit_conductivity=any(p["fit_conductivity"] for p in profiles))
+                                               fit_conductivity=any(p["fit_conductivity"] for p in profiles),
+                                               pH_span_override=shared_pH_span)
             _write_status(
                 f"Least-squares refinement running: {len(profiles)} profile(s), "
                 f"{len(fitted_paths)} unlocked parameters, "

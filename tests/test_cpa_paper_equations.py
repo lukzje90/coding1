@@ -103,6 +103,47 @@ class CPAPaperEquationsTests(unittest.TestCase):
         self.config["cpa"]["ligand_pK"] = 5.0
         changed = _cpa_model(self.config, _build_cpa_components(self.config, need_tdm_kinetics=True))
         self.assertLess(changed.equilibrium_factors(np.zeros(1), 4.5, 0.05)[0], original)
+        self.assertAlmostEqual(changed.ligand_ionisation(5.0), 0.5)
+        self.assertAlmostEqual(changed.sigma_adsorber(5.0),
+                               -0.5 * E_CHARGE * N_A * changed.ligand_density_mol_m2)
+
+    def test_charge_curve_is_used_by_constant_ph_run(self):
+        config = self.config
+        row = config["components"][0]
+        row.update(pH_ref=5.0, Z_ref=40.0, Z1_per_pH=-12.0,
+                   Z2_per_pH2=2.0, Z3_per_pH3=-1.0,
+                   delta_pH_slope_m2_C=1.0)
+        component = _build_cpa_components(config, need_tdm_kinetics=True)[0]
+        self.assertAlmostEqual(component.Z(6.0), 29.0)
+        self.assertNotEqual(component.delta(6.0), component.delta_ref)
+        charged = _cpa_model(config, [component]).equilibrium_factors(np.zeros(1), 6.0, 0.05)[0]
+        row["Z1_per_pH"] = 0.0
+        neutral_curve = _build_cpa_components(config, need_tdm_kinetics=True)[0]
+        unchanged = _cpa_model(config, [neutral_curve]).equilibrium_factors(np.zeros(1), 6.0, 0.05)[0]
+        self.assertNotAlmostEqual(charged, unchanged, delta=max(abs(charged), abs(unchanged)) * 1e-4)
+
+    def test_partial_charge_curve_is_rejected_in_constant_ph_run(self):
+        self.config["components"][0]["Z1_per_pH"] = -12.0
+        self.assertTrue(any("pH_ref" in error for error in validate_config(self.config)))
+
+    def test_mixture_surface_blocking_matches_scaled_particle_equation(self):
+        config = make_config(MODEL_TDM_CPA, 1, multistep=False)
+        model = _cpa_model(config, _build_cpa_components(config, need_tdm_kinetics=True))
+        qv = np.array([0.05, 0.07])
+        q = np.array([qv[i] / c.As_m_inv for i, c in enumerate(model.components)])
+        theta = math.pi * N_A * sum(c.radius_m**2 * q[i]
+                                     for i, c in enumerate(model.components))
+        self.assertLess(theta, 1.0)
+        for i, component in enumerate(model.components):
+            r = component.radius_m
+            first = (math.pi * r*r * N_A * sum(q) +
+                     2.0 * math.pi * r * N_A * sum(c.radius_m * q[j]
+                                                  for j, c in enumerate(model.components))) / (1.0 - theta)
+            second = (math.pi * r*r * (N_A * sum(c.radius_m * q[j]
+                                                for j, c in enumerate(model.components)))**2 /
+                      (1.0 - theta)**2)
+            expected = (1.0 - theta) * math.exp(-first - second)
+            self.assertAlmostEqual(model.available_surface(i, qv), expected, places=12)
 
     def test_old_lsq_export_import_preserves_new_lateral_charge(self):
         current = self.config

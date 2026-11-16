@@ -49,10 +49,12 @@ from tdm_minimal_io import (
     active_components,
     canonical_fit_parameter_path,
     normalize_config,
+    process_pH_values,
     required_parameter_paths,
     save_config,
     selected_components,
     validate_config,
+    validate_mechanistic_config,
     is_hic,
 )
 from tdm_minimal_model import simulate, _build_program, _svg_plot, _stage_receipt, _impurity_profile_svg, _predicted_fraction_analysis_html
@@ -788,7 +790,8 @@ def _default_unlocked_parameter_paths(config: dict[str, Any], *, fit_uv_response
 
 def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = True,
                              fit_conductivity: bool = False,
-                             candidate_paths: Iterable[str] | None = None) -> list[FitParameter]:
+                             candidate_paths: Iterable[str] | None = None,
+                             pH_span_override: float | None = None) -> list[FitParameter]:
     """Build bounded specs for every required mechanistic input except column geometry.
 
     Feed composition, load/flow, buffers, PLWs and elution are experimental
@@ -797,7 +800,7 @@ def _all_fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = 
     """
     config = normalize_config(config)
     model = str(config["model"])
-    required_paths = required_parameter_paths(config)
+    required_paths = required_parameter_paths(config, pH_span_override=pH_span_override)
     active_paths = set(required_paths)
     paths = [canonical_fit_parameter_path(p) for p in candidate_paths] if candidate_paths is not None else required_paths
     # A caller may supply a broader catalog (or saved locks from a previous
@@ -982,7 +985,8 @@ def fit_parameter_lock_catalog(config: dict[str, Any]) -> list[FitParameter]:
 def fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = True,
                         fit_conductivity: bool = False,
                         unlocked_paths: Iterable[str] | None = None,
-                        candidate_paths: Iterable[str] | None = None) -> list[FitParameter]:
+                        candidate_paths: Iterable[str] | None = None,
+                        pH_span_override: float | None = None) -> list[FitParameter]:
     """Return the model-backed parameters refined by least squares.
 
     Eligible instrument, adsorption and column-transport values are refined only
@@ -994,14 +998,16 @@ def fit_parameter_specs(config: dict[str, Any], *, fit_uv_response: bool = True,
         unlocked = set(canonical_fit_parameter_path(path) for path in unlocked_paths)
         candidates = _all_fit_parameter_specs(config, fit_uv_response=fit_uv_response,
                                               fit_conductivity=fit_conductivity,
-                                              candidate_paths=candidate_paths)
+                                              candidate_paths=candidate_paths,
+                                              pH_span_override=pH_span_override)
         return _limit_fit_specs(config, [spec for spec in candidates if spec.path in unlocked])
     persisted = config.get("least_squares", {}).get("unlocked_paths")
     unlocked = set(persisted) if persisted is not None else _default_unlocked_parameter_paths(config, fit_uv_response=fit_uv_response)
     return _limit_fit_specs(config, [
         spec for spec in _all_fit_parameter_specs(
             config, fit_uv_response=fit_uv_response,
-            fit_conductivity=fit_conductivity, candidate_paths=candidate_paths)
+            fit_conductivity=fit_conductivity, candidate_paths=candidate_paths,
+            pH_span_override=pH_span_override)
         if spec.path in unlocked
     ])
 
@@ -2703,6 +2709,21 @@ def run_global_least_squares_refinement(
                for field in acceptance_fields):
             raise ValueError(f"Global-fit profile {index} has different physical acceptance settings.")
 
+    # A set of individually isocratic runs can still span a pH range. Its
+    # shared charge curve must be complete and eligible for fitting.
+    pH_values = [value for profile in normalized_profiles
+                 for value in process_pH_values(profile["config"])]
+    shared_pH_span = max(pH_values) - min(pH_values) if pH_values else 0.0
+    if shared_pH_span > 1e-9:
+        for profile in normalized_profiles:
+            errors = validate_mechanistic_config(profile["config"], pH_span_override=shared_pH_span)
+            if errors:
+                label = profile["run_context"]["run_name"]
+                raise ValueError(f"Global-fit profile {label} has incomplete shared pH charge inputs:\n- " + "\n- ".join(errors))
+        for path in required_parameter_paths(first, pH_span_override=shared_pH_span):
+            if path not in candidate_paths and path not in {"column.volume_mL", "column.length_mm"} and not path.endswith(".mass_percent"):
+                candidate_paths.append(path)
+
     # These are shared batch parameters. Process recipes and column geometry
     # remain profile inputs, while a different non-empty value for a shared
     # mechanistic parameter is rejected instead of silently choosing one run.
@@ -2744,6 +2765,7 @@ def run_global_least_squares_refinement(
         fit_conductivity=any(p["fit_conductivity"] for p in normalized_profiles),
         unlocked_paths=unlocked_paths,
         candidate_paths=candidate_paths,
+        pH_span_override=shared_pH_span,
     )
     if force_full_evaluation_budget:
         if max_model_evaluations is None:

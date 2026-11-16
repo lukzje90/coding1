@@ -243,8 +243,12 @@ def _component_panel(i: int, row: dict[str, Any], fit_lock_vars: list[tuple[str,
     {p}SaltRow << Visibility(If(isLangmuir | (isCPA & isHIC), "Visible", "Collapse"));
     {p}ZrefRow << Visibility(If(isCPA & !isHIC, "Visible", "Collapse"));
     {p}ZlatRow << Visibility(If(modelLabel == {_q(MODEL_LABELS[MODEL_TDM_CPA])} & !isHIC, "Visible", "Collapse"));
-    {p}PHPanel << Visibility(If(isCPA & !isHIC & fitPHSpan > 1e-9, "Visible", "Collapse"));
-    {p}Z3Row << Visibility(If(isCPA & !isHIC & fitPHSpan > 1, "Visible", "Collapse"));'''
+    {p}PHPanel << Visibility(If(isCPA & !isHIC & (fitPHSpan > 1e-9 |
+        !Is Missing({p}PHref << Get) | !Is Missing({p}Z1 << Get) |
+        !Is Missing({p}Z2 << Get) | !Is Missing({p}DeltaSlope << Get) |
+        !Is Missing({p}Z3 << Get)), "Visible", "Collapse"));
+    {p}Z3Row << Visibility(If(isCPA & !isHIC & (fitPHSpan > 1 |
+        (!Is Missing({p}Z3 << Get) & Abs({p}Z3 << Get) > 0)), "Visible", "Collapse"));'''
     return body, sends, visible
 
 

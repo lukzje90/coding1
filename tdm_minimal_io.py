@@ -752,11 +752,11 @@ def resolve_process_chemistry(
     return {"source": src, **buffer_chemistry(config, buffer)}
 
 
-def process_pH_span(config: dict[str, Any]) -> float:
-    """pH span actually consumed by the selected CPA process program."""
+def process_pH_values(config: dict[str, Any]) -> list[float]:
+    """pH endpoints actually consumed by the selected CPA process program."""
     config = normalize_config(config)
     if not uses_cpa(str(config.get("model") or "")):
-        return 0.0
+        return []
     vals: list[float] = []
     p = config.get("process", {})
     try:
@@ -807,6 +807,12 @@ def process_pH_span(config: dict[str, Any]) -> float:
                     vals.append(float(resolved.get("pH")))
                 except Exception:
                     pass
+    return vals
+
+
+def process_pH_span(config: dict[str, Any]) -> float:
+    """pH span actually consumed by the selected CPA process program."""
+    vals = process_pH_values(config)
     return max(vals) - min(vals) if vals else 0.0
 
 
@@ -895,7 +901,7 @@ def _set_path(data: Any, path: str, value: Any) -> None:
     cur[tokens[-1]] = value
 
 
-def required_parameter_paths(config: dict[str, Any]) -> list[str]:
+def required_parameter_paths(config: dict[str, Any], *, pH_span_override: float | None = None) -> list[str]:
     model = str(config.get("model") or "")
     paths = list(required_global_fields(model))
     paths = [p for p in paths if p != "tdm.salt_axial_dispersion_mm2_s"]
@@ -905,7 +911,7 @@ def required_parameter_paths(config: dict[str, Any]) -> list[str]:
         paths.append("system.buffer_dispersion_mL")
     if system.get("salt_dispersion_enabled", True):
         paths.append("system.salt_dispersion_mm2_s")
-    span = process_pH_span(config) if uses_cpa(model) else 0.0
+    span = (process_pH_span(config) if pH_span_override is None else float(pH_span_override)) if uses_cpa(model) else 0.0
     fields = required_component_fields(model, span)
     if uses_cpa(model) and is_hic(config):
         fields = tuple(f for f in fields if f not in {"Z_ref", "Z_lat", *COMPONENT_CPA_PH_FIELDS, *COMPONENT_CPA_PH_LARGE_SPAN_FIELDS}) + ("salt_sensitivity_per_M",)
@@ -1058,7 +1064,7 @@ def requirement_text(model: str, pH_span: float = 0.0, selected_impurities: int 
             if not hic:
                 lines += ["• Lateral CPA charge Z_lat,i [-] (may be zero if calibrated as negligible)"]
         if uses_cpa(model) and pH_span > 1e-9:
-            lines += ["• pH_ref, Z1,i, Z2,i and Δ1,i because the selected batch contains a pH-changing run"]
+            lines += ["• pH_ref, Z1,i, Z2,i and Δ1,i because the selected batch spans different pH values"]
             if pH_span > 1.0:
                 lines += ["• Z3,i because the selected batch pH span exceeds 1 pH unit"]
     lines += ["", "OPERATING CONDITIONS are entered separately for each run in Process Setup.",
@@ -1192,12 +1198,14 @@ def validate_mechanistic_config(config: dict[str, Any], *, pH_span_override: flo
             _number(row.get("delta_ref"), f"{name} Δ_i", errors, positive=True)
             if model == MODEL_TDM_CPA:
                 _number(row.get("kkin_star_s"), f"{name} k*kin,i [s⁻¹]", errors, positive=True)
-            if uses_cpa(model) and not is_hic(config) and pH_span > 1e-9:
+            supplied_pH_curve = any(not _missing(row.get(field)) for field in
+                                    COMPONENT_CPA_PH_FIELDS + COMPONENT_CPA_PH_LARGE_SPAN_FIELDS)
+            if uses_cpa(model) and not is_hic(config) and (pH_span > 1e-9 or supplied_pH_curve):
                 _number(row.get("pH_ref"), f"{name} pH_ref", errors, lower=0, upper=14)
                 _number(row.get("Z1_per_pH"), f"{name} Z1,i", errors)
                 _number(row.get("Z2_per_pH2"), f"{name} Z2,i", errors)
                 _number(row.get("delta_pH_slope_m2_C"), f"{name} Δ1,i", errors)
-                if pH_span > 1.0:
+                if pH_span > 1.0 or not _missing(row.get("Z3_per_pH3")):
                     _number(row.get("Z3_per_pH3"), f"{name} Z3,i", errors)
     if selected_components(config) and abs(total - 100.0) > 1e-6:
         errors.append(f"Target + selected impurity mass fractions must sum to 100; current total is {total:g}.")
@@ -2022,11 +2030,11 @@ def batch_max_pH_span(simulation_count: int, base_config: dict[str, Any] | None 
         return 0.0
     rows = load_batch_rows()
     n = min(max(int(simulation_count), 1), MAX_RUNS)
-    spans = []
+    values: list[float] = []
     for row in rows[:n]:
         cfg, _ = apply_batch_shared_parameters(base, batch_row_to_run_config(row))
-        spans.append(process_pH_span(cfg))
-    return max(spans) if spans else 0.0
+        values.extend(process_pH_values(cfg))
+    return max(values) - min(values) if values else 0.0
 
 
 ensure_batch_runs_csv()

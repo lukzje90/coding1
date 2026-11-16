@@ -1,0 +1,19 @@
+To update an existing extracted TDM project while keeping its process setup
+and model parameters, copy these five files from this package into the same
+project folder, replacing the older copies:
+
+  tdm_minimal_io.py
+  tdm_minimal_model.py
+  tdm_least_squares.py
+  tdm_bridge.py
+  tdm_jmp.py
+
+Keep your existing tdm_inputs.json, tdm_batch_runs.csv,
+tdm_lsq_process_runs.csv, and tdm_lsq_fraction_mass.csv. Do not copy the
+packaged example inputs or run tables over your project files.
+
+If a saved project contains a complete pH-dependent CPA charge curve,
+constant-pH runs now evaluate that curve at their actual pH. Earlier versions
+ignored those coefficients in such runs. Recheck the predicted chromatograms
+and refit if needed; the old fitted coefficients may have compensated for the
+previous behavior. The saturation equation and unit conversion are unchanged.

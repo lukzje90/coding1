@@ -11,21 +11,20 @@ import numpy as np
 
 from tdm_jmp import _validate_jsl, build_jsl
 from tdm_minimal_io import (
-    MODEL_EDM_CPA, MODEL_EDM_LANGMUIR, MODEL_TDM_CPA,
+    MODEL_TDM_CPA,
     MODEL_TDM_LANGMUIR, MODEL_TDM_WANG,
     LSQ_MODEL_SOURCE_BATCH, LSQ_MODEL_SOURCE_INDEPENDENT,
     apply_batch_shared_parameters, batch_row_to_run_config,
     batch_run_fields, default_batch_row, load_batch_rows,
     process_pH_span, save_batch_rows, validate_config,
 )
-from tdm_minimal_model import simulate, write_outputs
+from tdm_minimal_model import _build_cpa_components, simulate, write_outputs
 import tdm_least_squares as lsq
 import tdm_bridge
 from verify_model import make_config
 
 
-MODELS = (MODEL_TDM_CPA, MODEL_TDM_WANG, MODEL_TDM_LANGMUIR,
-          MODEL_EDM_CPA, MODEL_EDM_LANGMUIR)
+MODELS = (MODEL_TDM_CPA, MODEL_TDM_WANG, MODEL_TDM_LANGMUIR)
 
 
 def small_config(model):
@@ -37,7 +36,7 @@ def small_config(model):
 
 
 class InitialEquilibrationTests(unittest.TestCase):
-    def test_buffer_b_initial_liquid_reaches_all_five_models_and_changes_chromatogram(self):
+    def test_buffer_b_initial_liquid_reaches_all_supported_models_and_changes_chromatogram(self):
         for model in MODELS:
             with self.subTest(model=model):
                 baseline = small_config(model)
@@ -136,14 +135,14 @@ class InitialEquilibrationTests(unittest.TestCase):
             self.assertIn(f'Column(dtLSQRuns, "{field}") << Data Type(Numeric);', jsl)
 
     def test_direct_initial_chemistry_must_be_complete(self):
-        config = small_config(MODEL_EDM_LANGMUIR)
+        config = small_config(MODEL_TDM_LANGMUIR)
         config["process"]["equilibration_source"] = "DIRECT"
         errors = validate_config(config, strict=True)
         self.assertTrue(any("Initial equilibration pH" in error for error in errors))
         self.assertTrue(any("Initial equilibration conductivity" in error for error in errors))
 
     def test_lsq_preview_and_fit_keep_each_runs_initial_chemistry(self):
-        shared = small_config(MODEL_EDM_LANGMUIR)
+        shared = small_config(MODEL_TDM_LANGMUIR)
         rows = [default_batch_row(1), default_batch_row(2)]
         for number, row in enumerate(rows, start=1):
             row.update(Load_CV=0.4, PLW_Count=0, Elution_Count=1,
@@ -231,6 +230,74 @@ class InitialEquilibrationTests(unittest.TestCase):
                                    -20.0, delta=0.2)
             self.assertIn("c1Z1 << Set(", apply_jsl)
             self.assertLess(result["profile_metrics"][1]["raw_rmse"], 0.1)
+
+    def test_constant_ph_runs_at_different_ph_require_shared_charge_curve(self):
+        from tdm_minimal_io import (batch_max_pH_span, default_batch_row,
+                                    required_parameter_paths)
+        first = small_config(MODEL_TDM_CPA)
+        first["components"][0].update(pH_ref=6.0, Z1_per_pH=-12.0,
+                                       Z2_per_pH2=0.0, Z3_per_pH3=0.0,
+                                       delta_pH_slope_m2_C=0.0)
+        second = copy.deepcopy(first)
+        for config, pH in ((first, 5.5), (second, 6.5)):
+            for buffer in ("buffer_A", "buffer_B"):
+                config["process"][buffer]["pH"] = pH
+            self.assertAlmostEqual(process_pH_span(config), 0.0)
+        self.assertNotEqual(_build_cpa_components(first, need_tdm_kinetics=True)[0].Z(5.5),
+                            _build_cpa_components(second, need_tdm_kinetics=True)[0].Z(6.5))
+        rows = [default_batch_row(i) for i in (1, 2)]
+        for row, pH in zip(rows, (5.5, 6.5)):
+            row["BufferA_pH"] = row["BufferB_pH"] = pH
+        with patch("tdm_minimal_io.load_batch_rows", return_value=rows):
+            self.assertAlmostEqual(batch_max_pH_span(2, first), 1.0)
+        path = "components[0].Z1_per_pH"
+        self.assertNotIn(path, required_parameter_paths(first))
+        self.assertIn(path, required_parameter_paths(first, pH_span_override=1.0))
+        specs = lsq.fit_parameter_specs(first, unlocked_paths=[path],
+                                        pH_span_override=1.0)
+        self.assertEqual([item.path for item in specs], [path])
+
+    def test_global_lsq_fits_charge_slope_across_constant_ph_runs(self):
+        shared = small_config(MODEL_TDM_CPA)
+        shared["least_squares"]["physical_acceptance_mode"] = "DIAGNOSTIC_ONLY"
+        shared["feed"]["load_density_mg_mL_resin"] = 6.0
+        shared["process"]["buffer_A"]["conductivity_mS_cm"] = 2.0
+        for ion in shared["process"]["buffer_A"]["ions"][:2]:
+            ion["concentration_M"] = 0.02
+        shared["process"]["plw_steps"][0]["CV"] = 1.0
+        shared["process"]["elution_steps"][0].update(CV=4.0, end_percent_B=100.0)
+        shared["components"][0].update(pH_ref=6.0, Z1_per_pH=-20.0,
+                                        Z2_per_pH2=0.0, Z3_per_pH3=0.0,
+                                        delta_pH_slope_m2_C=0.0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profiles = []
+            for number, pH in enumerate((5.5, 6.5), start=1):
+                truth = copy.deepcopy(shared)
+                for buffer in ("buffer_A", "buffer_B"):
+                    truth["process"][buffer]["pH"] = pH
+                trace = simulate(truth)["trace"]
+                source = root / f"ph_{number}.csv"
+                with source.open("w", newline="", encoding="utf-8") as stream:
+                    writer = csv.writer(stream)
+                    writer.writerow(["CV", "UV 280 [mAU]"])
+                    writer.writerows(zip(trace["CV"], trace["uv_mAU"]))
+                initial = copy.deepcopy(truth)
+                initial["components"][0]["Z1_per_pH"] = -10.0
+                profiles.append({"config": initial, "chromatogram_csv": source})
+            output_names = ("FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
+                            "FIT_CONDUCTIVITY_CSV", "FIT_REPORT_HTML", "FIT_CONFIG_JSON",
+                            "FIT_APPLY_JSL", "FIT_SETTINGS_JSON", "FIT_HISTORY_CSV",
+                            "FIT_IMPROVED_CSV", "FIT_IMPROVED_TXT", "CONFIG_PATH")
+            with patch.multiple(lsq, **{name: root / getattr(lsq, name).name
+                                      for name in output_names}):
+                fit = lsq.run_global_least_squares_refinement(
+                    profiles, unlocked_paths=["components[0].Z1_per_pH"],
+                    max_nfev=8, max_model_evaluations=25)
+            self.assertEqual(fit["parameters"], ["components[0].Z1_per_pH"])
+            self.assertLess(fit["final_objective"], fit["initial_objective"] * 0.01)
+            self.assertAlmostEqual(fit["fitted_config"]["components"][0]["Z1_per_pH"],
+                                   -20.0, delta=0.5)
 
 
 if __name__ == "__main__":

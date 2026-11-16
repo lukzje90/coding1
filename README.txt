@@ -1,4 +1,15 @@
-TDM CHROMATOGRAPHY MODEL (R25am)
+TDM CHROMATOGRAPHY MODEL (R25an)
+
+CPA CHARGE AND SATURATION AUDIT (R25an)
+The TDM + CPA surface coverage and scaled-particle blocking terms were checked
+against Briskot et al., J. Chromatogr. A 1653 (2021) 462397, Eq. 28, and the
+charge-versus-pH terms against J. Chromatogr. A 1654 (2021) 462439, Eqs. 24–25.
+Runs at individually constant but different pH values now use the shared CPA
+charge curve. The Python batch pH span, required shared fields, LSQ fit
+eligibility, and JMP visibility now agree on this case. A configured ligand
+pK is also used consistently by the charge helper. The saturation formula
+and m²/mL solid to m⁻¹ conversion were already correct. See
+CPA_CHARGE_SATURATION_AUDIT_R25AN.md for tests and model limitations.
 
 FIXED PLW BUFFER CHEMISTRY AND TDM MODEL CHOICES (R25am)
 Each post-load wash (PLW) uses one Buffer B percentage. Its pH, conductivity,

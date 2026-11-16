@@ -304,10 +304,8 @@ class CPAComponent:
     def delta(self, pH: float) -> float:
         """CPA interaction/boundary-layer parameter Delta_i.
 
-        For constant-pH operation this is simply delta_ref.  When EDM+CPA is
-        deliberately run across a pH range, the older Briskot empirical
-        relationship is applied to log10(Delta_i) using the charge-density
-        change.
+        Apply the Briskot empirical charge-density relation when the fitted
+        pH coefficients are supplied, including constant-pH batch runs.
         """
         if abs(self.delta_pH_slope_m2_C) <= 0.0:
             return self.delta_ref
@@ -320,10 +318,9 @@ class CPAComponent:
 class CPAModel:
     """CPA equilibrium and kinetics; paper equations are selected for TDM + CPA.
 
-    The EDM path retains its previous surface-energy approximation. The TDM
-    path uses Briskot et al. (2021), JCA 1653, Eqs. (12)-(19), with the
-    kinetic/steric terms in JCA 1654. The lateral charge is independent of
-    the protein–adsorber effective charge.
+    The TDM path uses Briskot et al. (2021), JCA 1653, Eqs. (12)-(19),
+    with the kinetic/steric terms in JCA 1654. The lateral charge is
+    independent of the protein–adsorber effective charge.
     """
 
     def __init__(self, components: list[CPAComponent], ligand_density_mol_m2: float, system_scale: float,
@@ -345,7 +342,7 @@ class CPAModel:
         self._adsorber_energy_cache: dict[tuple[float, float, float, float], float] = {}
 
     def ligand_ionisation(self, pH: float) -> float:
-        exponent = _clip_scalar(CPA_CEX_LIGAND_PK - pH, -300.0, 300.0)
+        exponent = _clip_scalar(self.ligand_pK - pH, -300.0, 300.0)
         return 1.0 / (1.0 + 10.0**exponent)
 
     def sigma_adsorber(self, pH: float) -> float:
@@ -902,9 +899,8 @@ def _langmuir_c_q_from_total(
 def _build_cpa_components(config: dict[str, Any], *, need_tdm_kinetics: bool) -> list[CPAComponent]:
     rows = active_components(config)
     # pH is an operating condition in the classic Process Setup tab, not a
-    # resin/template parameter.  The 2021 CPA formulation supports pH-controlled
-    # elution, so both EDM+CPA and TDM+CPA consume a programmed pH profile when
-    # one is selected.
+    # resin/template parameter. The CPA formulation also supports fitting
+    # separate constant-pH runs using one shared charge-versus-pH curve.
     _lp = config["process"]
     if not load_material_chemistry_is_explicit(_lp):
         _load_mode = str(_lp.get("load_mode") or "LINEAR").upper()
@@ -919,9 +915,14 @@ def _build_cpa_components(config: dict[str, Any], *, need_tdm_kinetics: bool) ->
         )
     pHA = float(_load_env["pH"])
     span = process_pH_span(config) if uses_cpa(config["model"]) else 0.0
-    pH_varies = uses_cpa(config["model"]) and not is_hic(config) and span > 1e-9
     comps: list[CPAComponent] = []
     for row in rows:
+        # A run can have no internal pH gradient yet be one of several LSQ
+        # runs at different pH values. In that case the shared pH coefficients
+        # must still be evaluated at this run's operating pH.
+        has_pH_curve = all(row.get(field) is not None for field in
+                           ("pH_ref", "Z1_per_pH", "Z2_per_pH2", "delta_pH_slope_m2_C"))
+        use_pH_curve = uses_cpa(config["model"]) and not is_hic(config) and (span > 1e-9 or has_pH_curve)
         radius_nm = float(row["diameter_nm"]) / 2.0
         comps.append(
             CPAComponent(
@@ -932,14 +933,14 @@ def _build_cpa_components(config: dict[str, Any], *, need_tdm_kinetics: bool) ->
                         else _mw_from_radius_nm(radius_nm)),
                 As_m_inv=float(row["As_m_inv"]),
                 Z_ref=0.0 if is_hic(config) else float(row["Z_ref"]),
-                pH_ref=float(row["pH_ref"]) if pH_varies else pHA,
+                pH_ref=float(row["pH_ref"]) if use_pH_curve else pHA,
                 Z_poly=(
-                    float(row["Z1_per_pH"]) if pH_varies else 0.0,
-                    float(row["Z2_per_pH2"]) if pH_varies else 0.0,
-                    float(row["Z3_per_pH3"]) if pH_varies and span > 1.0 else 0.0,
+                    float(row["Z1_per_pH"]) if use_pH_curve else 0.0,
+                    float(row["Z2_per_pH2"]) if use_pH_curve else 0.0,
+                    float(row["Z3_per_pH3"]) if use_pH_curve and row.get("Z3_per_pH3") is not None else 0.0,
                 ),
                 delta_ref=float(row["delta_ref"]),
-                delta_pH_slope_m2_C=float(row["delta_pH_slope_m2_C"]) if pH_varies else 0.0,
+                delta_pH_slope_m2_C=float(row["delta_pH_slope_m2_C"]) if use_pH_curve else 0.0,
                 salt_sensitivity_per_M=float(row.get("salt_sensitivity_per_M", 1.0)),
                 Z_lat=float(row["Z_lat"]) if config["model"] == MODEL_TDM_CPA and not is_hic(config) else 0.0,
                 k_eff_m_s=float(row["k_eff_um_s"]) * 1e-6 if need_tdm_kinetics else 0.0,
