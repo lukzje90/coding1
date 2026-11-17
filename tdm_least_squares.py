@@ -1260,7 +1260,8 @@ def _chromatogram_fit_svg(config: dict[str, Any], info: dict[str, Any]) -> str:
 
 
 def _alignment_overlay_svg(config: dict[str, Any], info: dict[str, Any],
-                           references: list[dict[str, Any]]) -> str:
+                           references: list[dict[str, Any]],
+                           reference: ChromatogramReference) -> str:
     """Share one CV axis for UV traces and fraction-integrated mass% points."""
     trace = info["result"]["trace"]
     chrom = info["chromatogram"]
@@ -1296,12 +1297,14 @@ def _alignment_overlay_svg(config: dict[str, Any], info: dict[str, Any],
                 f'<polyline points="{poly(x_model,y_model,py_uv)}" fill="none" stroke="#0878c6" stroke-width="1.7"/>'))
     concentrations = np.maximum(np.asarray(trace["component_g_L"], dtype=float), 0)
     total = concentrations.sum(axis=1)
+    measured_range = float(np.ptp(chrom["measured"]))
+    visual_uv_floor = max(1e-6, 0.01 * measured_range)
     names = [str(row["name"]) for row in active_components(config)]
     colors = ("#dc3545", "#149447", "#e87722", "#8a63b7", "#9b6a42", "#008b8b")
     labels = ['Measured UV (black)', 'Predicted UV (blue)']
     for i, name in enumerate(names):
         pct = np.divide(100*concentrations[:,i], total, out=np.full_like(total, np.nan), where=total>1e-10)
-        valid = np.isfinite(pct)
+        valid = np.isfinite(pct) & (np.asarray(trace["uv_mAU"]) > visual_uv_floor)
         for group in np.split(np.flatnonzero(valid), np.where(np.diff(np.flatnonzero(valid)) > 1)[0]+1):
             if len(group) > 1:
                 svg.append(f'<polyline points="{poly(x_model[group],pct[group],py_mass)}" fill="none" '
@@ -1312,15 +1315,19 @@ def _alignment_overlay_svg(config: dict[str, Any], info: dict[str, Any],
             x = float(ref["CV"])
             observed = float(ref["mass_percent"][name])
             predicted = float(_predicted_fraction_mass_percent(config, trace, ref)[0][i])
+            fraction_uv = _fraction_mean_uv(config, ref, trace, reference, chrom["baseline"])
+            faint = bool(fraction_uv is not None and fraction_uv[0] > 0.0
+                         and fraction_uv[1] < 0.05 * fraction_uv[0])
             svg.append(f'<circle cx="{px(x):.2f}" cy="{py_mass(observed):.2f}" r="4" '
                        f'fill="white" stroke="{colors[i]}" stroke-width="2"/>')
             svg.append(f'<path d="M{px(x)-4:.2f},{py_mass(predicted):.2f}h8" '
-                       f'stroke="{colors[i]}" stroke-width="2.5"/>')
+                       f'stroke="{colors[i]}" stroke-width="2.5"'
+                       + (' opacity=".4" stroke-dasharray="2 2"' if faint else '') + '/>')
         labels.append(f'{html.escape(name)} mass% ({colors[i]})')
     svg.append(f'<text x="{left+width/2:.2f}" y="{top+height+42:g}" text-anchor="middle" font-size="13">CV from run start</text>')
     svg.append('<text x="17" y="210" transform="rotate(-90 17 210)" text-anchor="middle" font-size="13">UV [mAU]</text>')
     svg.append('<text x="1005" y="210" transform="rotate(90 1005 210)" text-anchor="middle" font-size="13">Species mass%</text>')
-    svg.append('</svg><p>' + '; '.join(labels) + '. Open circles are measured fraction mass%; short ticks are model-integrated fraction mass%. Continuous mass% lines are instantaneous predicted composition, shown only when protein is detectable.</p>')
+    svg.append('</svg><p>' + '; '.join(labels) + '. Open circles are measured fraction mass%; short ticks are model-integrated fraction mass%. Pale ticks mark fractions with modeled UV below 5% of measured fraction UV. Continuous mass% lines are instantaneous predicted composition, shown only when predicted UV is appreciable.</p>')
     return ''.join(svg)
 
 
@@ -1389,9 +1396,12 @@ def preview_lsq_alignment(
         )
         raw_comp_refs = profile.get("composition_references") or []
         comp_refs = validate_composition_references(config, raw_comp_refs) if raw_comp_refs else []
-        _residual, info = _objective_parts(config, reference, MODE_CHROMATOGRAM, [], bool(profile.get("fit_conductivity")))
-        if comp_refs:
-            _composition_residuals(config, comp_refs, info["result"]["trace"])
+        _residual, info = _objective_parts(
+            config, reference,
+            MODE_CHROMATOGRAM_AND_COMPOSITION if comp_refs else MODE_CHROMATOGRAM,
+            comp_refs, bool(profile.get("fit_conductivity")))
+        low_signal_fractions = {int(row["Fraction"]) for row in info["composition"]
+                                if row.get("Low_Simulated_Fraction_UV")}
         chrom = info["chromatogram"]
         predicted = np.asarray(chrom["predicted_detector_signal"], dtype=float)
         measured = np.asarray(chrom["measured"], dtype=float)
@@ -1463,14 +1473,15 @@ def preview_lsq_alignment(
                if comp_refs else
                '<p><b>Fraction mass% alignment:</b> no observations enabled for this run. '
                'Select mass% refinement mode, turn on this run\'s fraction mass%, and enter fraction values to include them.</p>')
-            + _alignment_overlay_svg(config, info, comp_refs)
+            + _alignment_overlay_svg(config, info, comp_refs, reference)
             + ("<h3>Predicted main protein and impurity chromatogram before refinement</h3>"
                + _impurity_profile_svg(config, info["result"])
                + _predicted_fraction_analysis_html(info["result"])
                if len(info["result"]["simulation"]["component_names"]) > 1 else "")
             + (_conductivity_fit_svg(info) if info["conductivity"] else "")
             + (f'<h3 id="mass-preview-run-{html.escape(str(run_number), quote=True)}">Fraction mass% at midpoints</h3>'
-               + _composition_profile_svg(config, comp_refs, info["result"]["trace"])
+               + _composition_profile_svg(config, comp_refs, info["result"]["trace"],
+                                          low_signal_fractions)
                + f"<p>{sum(len(row['mass_percent']) for row in comp_refs)} entered species observations. "
                  "Each populated cell is compared with integrated modeled mass over its collected interval; connecting curves are display-only.</p>"
                if comp_refs else "")
@@ -1556,6 +1567,31 @@ def _predicted_fraction_mass_percent(config: dict[str, Any], trace: dict[str, An
     return (100.0 * (integrated / total) if quantifiable else np.zeros(comp.shape[1])), quantifiable
 
 
+def _fraction_mean_uv(config: dict[str, Any], fraction: dict[str, Any],
+                      trace: dict[str, Any], reference: ChromatogramReference,
+                      baseline: float) -> tuple[float, float] | None:
+    """Return measured and modeled mean UV over one collected fraction."""
+    model_cv = np.asarray(trace["CV"], dtype=float)
+    measured_cv = np.asarray(reference.cv, dtype=float)
+    if fraction.get("legacy_point"):
+        points = np.asarray([float(fraction["CV"])])
+    else:
+        factor = float(config["column"]["volume_mL"]) if fraction["x_unit"] == "ML" else 1.0
+        start, end = float(fraction["start"]) / factor, float(fraction["end"]) / factor
+        points = np.unique(np.r_[start, model_cv[(model_cv > start) & (model_cv < end)],
+                                 measured_cv[(measured_cv > start) & (measured_cv < end)], end])
+    if points[0] < measured_cv[0] or points[-1] > measured_cv[-1]:
+        return None
+    measured = np.interp(points, measured_cv, np.asarray(reference.signal, dtype=float) - baseline)
+    modeled = np.interp(points, model_cv, np.asarray(trace["uv_mAU"], dtype=float))
+    if len(points) == 1:
+        return float(measured[0]), float(modeled[0])
+    width = float(points[-1] - points[0])
+    steps = np.diff(points)
+    return (float(np.sum(0.5 * (measured[:-1] + measured[1:]) * steps) / width),
+            float(np.sum(0.5 * (modeled[:-1] + modeled[1:]) * steps) / width))
+
+
 def _composition_residuals(
     config: dict[str, Any],
     references: list[dict[str, Any]],
@@ -1590,17 +1626,21 @@ def _composition_residuals(
     return arr, rows
 
 
-def _cpa_fraction_uv_residuals(config: dict[str, Any], references: list[dict[str, Any]],
-                               trace: dict[str, Any], reference: ChromatogramReference,
-                               baseline: float) -> np.ndarray:
-    """Constrain measured species amounts when a CPA trial has an empty fraction.
+def _fraction_uv_residuals(config: dict[str, Any], references: list[dict[str, Any]],
+                           trace: dict[str, Any], reference: ChromatogramReference,
+                           baseline: float) -> np.ndarray:
+    """Keep fraction composition informative when predicted protein is scarce.
 
-    A mass percentage is undefined when the model predicts zero collected
-    protein. The fraction's measured UV and a complete mass% row together
-    specify each species' share of that UV. Comparing the corresponding model
-    UV contributions is continuous at zero predicted protein, so the Jacobian
-    can still steer the CPA retention parameters. Partial rows retain only the
-    ordinary mass% residual because their unmeasured species are unknown.
+    The ordinary mass% residual is a ratio of modeled species masses. If only
+    one minute species is present, that ratio is 100% regardless of whether its
+    amount changes. Measured fraction UV supplies an independent total amount:
+    a complete mass% row specifies each species' UV amount given the current
+    response factors. For a
+    partial row, the unknown species' response factors give rigorous lower and
+    upper amounts for each measured species. Compare modeled amounts with
+    those targets only near an empty modeled fraction, where the percentage
+    ratio supplies no useful numerical direction. This does not alter the
+    reported mass% or the chromatogram residual.
     """
     names = [str(row["name"]) for row in active_components(config)]
     factors = np.asarray(trace["uv_response_factors_mAU_L_g"], dtype=float)
@@ -1610,12 +1650,19 @@ def _cpa_fraction_uv_residuals(config: dict[str, Any], references: list[dict[str
     measured_uv = np.asarray(reference.signal, dtype=float) - baseline
     signal_floor = max(1e-6, 0.01 * float(np.max(measured_uv) - np.min(measured_uv)))
     anchors: list[float] = []
+    if np.any(factors <= 0.0) or not np.all(np.isfinite(factors)):
+        raise ValueError("Fraction UV response factors must be finite and positive.")
     for row in references:
         percentages = row["mass_percent"]
-        if len(percentages) != len(names) or not all(name in percentages for name in names):
+        if not percentages:
             continue
-        fractions = np.asarray([percentages[name] / 100.0 for name in names], dtype=float)
-        if not 0.995 <= float(np.sum(fractions)) <= 1.005:
+        known = [i for i, name in enumerate(names) if name in percentages]
+        unknown = [i for i, name in enumerate(names) if name not in percentages]
+        fractions = np.asarray([percentages[names[i]] / 100.0 for i in known], dtype=float)
+        known_sum = float(np.sum(fractions))
+        # With all modeled species entered, a total far from 100% has no
+        # measured UV mass balance. Keep its ordinary percentage residual.
+        if not unknown and not 0.995 <= known_sum <= 1.005:
             continue
         if row.get("legacy_point"):
             points = np.asarray([float(row["CV"])])
@@ -1642,18 +1689,33 @@ def _cpa_fraction_uv_residuals(config: dict[str, Any], references: list[dict[str
                                        (0.5 * weights)[:, None], axis=0) / np.sum(weights)
         if measured_average <= signal_floor:
             continue
-        weighted_response = float(fractions @ factors)
-        expected_uv = measured_average * fractions * factors / weighted_response
+        known_response = float(fractions @ factors[known])
+        remaining = max(0.0, 1.0 - known_sum)
+        minimum_response = known_response + (remaining * float(np.min(factors[unknown])) if unknown else 0.0)
+        maximum_response = known_response + (remaining * float(np.max(factors[unknown])) if unknown else 0.0)
+        if minimum_response <= 0.0:
+            continue
+        minimum_total_mass = measured_average / maximum_response
+        maximum_total_mass = measured_average / minimum_response
         predicted_uv = predicted_average * factors
-        # The original percentage objective must dominate whenever the model
-        # already predicts a measurable fraction. Use the UV share only to
-        # escape its zero-mass singularity; the smooth taper avoids a hard
-        # objective discontinuity as a peak enters the fraction.
+        # The ordinary percentage residual dominates once modeled UV is
+        # appreciable. The taper is smooth as a peak enters a fraction.
         signal_ratio = float(np.sum(predicted_uv)) / (0.05 * measured_average)
         empty_fraction_weight = 1.0 / (1.0 + signal_ratio**4)
-        anchors.extend(empty_fraction_weight * (predicted_uv - expected_uv) / measured_average)
+        for index, fraction in zip(known, fractions):
+            expected_min = fraction * minimum_total_mass * factors[index]
+            expected_max = fraction * maximum_total_mass * factors[index]
+            difference = float(predicted_uv[index]) - float(np.clip(predicted_uv[index], expected_min, expected_max))
+            anchors.append(empty_fraction_weight * difference / measured_average)
     return (np.asarray(anchors, dtype=float) / math.sqrt(len(anchors))
             if anchors else np.empty(0, dtype=float))
+
+
+def _cpa_fraction_uv_residuals(config: dict[str, Any], references: list[dict[str, Any]],
+                               trace: dict[str, Any], reference: ChromatogramReference,
+                               baseline: float) -> np.ndarray:
+    """Compatibility name for the fraction UV residual used by both TDM models."""
+    return _fraction_uv_residuals(config, references, trace, reference, baseline)
 
 
 def _lsq_display_label(context: dict[str, Any]) -> str:
@@ -1667,13 +1729,15 @@ def _lsq_display_label(context: dict[str, Any]) -> str:
 
 
 def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, Any]],
-                             trace: dict[str, Any]) -> str:
+                             trace: dict[str, Any],
+                             low_signal_fractions: set[int] | None = None) -> str:
     """Plot midpoint observations and model fractions without bridging data gaps.
 
     The smooth observed curve is display-only. The least-squares residual uses
     each entered midpoint exactly once; missing species cells add no residual.
     """
     names = [str(row["name"]) for row in active_components(config)]
+    low_signal = low_signal_fractions or set()
     colors = ("#0878c6", "#e87722", "#149447", "#dc3545", "#8a63b7", "#9b6a42")
     sim_cv = np.asarray(trace["CV"], dtype=float)
     show_ml = all(ref["x_unit"] == "ML" for ref in references)
@@ -1736,13 +1800,25 @@ def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, 
                            for ref in group]
                 model_pattern = "1 6" if species_index else "6 4"
                 model_opacity = ".6" if species_index else ".85"
-                svg.append(f'<path d="{path(list(zip(model_x, model_y)))}" fill="none" stroke="{color}" stroke-width="1.8" stroke-dasharray="{model_pattern}" opacity="{model_opacity}"/>')
+                good = [j for j, ref in enumerate(group) if ref["fraction_index"] not in low_signal]
+                segments: list[list[int]] = []
+                for j in good:
+                    if not segments or j != segments[-1][-1] + 1:
+                        segments.append([])
+                    segments[-1].append(j)
+                for segment in segments:
+                    if len(segment) > 1:
+                        points = [(float(model_x[j]), float(model_y[j])) for j in segment]
+                        svg.append(f'<path d="{path(points)}" fill="none" stroke="{color}" stroke-width="1.8" stroke-dasharray="{model_pattern}" opacity="{model_opacity}"/>')
             for ref in group:
                 cv = float(ref["CV"])
                 measured = float(ref["mass_percent"][name])
                 predicted = float(_predicted_fraction_mass_percent(config, trace, ref)[0][species_index])
                 svg.append(f'<circle cx="{px(cv):.2f}" cy="{py(measured):.2f}" r="3.4" fill="{color}"/>')
-                svg.append(f'<circle cx="{px(cv):.2f}" cy="{py(predicted):.2f}" r="3" fill="white" stroke="{color}" stroke-width="1.5"/>')
+                faint = ref["fraction_index"] in low_signal
+                svg.append(f'<circle cx="{px(cv):.2f}" cy="{py(predicted):.2f}" r="3" fill="white" stroke="{color}" stroke-width="1.5"'
+                           + (' opacity=".4" stroke-dasharray="2 2"' if faint else '')
+                           + '/>')
         legend_y = 55 + species_index * 25
         legend_style = ' stroke-dasharray="2 4"' if species_index else ''
         svg.append(f'<line x1="790" y1="{legend_y}" x2="813" y2="{legend_y}" stroke="{color}" stroke-width="3"{legend_style}/>')
@@ -1752,6 +1828,8 @@ def _composition_profile_svg(config: dict[str, Any], references: list[dict[str, 
     svg.append('<text x="790" y="283" font-size="12">Dashed: model target</text>')
     svg.append('<text x="790" y="302" font-size="12">Faint dots: model impurities</text>')
     svg.append('<text x="790" y="321" font-size="12">Blank: no fit or line</text>')
+    if low_signal:
+        svg.append('<text x="790" y="340" font-size="11">Pale ring: modeled UV &lt;5% measured</text>')
     svg.append('</svg>')
     return "".join(svg)
 
@@ -1799,6 +1877,8 @@ def _fraction_uv_overlay_svg(config: dict[str, Any], references: list[dict[str, 
     parts.append(f'<path d="{line(model_x, model_y, py_uv)}" fill="none" stroke="#0878c6" stroke-width="1.8"/>')
     colors = ("#a32673", "#e87722", "#149447", "#dc3545", "#8a63b7", "#9b6a42")
     names = [str(row["name"]) for row in active_components(config)]
+    low_signal = {int(row["Fraction"]) for row in info["composition"]
+                  if row.get("Low_Simulated_Fraction_UV")}
     for i, name in enumerate(names):
         groups: list[list[dict[str, Any]]] = []
         for ref in references:
@@ -1816,19 +1896,34 @@ def _fraction_uv_overlay_svg(config: dict[str, Any], references: list[dict[str, 
                                     for ref in group])
             if len(group) > 1:
                 parts.append(f'<path d="{line(x, measured, py_pct)}" fill="none" stroke="{colors[i]}" stroke-width="2"/>')
-                parts.append(f'<path d="{line(x, predicted, py_pct)}" fill="none" stroke="{colors[i]}" stroke-width="1.7" stroke-dasharray="5 4"/>')
-            for xv, mv, pv in zip(x, measured, predicted):
+                # Do not draw a confident composition curve through fractions
+                # where the model predicts less than 5% of measured UV.
+                good = [j for j, ref in enumerate(group) if ref["fraction_index"] not in low_signal]
+                segments: list[list[int]] = []
+                for j in good:
+                    if not segments or j != segments[-1][-1] + 1:
+                        segments.append([])
+                    segments[-1].append(j)
+                for segment in segments:
+                    if len(segment) > 1:
+                        parts.append(f'<path d="{line(x[segment], predicted[segment], py_pct)}" fill="none" stroke="{colors[i]}" stroke-width="1.7" stroke-dasharray="5 4"/>')
+            for ref, xv, mv, pv in zip(group, x, measured, predicted):
                 parts.append(f'<circle cx="{px(xv):.2f}" cy="{py_pct(mv):.2f}" r="3" fill="{colors[i]}"/>')
-                parts.append(f'<circle cx="{px(xv):.2f}" cy="{py_pct(pv):.2f}" r="3" fill="white" stroke="{colors[i]}"/>')
+                faint = ref["fraction_index"] in low_signal
+                parts.append(f'<circle cx="{px(xv):.2f}" cy="{py_pct(pv):.2f}" r="3" fill="white" stroke="{colors[i]}"'
+                             + (' opacity=".4" stroke-dasharray="2 2"' if faint else '')
+                             + ('><title>Modeled UV is below 5% of measured fraction UV; this mass% is based on trace modeled protein.</title></circle>'
+                                if faint else '/>'))
         y = 60 + 24 * i
         parts.append(f'<text x="805" y="{y}" fill="{colors[i]}" font-size="12">{html.escape(name)} mass%</text>')
     parts.extend([f'<text x="{(left+right)/2:.1f}" y="410" text-anchor="middle" font-size="13">CV from run start</text>',
                   '<text x="15" y="200" transform="rotate(-90 15 200)" font-size="12" text-anchor="middle">UV [mAU]</text>',
-                  '<text x="800" y="210" font-size="12">Mass% (right axis)</text>',
+                  '<text x="800" y="210" font-size="12">Protein mass% (right axis)</text>',
                   '<text x="805" y="275" font-size="11">Black: measured UV</text>',
                   '<text x="805" y="293" font-size="11">Blue: predicted UV</text>',
                   '<text x="805" y="311" font-size="11">Filled: measured mass%</text>',
                   '<text x="805" y="329" font-size="11">Open/dashed: predicted mass%</text>',
+                  '<text x="805" y="347" font-size="10">Pale ring: modeled UV &lt;5% measured</text>',
                   '</svg>'])
     return "".join(parts)
 
@@ -1851,13 +1946,27 @@ def _objective_parts(
     comp_rows: list[dict[str, Any]] = []
     if mode == MODE_CHROMATOGRAM_AND_COMPOSITION:
         comp_r, comp_rows = _composition_residuals(cfg, composition_refs, result["trace"])
-        if cfg["model"] == MODEL_TDM_CPA:
-            uv_anchor = _cpa_fraction_uv_residuals(
-                cfg, composition_refs, result["trace"], ref, chrom_info["baseline"])
-            if len(uv_anchor):
-                # Preserve the original mass% residual and its weight. The
-                # tapered anchor adds information only near an empty fraction.
-                comp_r = np.concatenate([comp_r, uv_anchor])
+        uv_by_fraction = {
+            row["fraction_index"]: _fraction_mean_uv(cfg, row, result["trace"], ref,
+                                                      chrom_info["baseline"])
+            for row in composition_refs if row["mass_percent"]
+        }
+        for row in comp_rows:
+            mean_uv = uv_by_fraction[row["Fraction"]]
+            measured_uv, modeled_uv = mean_uv if mean_uv is not None else (None, None)
+            row["Measured_Fraction_UV_mAU"] = measured_uv
+            row["Simulated_Fraction_UV_mAU"] = modeled_uv
+            row["Simulated_UV_percent_of_measured"] = (
+                100.0 * modeled_uv / measured_uv if measured_uv is not None and measured_uv > 0.0 else None)
+            row["Low_Simulated_Fraction_UV"] = bool(
+                measured_uv is not None and measured_uv > 0.0
+                and modeled_uv < 0.05 * measured_uv)
+        uv_anchor = _fraction_uv_residuals(
+            cfg, composition_refs, result["trace"], ref, chrom_info["baseline"])
+        if len(uv_anchor):
+            # Preserve the original mass% residual and its weight. The
+            # tapered anchor adds information only near an empty fraction.
+            comp_r = np.concatenate([comp_r, uv_anchor])
         if cfg["least_squares"]["objective"] == "RAW_SSE":
             # Keep the literal UV SSE, but express the dimensionless mass%
             # group in comparable UV units. Without this, mAU residuals can
@@ -2453,7 +2562,7 @@ def run_least_squares_refinement(
             writer.writerow({"CV": cv, "Measured_Signal": ym, "Simulated_Total_Protein_g_L": ys, "Scaled_Simulated_Signal": yp, "Residual": float(yp)-float(ym)})
 
     with fit_composition_path.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Model_Fraction_Quantifiable", "Residual_mass_percent"]
+        fields = ["CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Model_Fraction_Quantifiable", "Residual_mass_percent", "Measured_Fraction_UV_mAU", "Simulated_Fraction_UV_mAU", "Simulated_UV_percent_of_measured", "Low_Simulated_Fraction_UV"]
         writer = csv.DictWriter(fh, fieldnames=fields); writer.writeheader()
         for row in final_info["composition"]:
             r = dict(row)
@@ -2522,7 +2631,9 @@ def run_least_squares_refinement(
                         + _fraction_uv_overlay_svg(fitted, comp_refs, final_info)
                         if comp_refs else "")
     composition_plot = ("<h2>Fraction mass% profiles</h2>"
-                        + _composition_profile_svg(fitted, comp_refs, final_info["result"]["trace"])
+                        + _composition_profile_svg(fitted, comp_refs, final_info["result"]["trace"],
+                                                   {int(row["Fraction"]) for row in final_info["composition"]
+                                                    if row.get("Low_Simulated_Fraction_UV")})
                         + "<p>Solid target and dotted impurity curves connect adjacent entered midpoints without overshoot. Model target is dashed; model impurities use lighter dots. Model lines appear only where corresponding measured segments exist. Blank cells create gaps and add no residual.</p>"
                         if comp_refs else "")
     uv_identifiability_note = (
@@ -2559,6 +2670,7 @@ Converged flag: {bool(opt.success)}; decision: {acceptance['status']}; applied t
 <p>The chromatogram residual is point-by-point least squares (Hahn et al., equation 9). RAW_SSE is the default. No baseline is inferred unless INITIAL_MEDIAN is explicitly selected; otherwise the fixed detector baseline is used. The predicted UV signal is the sum of each species concentration multiplied by its own response factor; the target uses the shared Model Parameters factor and each impurity uses its component-specific factor. UV references labelled AU are converted to mAU. Optional NORMALIZED_MSE divides residuals by the measured signal scale and sqrt(N). RAW_SSE compares UV values directly.</p>
 {uv_identifiability_note}
 <p>For each entered fraction, species mass% is 100 × its integrated detector concentration over the collected CV interval / the integrated concentration of all active species. CV is proportional to collected volume, so this accounts for changing flow. Legacy point-only references retain midpoint comparison. Each entered species value contributes one residual, divided by 100 and sqrt(the number of populated cells). With RAW_SSE, that residual group is converted to comparable UV units using the measured UV signal scale (at least 1 mAU) and sqrt(the number of UV samples); with NORMALIZED_MSE both groups stay dimensionless with a 1 mAU UV normalization floor. Blank cells add no residual and break the display line.</p>
+<p>When the modeled fraction has little UV signal, measured UV and the entered mass% also constrain each measured species' amount. Complete mass% rows give an exact UV-derived species amount; partial rows give bounds using the unmeasured species' response factors. This additional residual fades as modeled UV becomes appreciable. Pale predicted mass% rings mark fractions where modeled UV is below 5% of measured fraction UV; their percentages may reflect only trace modeled protein. The fraction CSV reports measured and modeled mean UV as well as both percentages.</p>
 <p>Only unlocked eligible mechanistic and instrument parameters listed above are refined. Locked values, column geometry and each recipe remain fixed. The candidate was saved to <code>{html.escape(fit_config_path.name)}</code>; it is applied to <code>{html.escape(CONFIG_PATH.name)}</code> only after all enabled acceptance checks pass.</p>
 <h2>Objective improvement over time</h2>
 <p>The plot and CSV show every objective evaluation, elapsed seconds, best-so-far objective, improvement relative to the initial objective, and any numerical-penalty status. Lower objective is better. <a href="{html.escape(fit_history_path.name)}">Open objective history CSV</a>.</p>
@@ -3302,7 +3414,7 @@ def run_global_least_squares_refinement(
                                  "CV": float(cv), "Measured_mS_cm": float(measured),
                                  "Predicted_mS_cm": float(predicted), "Residual_mS_cm": float(predicted - measured)})
     with FIT_COMPOSITION_CSV.open("w", encoding="utf-8", newline="") as fh:
-        fields = ["Run_Number", "Run_Name", "CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Model_Fraction_Quantifiable", "Residual_mass_percent"]
+        fields = ["Run_Number", "Run_Name", "CV", "Fraction", "Fraction_Start", "Fraction_End", "Fraction_Unit", "Protein_Species", "Measured_mass_percent", "Simulated_mass_percent", "Model_Fraction_Quantifiable", "Residual_mass_percent", "Measured_Fraction_UV_mAU", "Simulated_Fraction_UV_mAU", "Simulated_UV_percent_of_measured", "Low_Simulated_Fraction_UV"]
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
         for profile, info in zip(normalized_profiles, final_infos):
@@ -3328,7 +3440,9 @@ def run_global_least_squares_refinement(
         "profile_count": n_profiles,
         "objective": first["least_squares"]["objective"],
         "equation_9": "min_theta sum_runs sum_UV_points (predicted_UV - measured_UV)^2; enabled conductivity and mass% add separately scaled residual groups",
-        "cpa_fraction_uv_anchor": ("Complete TDM+CPA mass% rows also constrain each species' share of measured fraction UV, using its current UV response factor. The additional residual tapers to zero when the trial predicts measurable protein; partial rows retain mass% only."
+        "fraction_uv_anchor": ("When modeled fraction UV is scarce, entered mass% and measured fraction UV constrain species amounts. Complete rows give exact species UV amounts; partial rows give bounds from unmeasured species response factors. The additional residual tapers away as modeled UV becomes appreciable."
+                               if mode == MODE_CHROMATOGRAM_AND_COMPOSITION else None),
+        "cpa_fraction_uv_anchor": ("The fraction UV anchor also applies to TDM+CPA; see fraction_uv_anchor."
                                    if first["model"] == MODEL_TDM_CPA and mode == MODE_CHROMATOGRAM_AND_COMPOSITION else None),
         "weighted_rmse_formula": "sqrt(sum_runs (run_weight/sum_run_weights) * sum_points(point_weight*residual^2)/sum_point_weights)",
         "optimizer": f"scipy.optimize.least_squares(method={_optimizer_method(x0, lo, hi)}, loss=linear, ftol=1e-4, xtol=1e-4, gtol=1e-7); bounded residual-vector least squares",
@@ -3438,7 +3552,9 @@ def run_global_least_squares_refinement(
             plot += ("<h4>UV chromatogram with collected fraction mass%</h4>"
                      + _fraction_uv_overlay_svg(cfg, refs, info)
                      + "<h4>Fraction mass% at midpoints</h4>"
-                     + _composition_profile_svg(cfg, refs, info["result"]["trace"])
+                     + _composition_profile_svg(cfg, refs, info["result"]["trace"],
+                                                {int(row["Fraction"]) for row in info["composition"]
+                                                 if row.get("Low_Simulated_Fraction_UV")})
                      + "<p>Only populated species cells for collected fraction intervals contribute mass% residuals. The measured target is solid, measured impurities are dotted, model target is dashed, and model impurities use lighter dots. Blank cells leave gaps; connecting lines are for display.</p>")
         profile_plots.append(
             f'<h3>{html.escape(_lsq_display_label(profile["run_context"]))}'
@@ -3491,8 +3607,8 @@ def run_global_least_squares_refinement(
     settings["fit_elapsed_hms"] = fit_elapsed_hms
     settings["model_residual_evaluations"] = eval_count
     settings["fit_quality_warning"] = fit_quality_warning
-    mass_anchoring_note = (" For TDM+CPA, a complete mass% row also constrains each species' share of the measured UV averaged over that fraction. This helps when the model predicts an empty fraction and tapers away as its fraction becomes measurable. Rows with blank species cells use mass% only."
-                           if first["model"] == MODEL_TDM_CPA and mode == MODE_CHROMATOGRAM_AND_COMPOSITION else "")
+    mass_anchoring_note = (" When modeled fraction UV is scarce, measured UV and mass% also constrain each measured species' amount. Complete rows specify exact UV-derived amounts; partial rows specify bounds from unmeasured species response factors. The extra residual tapers away as modeled UV becomes appreciable. Pale predicted mass% rings mark modeled fraction UV below 5% of measured fraction UV. The fraction CSV reports both UV values and percentages."
+                           if mode == MODE_CHROMATOGRAM_AND_COMPOSITION else "")
     composition_channel_label = ("Fraction fit" if mass_anchoring_note else "Mass%")
     try:
         active_path.write_text(

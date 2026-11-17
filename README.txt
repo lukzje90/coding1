@@ -1,4 +1,18 @@
-TDM CHROMATOGRAPHY MODEL (R25ao)
+TDM CHROMATOGRAPHY MODEL (R25ap)
+
+FRACTION MASS% LOW-SIGNAL FIT (R25ap)
+For every selected collected fraction, LSQ still compares entered species
+mass% with the simulated percentages integrated over that whole fraction.
+When a trial predicts almost no fraction protein, the measured fraction UV
+and current species UV response factors also constrain each entered species
+amount, including partial rows. The
+constraint fades when the modeled fraction signal becomes appreciable.
+Fit plots mark percentages based on less than 5% of measured fraction UV with
+pale rings instead of joining them into a confident curve. The fraction fit
+CSV includes measured and simulated mean UV and their ratio beside the mass%.
+Only the LSQ implementation and its reports changed; normal model equations,
+saved model parameters, and process recipes are unchanged. See
+UPDATE_EXISTING_PROJECT_R25AP.txt for replacing an older package.
 
 CPA COUNTER-ION COUPLING (R25ao)
 TDM + CPA now couples adsorption and desorption to a conservative monovalent
@@ -314,8 +328,9 @@ The TDM+CPA mass% objective now uses each complete fraction's measured UV
 and protein/impurity mass percentages to constrain the individual predicted
 species signals. This gives the optimizer a useful residual when a trial
 predicts almost no protein in that fraction. The reported mass percentages
-remain the actual integrated species fractions. Rows with blank species cells
-still use only their entered mass% values. A four-species bind-and-elute
+remain the actual integrated species fractions. In the current model, rows
+with blank species cells also use measured UV to bound the amounts of their
+entered species when modeled fraction UV is scarce. A four-species bind-and-elute
 recovery test and CPA paper equation audit are in CPA_PAPER_AUDIT_R25S.md.
 
 
@@ -455,6 +470,9 @@ predicted fraction mass% overlaid on UV, and lists the initial and fitted UV
 RMSE so a joint fit can be assessed channel by channel. Each unlocked
 parameter row identifies its protein or impurity. The fit CSV flags fractions below a
 1e-12 g/L numerical concentration floor; this is not an assay detection limit.
+It also reports measured and simulated mean fraction UV and flags predictions
+with less than 5% of measured fraction UV. Such predicted mass% markers are
+pale in the fit plots because they can be ratios of trace modeled protein.
 CPA with TDM or EDM is ion
 exchange; Competitive Langmuir with TDM or EDM and TDM Modified Wang are HIC.
 The JMP mode selector follows the selected model automatically; incompatible
@@ -701,6 +719,14 @@ RAW_SSE keeps its UV term in mAU squared and scales the mass% block using the
 measured UV range (minimum 1 mAU) and sample count so mass% observations can
 affect the fit. NORMALIZED_MSE gives UV and mass% dimensionless group
 contributions, also using a 1 mAU floor for a flat UV trace.
+When a trial predicts little UV in a collected fraction, the measured UV and
+entered mass% give an additional species-amount constraint. A complete row
+gives exact UV-derived species amounts; a partial row gives bounds using the
+response factors of the unmeasured species. This prevents a trace prediction
+of one impurity at 100% from leaving the least-squares objective insensitive
+to changing the amount of that impurity or product. The extra constraint
+fades when modeled fraction UV becomes appreciable; the percentages reported
+to the user remain the integrated modeled species mass percentages.
 
 CHROMATOGRAM CV RANGE UPDATE
 The chart spans the cumulative CV of every enabled process step. For example,

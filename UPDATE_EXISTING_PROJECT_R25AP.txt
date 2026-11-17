@@ -1,0 +1,14 @@
+R25ap updates fraction mass% least-squares fitting and its plots.
+
+If your existing model is R25ao, copy only tdm_least_squares.py from this
+package into your project folder, replacing its older copy. Keep your
+tdm_inputs.json, tdm_batch_runs.csv, tdm_lsq_process_runs.csv, and
+tdm_lsq_fraction_mass.csv. These files hold your model parameters, process
+setup, and entered fraction analyses.
+
+If your model is older than R25ao, use the six Python files listed in
+UPDATE_EXISTING_PROJECT_R25AO.txt before running R25ap. Do not copy the
+package's example input or run tables over your saved data.
+
+Previously saved LSQ results do not gain the new residual or diagnostic
+columns. Rerun LSQ to use this fix and produce updated reports.

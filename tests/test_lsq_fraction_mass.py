@@ -3,15 +3,17 @@ import copy
 import csv
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 import numpy as np
 
 import tdm_bridge
 import tdm_least_squares as lsq
 from tdm_jmp import build_jsl, _validate_jsl
-from tdm_minimal_io import MODEL_EDM_LANGMUIR, MODEL_TDM_CPA, default_batch_row, load_lsq_mass_rows, normalize_config
+from tdm_minimal_io import MODEL_EDM_LANGMUIR, MODEL_TDM_CPA, MODEL_TDM_LANGMUIR, default_batch_row, load_lsq_mass_rows, normalize_config
 from tdm_minimal_model import simulate
 from verify_model import make_config
 
@@ -38,7 +40,121 @@ class FractionMassTests(unittest.TestCase):
         np.testing.assert_allclose(fitted_anchor, 0.0, atol=1e-12)
         partial = copy.deepcopy(ref)
         partial[0]["mass_percent"].pop(names[1])
-        self.assertEqual(len(lsq._cpa_fraction_uv_residuals(cfg, partial, empty, measured, 0.0)), 0)
+        partial_anchor = lsq._fraction_uv_residuals(cfg, partial, empty, measured, 0.0)
+        self.assertEqual(len(partial_anchor), 1)
+        self.assertLess(partial_anchor[0], 0.0)
+
+    def test_partial_fraction_percentage_constrains_low_signal_for_both_models(self):
+        for model in (MODEL_TDM_CPA, MODEL_TDM_LANGMUIR):
+            with self.subTest(model=model):
+                cfg = make_config(model, 1, multistep=False)
+                names = [row["name"] for row in cfg["components"][:2]]
+                reference = lsq.validate_composition_references(cfg, [{
+                    "start": 0.5, "end": 1.5, "x_unit": "CV",
+                    "mass_percent": {names[0]: 60.0},
+                }])
+                measured = lsq.ChromatogramReference(
+                    cv=np.array([0.0, 1.0, 2.0]), signal=np.array([100.0, 100.0, 100.0]),
+                    x_column="CV", signal_column="UV mAU", x_unit="CV", source_path="synthetic")
+                trace = {"CV": np.array([0.0, 1.0, 2.0]),
+                         "component_g_L": np.tile([0.0, 1e-10], (3, 1)),
+                         "uv_response_factors_mAU_L_g": np.array([200.0, 200.0]),
+                         "uv_mAU": np.full(3, 2e-8)}
+                percent, _ = lsq._predicted_fraction_mass_percent(cfg, trace, reference[0])
+                self.assertEqual(percent.tolist(), [0.0, 100.0])
+                anchor = lsq._fraction_uv_residuals(cfg, reference, trace, measured, 0.0)
+                self.assertEqual(len(anchor), 1)
+                self.assertLess(anchor[0], -0.59)
+                more_target = copy.deepcopy(trace)
+                more_target["component_g_L"][:, 0] = 0.01
+                more_target["uv_mAU"] = np.full(3, 2.00000002)
+                improved_anchor = lsq._fraction_uv_residuals(
+                    cfg, reference, more_target, measured, 0.0)
+                self.assertGreater(improved_anchor[0], anchor[0])
+                fake_result = {"trace": {**trace, "total_g_L": np.full(3, 1e-10)},
+                               "simulation": {"program": SimpleNamespace(total_CV=2.0)}}
+                with patch.object(lsq, "simulate", return_value=fake_result):
+                    residual, info = lsq._objective_parts(
+                        cfg, measured, lsq.MODE_CHROMATOGRAM_AND_COMPOSITION, reference)
+                self.assertEqual(len(residual), len(measured.cv) + 2)
+                self.assertTrue(info["composition"][0]["Low_Simulated_Fraction_UV"])
+                self.assertLess(info["composition"][0]["Simulated_UV_percent_of_measured"], 1e-6)
+                with patch.object(lsq, "_stage_receipt", return_value=[]):
+                    svg = lsq._fraction_uv_overlay_svg(cfg, reference, info)
+                ElementTree.fromstring(svg)
+                self.assertIn("Pale ring: modeled UV", svg)
+                self.assertIn("mass% is based on trace modeled protein", svg)
+
+    def test_pre_alignment_marks_low_signal_fraction_percentages(self):
+        cfg = make_config(MODEL_TDM_LANGMUIR, 1, multistep=False)
+        cfg["numerics"].update(time_steps=50, axial_positions=6)
+        trace = simulate(cfg)["trace"]
+        names = [row["name"] for row in cfg["components"][:2]]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "uv.csv"
+            report = root / "preview.html"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV mAU"])
+                writer.writerows(zip(trace["CV"], np.asarray(trace["uv_mAU"]) + 100.0))
+            lsq.preview_lsq_alignment([{
+                "config": cfg, "chromatogram_csv": source,
+                "composition_references": [{"start": 0.01, "end": 0.05,
+                                            "x_unit": "CV",
+                                            "mass_percent": {names[0]: 60.0, names[1]: 40.0}}],
+            }], output_html=report)
+            markup = report.read_text(encoding="utf-8")
+        self.assertIn("Pale ticks mark fractions", markup)
+        self.assertIn("Pale ring: modeled UV", markup)
+
+    def test_tdm_langmuir_fraction_percentages_move_a_wrong_affinity(self):
+        truth = make_config(MODEL_TDM_LANGMUIR, 1, multistep=False)
+        truth["numerics"].update(time_steps=50, axial_positions=6)
+        starting = copy.deepcopy(truth)
+        starting["components"][1]["b_L_g"] *= 2.0
+        starting["least_squares"]["objective"] = "NORMALIZED_MSE"
+        true_trace = simulate(truth)["trace"]
+        starting_trace = simulate(starting)["trace"]
+        names = [row["name"] for row in truth["components"][:2]]
+        fractions = []
+        for index, (start, end) in enumerate(((0.31, 0.35), (0.35, 0.39),
+                                              (0.39, 0.43)), 1):
+            predicted, quantifiable = lsq._predicted_fraction_mass_percent(
+                truth, true_trace, {"fraction_index": index, "start": start,
+                                    "end": end, "x_unit": "CV"})
+            self.assertTrue(quantifiable)
+            fractions.append({"fraction_index": index, "start": start, "end": end,
+                              "x_unit": "CV",
+                              "mass_percent": dict(zip(names, map(float, predicted)))})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "measured.csv"
+            with source.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(["CV", "UV mAU"])
+                # The UV trace favors the wrong starting affinity. The
+                # collected-fraction percentages must supply the correction.
+                writer.writerows(zip(starting_trace["CV"], starting_trace["uv_mAU"]))
+            outputs = ("FIT_RESULTS_CSV", "FIT_TRACE_CSV", "FIT_COMPOSITION_CSV",
+                       "FIT_CONDUCTIVITY_CSV", "FIT_REPORT_HTML", "FIT_CONFIG_JSON",
+                       "FIT_APPLY_JSL", "FIT_SETTINGS_JSON", "FIT_HISTORY_CSV",
+                       "FIT_IMPROVED_CSV", "FIT_IMPROVED_TXT", "CONFIG_PATH")
+            with patch.multiple(lsq, **{name: root / getattr(lsq, name).name
+                                        for name in outputs}):
+                fit = lsq.run_global_least_squares_refinement(
+                    [{"config": starting, "chromatogram_csv": source,
+                      "composition_references": fractions}],
+                    mode=lsq.MODE_CHROMATOGRAM_AND_COMPOSITION,
+                    unlocked_paths=["components[1].b_L_g"], max_nfev=10)
+                with lsq.FIT_COMPOSITION_CSV.open(newline="", encoding="utf-8") as stream:
+                    rows = list(csv.DictReader(stream))
+        fitted = fit["fitted_config"]["components"][1]["b_L_g"]
+        self.assertLess(abs(fitted - truth["components"][1]["b_L_g"]),
+                        abs(starting["components"][1]["b_L_g"] - truth["components"][1]["b_L_g"]))
+        self.assertTrue(all(0.0 <= float(row["Simulated_mass_percent"]) <= 100.0
+                            for row in rows))
+        self.assertTrue(all("Measured_Fraction_UV_mAU" in row for row in rows))
 
     def test_four_species_cpa_affinity_recovers_from_uv_and_fraction_mass(self):
         truth = make_config(MODEL_TDM_CPA, 3, multistep=False)
@@ -99,7 +215,7 @@ class FractionMassTests(unittest.TestCase):
             self.assertTrue(all(row["final_rmse_percentage_points"] <
                                 min(row["initial_rmse_percentage_points"] * 0.01, 0.2)
                                 for row in fit["composition_profile_metrics"]))
-            self.assertIn("complete mass% row also constrains", report)
+            self.assertIn("Complete mass% rows give an exact UV-derived species amount", report)
 
     def test_fraction_mass_uses_collected_interval_with_interpolated_boundaries(self):
         cfg = make_config(MODEL_EDM_LANGMUIR, 1, multistep=False)
