@@ -1,0 +1,18 @@
+{
+  "build_id": "2026-11-18-R25AY-CPA-LOW-SALT-KINETICS",
+  "config_sha256": "378543d6b35cadde9738de5a6f021050672bcf4bf3a6558e20062816a0534682",
+  "load_capacity_g_L_column": 90.0,
+  "loaded_mass_mg": 88.28999999999999,
+  "end_load_mL": 6.9519685039370085,
+  "gradient_start_mL": 11.85696850393701,
+  "predicted_peak_mL": 22.761648637795275,
+  "predicted_peak_AU": 0.502923188311167,
+  "load_outlet_percent": 0.22777583804198162,
+  "wash_outlet_percent": 0.540235917296377,
+  "mass_closure_percent": 0.0003346541699920318,
+  "maximum_surface_coverage": 0.8107491573630751,
+  "positivity_projection": {
+    "count": 34,
+    "maximum_phase_correction_mol_m3": 1.0925966662462715e-08
+  }
+}
